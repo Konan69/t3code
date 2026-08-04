@@ -399,6 +399,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
+      it.effect("uses the provider HOME as the Codex probe cwd", () =>
+        Effect.gen(function* () {
+          let observedCwd: string | undefined;
+          const environment: NodeJS.ProcessEnv = {
+            HOME: "/home/test",
+            USERPROFILE: "C:\\Users\\test",
+          };
+
+          const status = yield* checkCodexProviderStatus(
+            defaultCodexSettings,
+            (input) => {
+              observedCwd = input.cwd;
+              return Effect.succeed(makeCodexProbeSnapshot());
+            },
+            environment,
+          );
+
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(observedCwd, environment.HOME);
+        }),
+      );
+
       it.effect("returns unauthenticated when app-server requires OpenAI auth", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
