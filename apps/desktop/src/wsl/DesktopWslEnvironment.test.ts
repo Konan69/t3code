@@ -17,12 +17,25 @@ import {
   formatWslShellTransportFailureReason,
   parseNodePath,
   parseNodeVersion,
+  parseDistroIpReport,
   parseResolvedPath,
   parseToolchainReport,
   probeWslDistros,
 } from "./DesktopWslEnvironment.ts";
 
 const encoder = new TextEncoder();
+
+describe("parseDistroIpReport", () => {
+  it("uses loopback in mirrored mode instead of the first Docker bridge", () => {
+    expect(
+      parseDistroIpReport("networkingMode:mirrored\naddresses:172.19.0.1 172.17.0.1 192.168.0.165"),
+    ).toBe("127.0.0.1");
+  });
+
+  it("preserves the first WSL address in NAT mode", () => {
+    expect(parseDistroIpReport("networkingMode:nat\naddresses:172.28.64.12")).toBe("172.28.64.12");
+  });
+});
 
 const makeDistroListSpawner = (result: { readonly stdout?: string; readonly exitCode?: number }) =>
   ChildProcessSpawner.make(() =>

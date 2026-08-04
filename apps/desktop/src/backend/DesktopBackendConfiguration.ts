@@ -242,6 +242,8 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
   readonly windowsEntryPath: string;
   readonly windowsRepoRoot: string;
   readonly allowBuild: boolean;
+  readonly stageRuntime: boolean;
+  readonly appVersion: string;
 }): Effect.fn.Return<
   WslPreflightSuccess | WslPreflightFailure,
   never,
@@ -300,16 +302,28 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
     } as const;
   }
 
-  const linuxEntry = yield* wslEnv.windowsToWslPath(runningDistro, input.windowsEntryPath);
-  if (Option.isNone(linuxEntry)) {
+  const linuxSourceRoot = yield* wslEnv.windowsToWslPath(runningDistro, input.windowsRepoRoot);
+  if (Option.isNone(linuxSourceRoot)) {
     return {
       _tag: "Failed",
-      reason: `wslpath conversion failed for ${input.windowsEntryPath}`,
+      reason: `wslpath conversion failed for ${input.windowsRepoRoot}`,
       fatal: false,
     } as const;
   }
 
-  const nodePtyResult = yield* wslEnv.ensureNodePty(runningDistro, input.windowsRepoRoot, {
+  const runtime = input.stageRuntime
+    ? yield* wslEnv.stageRuntime(runningDistro, linuxSourceRoot.value, input.appVersion)
+    : ({ ok: true, runtimeRoot: linuxSourceRoot.value } as const);
+  if (!runtime.ok) {
+    return {
+      _tag: "Failed",
+      reason: runtime.reason,
+      fatal: false,
+    } as const;
+  }
+
+  const linuxEntryPath = `${runtime.runtimeRoot.replace(/\/+$/u, "")}/apps/server/dist/bin.mjs`;
+  const nodePtyResult = yield* wslEnv.ensureNodePtyAtLinuxRoot(runningDistro, runtime.runtimeRoot, {
     allowBuild: input.allowBuild,
     nodeEngineRange: serverPackageJson.engines.node,
   });
@@ -325,7 +339,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
   return {
     _tag: "Ready",
     runningDistro,
-    linuxEntryPath: linuxEntry.value,
+    linuxEntryPath,
     nodePath: nodePtyResult.nodePath,
     resolvedPath: nodePtyResult.resolvedPath,
   } as const;
@@ -482,6 +496,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
         distro: input.distro,
         windowsEntryPath: wslEntryPath,
         windowsRepoRoot: wslAppRoot,
+        stageRuntime: environment.isPackaged,
+        appVersion: environment.appVersion,
         // Packaged builds ship a prebuilt Linux node-pty (built on Linux in CI and
         // attached to the Windows artifact — see build-desktop-artifact.ts), so the
         // WSL backend never needs a compiler, node-gyp, or network on first launch.
@@ -595,6 +611,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     ...baseConfig,
     args: [
       ...distroArgs,
+      "--cd",
+      "~",
       "--exec",
       "env",
       `PATH=${launchPath}`,
