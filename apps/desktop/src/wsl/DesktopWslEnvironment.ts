@@ -19,9 +19,10 @@ const PROCESS_TERMINATE_GRACE = Duration.seconds(1);
 const LIST_TIMEOUT = Duration.seconds(8);
 const PRE_WARM_TIMEOUT = Duration.seconds(10);
 const WSLPATH_TIMEOUT = Duration.seconds(10);
-const PROBE_TIMEOUT = Duration.seconds(10);
+const PROBE_TIMEOUT = Duration.seconds(60);
 const TOOLCHAIN_TIMEOUT = Duration.seconds(10);
 const BUILD_TIMEOUT = Duration.minutes(5);
+const RUNTIME_STAGE_TIMEOUT = Duration.minutes(10);
 const USER_HOME_TIMEOUT = Duration.seconds(5);
 const TOOLCHAIN_TRANSPORT_RETRY_LIMIT = 12;
 const BUILD_TRANSPORT_RETRY_LIMIT = 2;
@@ -42,6 +43,16 @@ export type EnsureWslNodePtyResult =
       readonly reason: string;
       readonly fatal: boolean;
       readonly retryLimit?: number;
+    };
+
+export type StageWslRuntimeResult =
+  | {
+      readonly ok: true;
+      readonly runtimeRoot: string;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: string;
     };
 
 export class DesktopWslDistroListError extends Schema.TaggedErrorClass<DesktopWslDistroListError>()(
@@ -79,9 +90,19 @@ export class DesktopWslEnvironment extends Context.Service<
     // (the backend can be listening for 30+ seconds before wslhost starts
     // forwarding 127.0.0.1:port to WSL-side localhost).
     readonly getDistroIp: (distro: string | null) => Effect.Effect<Option.Option<string>>;
+    readonly stageRuntime: (
+      distro: string | null,
+      linuxSourceRoot: string,
+      appVersion: string,
+    ) => Effect.Effect<StageWslRuntimeResult>;
     readonly ensureNodePty: (
       distro: string | null,
       windowsRepoRoot: string,
+      options?: EnsureWslNodePtyOptions,
+    ) => Effect.Effect<EnsureWslNodePtyResult>;
+    readonly ensureNodePtyAtLinuxRoot: (
+      distro: string | null,
+      linuxRepoRoot: string,
       options?: EnsureWslNodePtyOptions,
     ) => Effect.Effect<EnsureWslNodePtyResult>;
   }
@@ -217,6 +238,111 @@ const runWslShell = (
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 const NODE_PTY_PREBUILD_MISSING_EXIT_CODE = 4;
+
+const RUNTIME_ROOT_PREFIX = "runtimeRoot:";
+
+const parseRuntimeRoot = (stdout: string): string | null => {
+  const line = stdout
+    .split(/\r?\n/u)
+    .find((candidate) => candidate.startsWith(RUNTIME_ROOT_PREFIX));
+  const runtimeRoot = line?.slice(RUNTIME_ROOT_PREFIX.length).trim() ?? "";
+  return runtimeRoot.length > 0 ? runtimeRoot : null;
+};
+
+const sanitizeRuntimeVersion = (appVersion: string): string =>
+  appVersion.trim().replaceAll(/[^0-9A-Za-z._-]/gu, "_") || "unknown";
+
+const STAGE_RUNTIME_SCRIPT = (linuxSourceRoot: string, appVersion: string): string => {
+  const version = sanitizeRuntimeVersion(appVersion);
+  return `set -eu
+source_root=${shellQuote(linuxSourceRoot)}
+version=${shellQuote(version)}
+cache_base="\${XDG_CACHE_HOME:-$HOME/.cache}/t3code/wsl-runtime"
+target="$cache_base/current"
+marker="$target/.t3code-version"
+
+runtime_is_current() {
+  [ -f "$marker" ] &&
+    [ "$(cat "$marker")" = "$version" ] &&
+    [ -f "$target/apps/server/dist/bin.mjs" ] &&
+    [ -d "$target/node_modules" ]
+}
+
+if runtime_is_current; then
+  printf '${RUNTIME_ROOT_PREFIX}%s\\n' "$target"
+  exit 0
+fi
+
+mkdir -p "$cache_base"
+exec 9>"$cache_base/.stage.lock"
+if ! command -v flock >/dev/null 2>&1; then
+  printf 'flock is required to stage the T3 WSL runtime\\n' >&2
+  exit 5
+fi
+flock 9
+
+if runtime_is_current; then
+  printf '${RUNTIME_ROOT_PREFIX}%s\\n' "$target"
+  exit 0
+fi
+
+staging="$cache_base/.staging-$version-$$"
+previous="$cache_base/.previous-$$"
+cleanup() {
+  rm -rf "$staging"
+}
+trap cleanup EXIT HUP INT TERM
+
+rm -rf "$staging" "$previous"
+mkdir -p "$staging/apps"
+cp -a "$source_root/apps/server" "$staging/apps/server"
+cp -a "$source_root/node_modules" "$staging/node_modules"
+printf '%s' "$version" > "$staging/.t3code-version"
+
+if [ -e "$target" ]; then
+  mv "$target" "$previous"
+fi
+mv "$staging" "$target"
+rm -rf "$previous"
+trap - EXIT HUP INT TERM
+printf '${RUNTIME_ROOT_PREFIX}%s\\n' "$target"
+`;
+};
+
+const stageRuntimeImpl = (
+  distro: string | null,
+  linuxSourceRoot: string,
+  appVersion: string,
+): Effect.Effect<StageWslRuntimeResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  runWslShell(
+    distro,
+    STAGE_RUNTIME_SCRIPT(linuxSourceRoot, appVersion),
+    RUNTIME_STAGE_TIMEOUT,
+  ).pipe(
+    Effect.map((result): StageWslRuntimeResult => {
+      if (result.transportFailure === "timeout") {
+        return {
+          ok: false,
+          reason: "Timed out while staging the T3 backend in WSL native storage.",
+        };
+      }
+      if (result.transportFailure !== null) {
+        return {
+          ok: false,
+          reason: `Unable to stage the T3 backend in WSL native storage: ${result.stderr.trim() || result.transportFailure}`,
+        };
+      }
+      const runtimeRoot = parseRuntimeRoot(result.stdout);
+      if (result.exitCode !== 0 || runtimeRoot === null) {
+        const output = `${result.stdout}${result.stderr}`.trim().slice(-500);
+        return {
+          ok: false,
+          reason: `Failed to stage the T3 backend in WSL native storage (exit ${result.exitCode}): ${output || "no output"}`,
+        };
+      }
+      return { ok: true, runtimeRoot };
+    }),
+  );
 
 export const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
   exitCode === NODE_PTY_PREBUILD_MISSING_EXIT_CODE
@@ -388,25 +514,12 @@ export const formatMissingToolsReason = (
   return `WSL distro is missing required tools: ${issues.join(", ")}. Install ${remediations.join(" and ")}, then retry.`;
 };
 
-const ensureNodePtyImpl = (
+const ensureNodePtyAtLinuxRootImpl = (
   distro: string | null,
-  windowsRepoRoot: string,
-  windowsToWslPath: (
-    distro: string | null,
-    windowsPath: string,
-  ) => Effect.Effect<Option.Option<string>>,
+  linuxRepoRoot: string,
   options: EnsureWslNodePtyOptions = {},
 ): Effect.Effect<EnsureWslNodePtyResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
-    const linuxRepoRootOption = yield* windowsToWslPath(distro, windowsRepoRoot);
-    if (Option.isNone(linuxRepoRootOption)) {
-      return {
-        ok: false,
-        reason: `wslpath conversion failed for ${windowsRepoRoot}`,
-        fatal: false,
-      } as const;
-    }
-    const linuxRepoRoot = linuxRepoRootOption.value;
     // node-pty lives in the apps/server workspace's node_modules; resolve from
     // there rather than the monorepo root, where Bun's hoist layout omits it.
     const linuxServerDir = `${linuxRepoRoot}/apps/server`;
@@ -584,6 +697,27 @@ const ensureNodePtyImpl = (
     } as const;
   });
 
+const ensureNodePtyImpl = (
+  distro: string | null,
+  windowsRepoRoot: string,
+  windowsToWslPath: (
+    distro: string | null,
+    windowsPath: string,
+  ) => Effect.Effect<Option.Option<string>>,
+  options: EnsureWslNodePtyOptions = {},
+): Effect.Effect<EnsureWslNodePtyResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const linuxRepoRootOption = yield* windowsToWslPath(distro, windowsRepoRoot);
+    if (Option.isNone(linuxRepoRootOption)) {
+      return {
+        ok: false,
+        reason: `wslpath conversion failed for ${windowsRepoRoot}`,
+        fatal: false,
+      } as const;
+    }
+    return yield* ensureNodePtyAtLinuxRootImpl(distro, linuxRepoRootOption.value, options);
+  });
+
 export const probeWslDistros: Effect.Effect<
   readonly WslDistro[],
   DesktopWslDistroListError,
@@ -686,19 +820,37 @@ const windowsToWslPathImpl = (
 
 const IPV4_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
+export function parseDistroIpReport(raw: string): string | null {
+  const lines = raw.split(/\r?\n/);
+  const networkingMode = lines
+    .find((line) => line.startsWith("networkingMode:"))
+    ?.slice("networkingMode:".length)
+    .trim()
+    .toLowerCase();
+  if (networkingMode === "mirrored") return "127.0.0.1";
+
+  const addressLine = lines.find((line) => line.startsWith("addresses:"));
+  const addresses = addressLine?.slice("addresses:".length).trim() ?? "";
+  return addresses.split(/\s+/).find((part) => IPV4_PATTERN.test(part)) ?? null;
+}
+
 const getDistroIpImpl = (
   distro: string | null,
 ): Effect.Effect<Option.Option<string>, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      // `hostname -I` prints a space-separated list of all non-loopback
-      // IPs the distro has bound. The first entry on the WSL2 default
-      // network is always the eth0 vEthernet address Windows can reach
-      // directly (no wslhost forwarding required).
+      // Include WSL's networking mode so mirrored networking can use the
+      // Windows-reachable loopback address instead of an unrelated bridge.
       const command = ChildProcess.make(
         "wsl.exe",
-        [...buildDistroArgs(distro), "--", "sh", "-c", "hostname -I"],
+        [
+          ...buildDistroArgs(distro),
+          "--",
+          "sh",
+          "-c",
+          "printf 'networkingMode:'; wslinfo --networking-mode 2>/dev/null || true; printf '\\naddresses:'; hostname -I",
+        ],
         {
           stdin: "ignore",
           stdout: "pipe",
@@ -712,7 +864,7 @@ const getDistroIpImpl = (
       const exitCode = yield* handle.exitCode;
       if ((exitCode as unknown as number) !== 0) return Option.none<string>();
       const raw = decodeUtf8(concatChunks(stdoutBytes)).trim();
-      const candidate = raw.split(/\s+/).find((part) => IPV4_PATTERN.test(part));
+      const candidate = parseDistroIpReport(raw);
       return candidate ? Option.some(candidate) : Option.none<string>();
     }),
   ).pipe(
@@ -778,9 +930,19 @@ export interface DesktopWslEnvironmentTestStub {
   readonly windowsToWslPath?: (distro: string | null, windowsPath: string) => Option.Option<string>;
   readonly getUserHome?: (distro: string | null) => Option.Option<string>;
   readonly getDistroIp?: (distro: string | null) => Option.Option<string>;
+  readonly stageRuntime?: (
+    distro: string | null,
+    linuxSourceRoot: string,
+    appVersion: string,
+  ) => StageWslRuntimeResult;
   readonly ensureNodePty?: (
     distro: string | null,
     windowsRepoRoot: string,
+    options?: EnsureWslNodePtyOptions,
+  ) => EnsureWslNodePtyResult;
+  readonly ensureNodePtyAtLinuxRoot?: (
+    distro: string | null,
+    linuxRepoRoot: string,
     options?: EnsureWslNodePtyOptions,
   ) => EnsureWslNodePtyResult;
 }
@@ -800,6 +962,13 @@ export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
         Effect.succeed(stub.windowsToWslPath?.(distro, windowsPath) ?? Option.none()),
       getUserHome: (distro) => Effect.succeed(stub.getUserHome?.(distro) ?? Option.none<string>()),
       getDistroIp: (distro) => Effect.succeed(stub.getDistroIp?.(distro) ?? Option.none<string>()),
+      stageRuntime: (distro, linuxSourceRoot, appVersion) =>
+        Effect.succeed(
+          stub.stageRuntime?.(distro, linuxSourceRoot, appVersion) ?? {
+            ok: true,
+            runtimeRoot: linuxSourceRoot,
+          },
+        ),
       ensureNodePty: (distro, windowsRepoRoot, options) =>
         Effect.succeed(
           stub.ensureNodePty?.(distro, windowsRepoRoot, options) ?? {
@@ -807,6 +976,15 @@ export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
             reason: "ensureNodePty stub not configured",
             fatal: true,
           },
+        ),
+      ensureNodePtyAtLinuxRoot: (distro, linuxRepoRoot, options) =>
+        Effect.succeed(
+          stub.ensureNodePtyAtLinuxRoot?.(distro, linuxRepoRoot, options) ??
+            stub.ensureNodePty?.(distro, linuxRepoRoot, options) ?? {
+              ok: false,
+              reason: "ensureNodePtyAtLinuxRoot stub not configured",
+              fatal: true,
+            },
         ),
     }),
   );
@@ -882,9 +1060,17 @@ export const layer = Layer.effect(
       windowsToWslPath,
       getUserHome,
       getDistroIp,
+      stageRuntime: (distro, linuxSourceRoot, appVersion) =>
+        provideSpawner(stageRuntimeImpl(distro, linuxSourceRoot, appVersion)).pipe(
+          Effect.withSpan("desktop.wsl.stageRuntime"),
+        ),
       ensureNodePty: (distro, windowsRepoRoot, options) =>
         provideSpawner(ensureNodePtyImpl(distro, windowsRepoRoot, windowsToWslPath, options)).pipe(
           Effect.withSpan("desktop.wsl.ensureNodePty"),
+        ),
+      ensureNodePtyAtLinuxRoot: (distro, linuxRepoRoot, options) =>
+        provideSpawner(ensureNodePtyAtLinuxRootImpl(distro, linuxRepoRoot, options)).pipe(
+          Effect.withSpan("desktop.wsl.ensureNodePtyAtLinuxRoot"),
         ),
     });
   }),

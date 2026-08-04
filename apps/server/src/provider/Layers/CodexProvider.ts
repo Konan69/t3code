@@ -494,6 +494,16 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
   return { status: "ready", auth };
 }
 
+function resolveCodexProviderProbeCwd(environment: NodeJS.ProcessEnv): string {
+  const home = environment.HOME?.trim();
+  if (home) return home;
+
+  const userProfile = environment.USERPROFILE?.trim();
+  if (userProfile) return userProfile;
+
+  return process.cwd();
+}
+
 export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(function* (
   codexSettings: CodexSettings,
   probe: (input: {
@@ -539,7 +549,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     binaryPath: codexSettings.binaryPath,
     homePath: codexSettings.homePath,
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
-    cwd: process.cwd(),
+    cwd: resolveCodexProviderProbeCwd(resolvedEnvironment),
     customModels: codexSettings.customModels,
     environment: resolvedEnvironment,
   }).pipe(

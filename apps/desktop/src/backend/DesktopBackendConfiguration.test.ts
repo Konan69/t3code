@@ -239,7 +239,7 @@ describe("DesktopBackendConfiguration", () => {
                 ],
                 windowsToWslPath: (distro) => {
                   observedDistros.push(distro);
-                  return Option.some("/repo/apps/server/dist/bin.mjs");
+                  return Option.some("/repo");
                 },
                 ensureNodePty: (distro) => {
                   observedDistros.push(distro);
@@ -283,7 +283,8 @@ describe("DesktopBackendConfiguration", () => {
         yield* fileSystem.writeFileString(entryPath, "");
 
         const nodePath = "/home/test user's/.nvm/versions/node/v22.0.0/bin/node";
-        const linuxEntryPath = "/tmp/t3 code's launch/entry file.mjs";
+        const linuxRuntimeRoot = "/tmp/t3 code's launch";
+        const linuxEntryPath = `${linuxRuntimeRoot}/apps/server/dist/bin.mjs`;
         const resolvedPath = "/home/test user/bin:/opt/test's tools/bin:/usr/bin:/bin";
         const devServerUrl = "http://127.0.0.1:5733/dev%20assets/?label=hello%20world";
         const config = yield* Effect.gen(function* () {
@@ -299,7 +300,7 @@ describe("DesktopBackendConfiguration", () => {
                 DesktopWslEnvironment.layerTest({
                   isAvailable: true,
                   distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
-                  windowsToWslPath: () => Option.some(linuxEntryPath),
+                  windowsToWslPath: () => Option.some(linuxRuntimeRoot),
                   ensureNodePty: () => ({ ok: true, nodePath, resolvedPath }),
                   getDistroIp: () => Option.some("172.27.0.99"),
                 }),
@@ -321,6 +322,8 @@ describe("DesktopBackendConfiguration", () => {
         assert.deepEqual(config.args, [
           "-d",
           "Ubuntu",
+          "--cd",
+          "~",
           "--exec",
           "env",
           "PATH=/home/test user's/.nvm/versions/node/v22.0.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/test user/bin:/opt/test's tools/bin:/usr/bin:/bin",
@@ -336,6 +339,72 @@ describe("DesktopBackendConfiguration", () => {
         assert.notInclude(config.args, "-c");
         assert.isTrue(Option.isNone(config.preflightFailure));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resolveWsl stages packaged server files and launches the native WSL path", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+      const entryPath = path.join(baseDir, "app.asar.unpacked/apps/server/dist/bin.mjs");
+      yield* fileSystem.makeDirectory(path.dirname(entryPath), { recursive: true });
+      yield* fileSystem.writeFileString(entryPath, "");
+
+      const observed: Array<unknown> = [];
+      const nativeRuntimeRoot = "/home/test/.cache/t3code/wsl-runtime/current";
+      const config = yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        return yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
+      }).pipe(
+        Effect.provide(
+          DesktopBackendConfiguration.layer.pipe(
+            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(
+              DesktopWslEnvironment.layerTest({
+                isAvailable: true,
+                distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
+                windowsToWslPath: (_distro, windowsPath) => {
+                  observed.push(["source", windowsPath]);
+                  return Option.some("/mnt/c/Program Files/T3/app.asar.unpacked");
+                },
+                stageRuntime: (distro, sourceRoot, appVersion) => {
+                  observed.push(["stage", distro, sourceRoot, appVersion]);
+                  return { ok: true, runtimeRoot: nativeRuntimeRoot };
+                },
+                ensureNodePtyAtLinuxRoot: (distro, runtimeRoot) => {
+                  observed.push(["probe", distro, runtimeRoot]);
+                  return {
+                    ok: true,
+                    nodePath: "/usr/bin/node",
+                    resolvedPath: "/usr/bin:/bin",
+                  };
+                },
+                getDistroIp: () => Option.some("172.27.0.99"),
+              }),
+            ),
+            Layer.provideMerge(
+              makeEnvironmentLayer(baseDir, {
+                appPath: baseDir,
+                platform: "win32",
+                resourcesPath: baseDir,
+              }),
+            ),
+          ),
+        ),
+      );
+
+      assert.deepEqual(observed, [
+        ["source", path.join(baseDir, "app.asar.unpacked")],
+        ["stage", "Ubuntu", "/mnt/c/Program Files/T3/app.asar.unpacked", "1.2.3"],
+        ["probe", "Ubuntu", nativeRuntimeRoot],
+      ]);
+      assert.include(config.args, `${nativeRuntimeRoot}/apps/server/dist/bin.mjs`);
+      assert.deepEqual(config.args.slice(0, 5), ["-d", "Ubuntu", "--cd", "~", "--exec"]);
+      assert.isTrue(Option.isNone(config.preflightFailure));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("resolvePrimary and resolveWsl share one token under concurrent resolution", () =>
