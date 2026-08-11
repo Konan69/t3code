@@ -12,6 +12,7 @@ import {
   type PreviewAutomationResizeResult,
   type PreviewAutomationSetColorSchemeInput,
   type PreviewAutomationSetColorSchemeResult,
+  type PreviewAutomationSetCookiePayload,
   type PreviewAutomationHost as PreviewAutomationHostState,
   type PreviewAutomationRequest,
   type PreviewAutomationStatus,
@@ -620,6 +621,14 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               ready.runtimeTabId,
               request.input as Parameters<typeof ready.bridge.automation.evaluate>[1],
             );
+          }
+          case "setCookie": {
+            if (!previewBridge) {
+              throw new PreviewAutomationTargetUnavailableError(unavailableTarget);
+            }
+            const input = request.input as PreviewAutomationSetCookiePayload;
+            await previewBridge.setCookie(environmentId, input.cookie);
+            return null;
           }
           case "waitFor": {
             const ready = await requireReadyTab();
