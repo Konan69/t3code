@@ -119,6 +119,15 @@ export class DesktopWslEnvironment extends Context.Service<
 const buildDistroArgs = (distro: string | null): ReadonlyArray<string> =>
   distro ? ["-d", distro] : [];
 
+export const buildWslShellArgs = (distro: string | null): ReadonlyArray<string> => [
+  ...buildDistroArgs(distro),
+  "--",
+  "bash",
+  "--noprofile",
+  "--norc",
+  "-s",
+];
+
 const concatChunks = (arrays: ReadonlyArray<Uint8Array>): Uint8Array => {
   let totalLength = 0;
   for (const arr of arrays) totalLength += arr.byteLength;
@@ -184,14 +193,14 @@ const runWslShell = (
   } = {},
 ): Effect.Effect<ShellResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const spawner = ChildProcessSpawner.ChildProcessSpawner;
-  // Node probes use a login bash so profile-managed PATH entries and supported
-  // version managers are available. Runtime installation needs only POSIX tools,
-  // so it skips profile loading and runs sh directly.
+  // Node discovery is explicit in the generated preamble, so loading user
+  // profiles is unnecessary and can corrupt strict script exit status. Runtime
+  // installation needs only POSIX tools and uses sh directly.
   const resolveNode = options.resolveNode !== false;
   const command = ChildProcess.make(
     "wsl.exe",
     resolveNode
-      ? [...buildDistroArgs(distro), "--", "bash", "-l", "-s"]
+      ? buildWslShellArgs(distro)
       : [...buildDistroArgs(distro), "--exec", "sh", "-s"],
     {
       stdin: Stream.encodeText(
