@@ -111,6 +111,15 @@ export class DesktopWslEnvironment extends Context.Service<
 const buildDistroArgs = (distro: string | null): ReadonlyArray<string> =>
   distro ? ["-d", distro] : [];
 
+export const buildWslShellArgs = (distro: string | null): ReadonlyArray<string> => [
+  ...buildDistroArgs(distro),
+  "--",
+  "bash",
+  "--noprofile",
+  "--norc",
+  "-s",
+];
+
 const concatChunks = (arrays: ReadonlyArray<Uint8Array>): Uint8Array => {
   let totalLength = 0;
   for (const arr of arrays) totalLength += arr.byteLength;
@@ -173,22 +182,20 @@ const runWslShell = (
   options: EnsureWslNodePtyOptions = {},
 ): Effect.Effect<ShellResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const spawner = ChildProcessSpawner.ChildProcessSpawner;
-  // -l picks up profile-managed PATH; the shared resolver covers supported
-  // version managers that non-interactive login shells can miss. -s so bash
-  // reads the script from stdin.
-  const command = ChildProcess.make(
-    "wsl.exe",
-    [...buildDistroArgs(distro), "--", "bash", "-l", "-s"],
-    {
-      stdin: Stream.encodeText(
-        Stream.make(`${buildWslNodeEnvPreamble(options.nodeEngineRange)}${bashScript}`),
-      ),
-      stdout: "pipe",
-      stderr: "pipe",
-      killSignal: "SIGTERM",
-      forceKillAfter: PROCESS_TERMINATE_GRACE,
-    },
-  );
+  // Do not load user profiles here. A strict (`set -u`) backend script can
+  // succeed and still have its exit code changed by a broken .bash_logout or
+  // profile hook. The shared resolver above discovers supported Node version
+  // managers explicitly, so profile loading is unnecessary. -s makes bash
+  // read the script from stdin.
+  const command = ChildProcess.make("wsl.exe", buildWslShellArgs(distro), {
+    stdin: Stream.encodeText(
+      Stream.make(`${buildWslNodeEnvPreamble(options.nodeEngineRange)}${bashScript}`),
+    ),
+    stdout: "pipe",
+    stderr: "pipe",
+    killSignal: "SIGTERM",
+    forceKillAfter: PROCESS_TERMINATE_GRACE,
+  });
 
   return Effect.scoped(
     Effect.gen(function* () {

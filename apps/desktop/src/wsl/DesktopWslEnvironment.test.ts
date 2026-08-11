@@ -11,6 +11,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   buildWslNodeEnvPreamble,
+  buildWslShellArgs,
   DesktopWslDistroListError,
   formatMissingToolsReason,
   formatNodePtyProbeFailureReason,
@@ -135,6 +136,21 @@ describe("buildWslNodeEnvPreamble", () => {
 
   it("keeps the shared resolver permissive when no Node engine range is provided", () => {
     expect(buildWslNodeEnvPreamble()).toContain("T3_NODE_ENGINE_RANGE=''");
+  });
+});
+
+describe("buildWslShellArgs", () => {
+  it("runs strict backend scripts without user login profiles", () => {
+    expect(buildWslShellArgs("Ubuntu-24.04")).toEqual([
+      "-d",
+      "Ubuntu-24.04",
+      "--",
+      "bash",
+      "--noprofile",
+      "--norc",
+      "-s",
+    ]);
+    expect(buildWslShellArgs(null)).not.toContain("-l");
   });
 });
 
