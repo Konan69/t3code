@@ -323,7 +323,11 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
       const browserActivity = { release: null as (() => void) | null };
       try {
         let state = readThreadPreviewState(threadRef);
-        const needsSessionSync = needsPreviewAutomationSessionSync(state, request.tabId);
+        const needsSessionSync = needsPreviewAutomationSessionSync(
+          state,
+          request.tabId,
+          request.operation,
+        );
         if (needsSessionSync) {
           const listTarget = {
             environmentId,
