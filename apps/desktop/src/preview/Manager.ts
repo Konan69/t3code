@@ -22,6 +22,7 @@ import type {
   PreviewAutomationClickInput,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
+  PreviewAutomationCookie,
   PreviewAutomationEvaluateInput,
   PreviewAutomationPressInput,
   PreviewAutomationNetworkEntry,
@@ -4520,6 +4521,10 @@ export class PreviewManager extends Context.Service<
     readonly clearCookies: (
       partitions?: ReadonlyArray<string>,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setCookie: (
+      scope: string,
+      cookie: PreviewAutomationCookie,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCache: (
       partitions?: ReadonlyArray<string>,
     ) => Effect.Effect<void, PreviewManagerError>;
@@ -4633,6 +4638,13 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           Effect.mapError(
             (cause) => new PreviewOperationError({ operation: "clearCookies", cause }),
           ),
+        );
+    }),
+    setCookie: Effect.fn("PreviewManager.setCookie")(function* (scope, cookie) {
+      yield* browserSession
+        .setCookie(scope, cookie)
+        .pipe(
+         Effect.mapError((cause) => new PreviewOperationError({ operation: "setCookie", cause })),
         );
     }),
     clearCache: Effect.fn("PreviewManager.clearCache")(function* (partitions) {
