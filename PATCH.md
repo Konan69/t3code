@@ -2,15 +2,15 @@
 
 ## Current build
 
-- Official base/tag: `v0.0.34-nightly.20260811.1068` (`ac4780f4`)
-- Installed Windows build: `0.0.34-nightly.20260811.1068`
-- Upgraded from: `0.0.33-nightly.20260807.1026`
-- Local branch: `local/nightly-1068-patched`
+- Official base/tag: `v0.0.34-nightly.20260812.1076` (`849bac89`)
+- Installed Windows build: `0.0.34-nightly.20260812.1076`
+- Upgraded from: `0.0.34-nightly.20260811.1068`
+- Local branch: `local/nightly-1076-patched`
 - WSL patch commit: `2ba6c45e fix(desktop): stabilize WSL startup`
 - Cookie commits: `2f76996f feat(preview): add cookie setting` and
   `dabdf288 fix(preview): cookie writes skip session sync`
 
-The official `.1068` tag contains neither local cookie commit nor the WSL
+The official `.1076` tag contains neither local cookie commit nor the WSL
 startup patch. `git cherry` against the tag reports both cookie commits as
 local-only.
 
@@ -90,19 +90,19 @@ For an unmodified official artifact, the older same-length workaround remains
 available as `scripts/patch-installed-wsl-timeout.cjs <resources/app.asar>`.
 It patches only the 10→60 second timeout and mirrored-network loopback choice.
 
-The `.1068` WSL cache was pre-seeded from the source worktree on ext4 and
+The `.1076` WSL cache was pre-seeded from the source worktree on ext4 and
 validated by resolving `effect` and loading the Linux `node-pty` binary. The
-previous `.1026` cache is preserved at
-`~/.cache/t3code/wsl-runtime/current.pre-local-1026-20260811` until the new
+previous `.1068` cache is preserved at
+`~/.cache/t3code/wsl-runtime/current.pre-local-1068-20260812` until the new
 installation has had enough soak time.
 
-## Validation — 2026-08-11
+## Validation — 2026-08-12
 
-- Installer: exact size `154065496`, SHA-256
-  `2a8733f95fd15c9a5daa3fb777e821e7c3b5b00ed5511b2bb31e2ab118b873a6`,
+- Installer: exact size `154256200`, updater SHA-512 matched, SHA-256
+  `af5bfd16b57f15570512a8a1b545de10bba0cf705bd9c7987ec30312bf42dcb7`,
   Authenticode status `Valid`, signer `T3 Tools Inc`.
-- Focused cookie/WSL suite: 5 files passed, 49 tests passed.
-- WSL shell regression suite after the profile fix: 31 tests passed.
+- Focused cookie/WSL suite: 5 files passed, 50 tests passed.
+- WSL shell regression suite after the profile fix: included in the 50 tests.
 - Combined production source build: passed.
 - Installed ASAR markers: cookie IPC, native WSL cache, mirrored networking,
   `--noprofile`, and `--norc` all present.
@@ -111,7 +111,7 @@ installation has had enough soak time.
   ext4 runtime cache, Linux x64 environment endpoint healthy.
 - Desktop trace: `backend ready` and `main window created`; Windows main window
   is responsive.
-- Windows file version: `0.0.34-nightly.20260811.1068`. The server package
+- Windows file version: `0.0.34-nightly.20260812.1076`. The server package
   reports `0.0.33`, matching `apps/server/package.json` in this release.
 
 One desktop-configuration test file could not import Electron because the user
