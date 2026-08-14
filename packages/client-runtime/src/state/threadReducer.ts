@@ -35,14 +35,68 @@ const activityOrder = O.combineAll<OrchestrationThreadActivity>([
   O.mapInput(O.String, (a) => a.id),
 ]);
 
-// Per-array id index so the streaming append path can reject a re-delivered
-// id without rescanning the history. Only arrays this reducer produced are
-// indexed: presence also proves the array is activityOrder-sorted, which
-// snapshot-loaded arrays (DB order, null sequences first) are not.
-const activityIdIndex = new WeakMap<
+// Per-array id index so the streaming path can append or replace without
+// re-sorting the whole history. Retaining the activity reference rather than
+// its numeric index lets a moved replacement reuse the map without rewriting
+// every shifted entry. Only arrays this reducer produced are indexed: presence
+// also proves the array is activityOrder-sorted, which snapshot-loaded arrays
+// (DB order, null sequences first) are not.
+const activityById = new WeakMap<
   ReadonlyArray<OrchestrationThreadActivity>,
-  Set<OrchestrationThreadActivity["id"]>
+  Map<OrchestrationThreadActivity["id"], OrchestrationThreadActivity>
 >();
+
+function activityContentsEqual(
+  left: OrchestrationThreadActivity,
+  right: OrchestrationThreadActivity,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.tone === right.tone &&
+    left.kind === right.kind &&
+    left.summary === right.summary &&
+    left.turnId === right.turnId &&
+    left.sequence === right.sequence &&
+    left.createdAt === right.createdAt &&
+    JSON.stringify(left.payload) === JSON.stringify(right.payload)
+  );
+}
+
+function replaceSortedActivity(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  existing: OrchestrationThreadActivity,
+  replacement: OrchestrationThreadActivity,
+): ReadonlyArray<OrchestrationThreadActivity> | undefined {
+  const existingIndex = activities.indexOf(existing);
+  if (existingIndex < 0) return undefined;
+
+  const previous = activities[existingIndex - 1];
+  const next = activities[existingIndex + 1];
+  if (
+    (previous === undefined || activityOrder(previous, replacement) <= 0) &&
+    (next === undefined || activityOrder(replacement, next) <= 0)
+  ) {
+    const updated = activities.slice();
+    updated[existingIndex] = replacement;
+    return updated;
+  }
+
+  const updated = activities.slice();
+  updated.splice(existingIndex, 1);
+  let low = 0;
+  let high = updated.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    const candidate = updated[middle];
+    if (candidate !== undefined && activityOrder(candidate, replacement) <= 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  updated.splice(low, 0, replacement);
+  return updated;
+}
 
 /**
  * Matches the validity rule in `deriveLatestContextWindowSnapshot` (and the
@@ -599,20 +653,20 @@ export function applyThreadDetailEvent(
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
       // Live streams append in order: an unseen id sorting at/after the tail
       // of a known-sorted array appends without re-filtering and re-sorting
-      // the whole history on every event. The id set moves forward to the new
+      // the whole history on every event. The id map moves forward to the new
       // array; a superseded array falls back to the sorting path.
-      const ids = activityIdIndex.get(thread.activities);
+      const indexedActivities = activityById.get(thread.activities);
       const lastActivity = thread.activities.at(-1);
       if (
         !supersedesContextWindow &&
-        ids !== undefined &&
+        indexedActivities !== undefined &&
         (lastActivity === undefined || activityOrder(lastActivity, activity) <= 0) &&
-        !ids.has(activity.id)
+        !indexedActivities.has(activity.id)
       ) {
         const activities = Arr.append(thread.activities, activity);
-        activityIdIndex.delete(thread.activities);
-        ids.add(activity.id);
-        activityIdIndex.set(activities, ids);
+        activityById.delete(thread.activities);
+        indexedActivities.set(activity.id, activity);
+        activityById.set(activities, indexedActivities);
         return {
           kind: "updated",
           thread: {
@@ -621,6 +675,27 @@ export function applyThreadDetailEvent(
             updatedAt: event.occurredAt,
           },
         };
+      }
+
+      const existingActivity = indexedActivities?.get(activity.id);
+      if (
+        !supersedesContextWindow &&
+        indexedActivities !== undefined &&
+        existingActivity !== undefined
+      ) {
+        if (activityContentsEqual(existingActivity, activity)) {
+          return { kind: "unchanged" };
+        }
+        const activities = replaceSortedActivity(thread.activities, existingActivity, activity);
+        if (activities !== undefined) {
+          activityById.delete(thread.activities);
+          indexedActivities.set(activity.id, activity);
+          activityById.set(activities, indexedActivities);
+          return {
+            kind: "updated",
+            thread: { ...thread, activities, updatedAt: event.occurredAt },
+          };
+        }
       }
       const activities = pipe(
         thread.activities,
@@ -636,7 +711,7 @@ export function applyThreadDetailEvent(
         Arr.append(activity),
         Arr.sort(activityOrder),
       );
-      activityIdIndex.set(activities, new Set(activities.map((entry) => entry.id)));
+      activityById.set(activities, new Map(activities.map((entry) => [entry.id, entry])));
 
       return {
         kind: "updated",
