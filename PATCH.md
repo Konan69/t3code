@@ -4,15 +4,17 @@
 
 - Installed official shell/tag: `v0.0.34-nightly.20260814.1093`
   (`184d8ef3`)
-- Source base: upstream `main` at `1a659943`, one commit newer than `.1093`
+- Source base: upstream `main` at `1add47b3`, three commits newer than `.1093`
 - Local branch: `local/main-20260814-pr6608-patched`
 - Previous patched build backup: `backup/nightly-1076-patched-20260814`
-- WSL commits: `cb3e1d32 fix(desktop): stabilize WSL startup` and
-  `a9107461 fix(desktop): isolate WSL backend shell`
-- Cookie commits: `649baf3b feat(preview): add cookie setting` and
-  `b305b76c fix(preview): cookie writes skip session sync`
+- WSL commits: `3694fce3 fix(desktop): stabilize WSL startup` and
+  `d58e028d fix(desktop): isolate WSL backend shell`
+- Cookie commits: `3381df48 feat(preview): add cookie setting` and
+  `c5b1a89d fix(preview): cookie writes skip session sync`
 - Activity-performance commits from upstream PR #6608: `1a76870a`,
   `b917d9f4`, and `ef2eb07f`
+- Stable-ID client fix: `9f4671f7 perf(client): update stable activities
+incrementally`
 
 The signed `.1093` installer was installed first. A production build from this
 branch was then overlaid on its desktop/server bundles. The official tag and
@@ -110,9 +112,12 @@ was about 1.23 GiB.
 [Upstream status](docs/internals/thread-activity-projection-upstream-status.md)
 confirms that `.1076`, `.1093`, and current `main` have byte-identical hot-path
 code. Open PR #6608 makes ordinary streaming/tool activity projection
-incremental and gives the client an indexed append path. PR #6613 is a separate
-partial optimization for the rare summary refreshes and is not required for
-the measured agent-write path.
+incremental and gives the client an indexed append path. A second local client
+fix keeps same-ID progress updates on that indexed path: it replaces the
+existing row in a copied sorted array and ignores byte-equivalent redeliveries.
+Previously, each same-ID update filtered, sorted, and rebuilt an index for all
+activities. PR #6613 is a separate partial optimization for the rare summary
+refreshes and is not required for the measured agent-write path.
 
 Live before/after measurements:
 
@@ -125,11 +130,18 @@ That is about an 88x reduction in mean append latency. Lifecycle/session events
 can still perform a shell-summary refresh; they are no longer on each streamed
 agent activity append.
 
+The remaining client slowdown reproduced on the active 20,192-activity Codex
+thread. Stable-ID `task.progress` reducer updates took 5.3–8.1 ms at this size
+and crossed 2 ms around 5,000 activities. The indexed replacement fix reduced
+the 20,192-row replay p95 to 0.20 ms and suppresses identical redeliveries,
+avoiding unnecessary React updates.
+
 ## Validation — 2026-08-14
 
 - Official `.1093` installer: exact release size `148095040`; release
   SHA-512 matched; Authenticode status `Valid`, signer `T3 Tools Inc`.
-- PR #6608 regression suites: server 23/23 and client runtime 31/31 passed.
+- PR #6608 plus stable-ID regression suites: client runtime 605/605 passed;
+  the focused reducer suite passed 33/33.
 - Carried WSL/cookie suites: desktop 87/87 across three runnable files and
   server 50/51 passed. The one server failure is an unrelated settings-watcher
   timing test already present on upstream `main`; the isolated local Codex cwd
@@ -139,13 +151,15 @@ agent activity append.
 - Installed bundle markers include cookie IPC, native WSL cache, isolated
   non-login shell, mirrored networking, and `activityAffectsShellSummary`.
 - Installed WSL `bin.mjs` matches the build SHA-256
-  `c78991fe0a65b9d5bf30efacc58f92f8f893b32e3990e2ca8458d5b601f178f8`.
+  `62be5f8a01836740695786309ea19ff46143abd8eafe71a2e98ca74288a6c43d`.
+- The production client asset SHA-256 matches across source, the Windows
+  overlay, and the ext4 WSL runtime.
 - First `.1093` WSL staging took 71.63 s; the warm restart stage lookup took
   274.9 ms and total WSL preflight took 946.6 ms.
-- Backend: healthy on `0.0.0.0:3774`, cwd `/home/kixey`, entrypoint under the
+- Backend: healthy on `0.0.0.0:3773`, cwd `/home/kixey`, entrypoint under the
   ext4 runtime cache, Linux x64 environment endpoint healthy.
-- Five-second post-start sample: 10% average of one CPU core (four seconds at
-  0-1%, one short 49% checkpoint), no read I/O, about 782 MiB RSS.
+- Five-second post-install sample: backend averaged 1.2% of one CPU core at
+  about 397 MiB RSS; the four Windows processes totaled 2.8% and 571 MiB.
 - Desktop trace: `backend ready` and `main window created`; Windows main window
   is responsive.
 
