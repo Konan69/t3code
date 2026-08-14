@@ -1,18 +1,23 @@
-# T3 Code Windows/WSL and preview-cookie patches
+# T3 Code Windows/WSL, preview-cookie, and activity-performance patches
 
 ## Current build
 
-- Official base/tag: `v0.0.34-nightly.20260812.1076` (`849bac89`)
-- Installed Windows build: `0.0.34-nightly.20260812.1076`
-- Upgraded from: `0.0.34-nightly.20260811.1068`
-- Local branch: `local/nightly-1076-patched`
-- WSL patch commit: `2ba6c45e fix(desktop): stabilize WSL startup`
-- Cookie commits: `2f76996f feat(preview): add cookie setting` and
-  `dabdf288 fix(preview): cookie writes skip session sync`
+- Installed official shell/tag: `v0.0.34-nightly.20260814.1093`
+  (`184d8ef3`)
+- Source base: upstream `main` at `1a659943`, one commit newer than `.1093`
+- Local branch: `local/main-20260814-pr6608-patched`
+- Previous patched build backup: `backup/nightly-1076-patched-20260814`
+- WSL commits: `cb3e1d32 fix(desktop): stabilize WSL startup` and
+  `a9107461 fix(desktop): isolate WSL backend shell`
+- Cookie commits: `649baf3b feat(preview): add cookie setting` and
+  `b305b76c fix(preview): cookie writes skip session sync`
+- Activity-performance commits from upstream PR #6608: `1a76870a`,
+  `b917d9f4`, and `ef2eb07f`
 
-The official `.1076` tag contains neither local cookie commit nor the WSL
-startup patch. `git cherry` against the tag reports both cookie commits as
-local-only.
+The signed `.1093` installer was installed first. A production build from this
+branch was then overlaid on its desktop/server bundles. The official tag and
+current upstream `main` contain none of the local WSL/cookie patches and do not
+yet contain PR #6608.
 
 ## WSL failures and fixes
 
@@ -90,34 +95,63 @@ For an unmodified official artifact, the older same-length workaround remains
 available as `scripts/patch-installed-wsl-timeout.cjs <resources/app.asar>`.
 It patches only the 10→60 second timeout and mirrored-network loopback choice.
 
-The `.1076` WSL cache was pre-seeded from the source worktree on ext4 and
-validated by resolving `effect` and loading the Linux `node-pty` binary. The
-previous `.1068` cache is preserved at
-`~/.cache/t3code/wsl-runtime/current.pre-local-1068-20260812` until the new
-installation has had enough soak time.
+The `.1093` WSL runtime is staged on ext4 and its `bin.mjs` SHA-256 matches the
+source build. Earlier `.1026` and `.1068` caches remain available as rollback
+copies.
 
-## Validation — 2026-08-12
+## Thread activity slow-write fix
 
-- Installer: exact size `154256200`, updater SHA-512 matched, SHA-256
-  `af5bfd16b57f15570512a8a1b545de10bba0cf705bd9c7987ec30312bf42dcb7`,
-  Authenticode status `Valid`, signer `T3 Tools Inc`.
-- Focused cookie/WSL suite: 5 files passed, 50 tests passed.
-- WSL shell regression suite after the profile fix: included in the 50 tests.
-- Combined production source build: passed.
-- Installed ASAR markers: cookie IPC, native WSL cache, mirrored networking,
-  `--noprofile`, and `--norc` all present.
-- WSL stage lookup: about 240 ms on the successful launch.
-- Backend: listening on `0.0.0.0:3773`, cwd `/home/kixey`, entrypoint under the
+The write regression was server-side read amplification, not Claude/Codex
+authentication. Every `thread.activity-appended` event rebuilt the thread shell
+summary, loading and decoding the thread's full activity history. The largest
+active thread had about 19,555 activity rows / 67.2 MiB, and the local database
+was about 1.23 GiB.
+
+[Upstream status](docs/internals/thread-activity-projection-upstream-status.md)
+confirms that `.1076`, `.1093`, and current `main` have byte-identical hot-path
+code. Open PR #6608 makes ordinary streaming/tool activity projection
+incremental and gives the client an indexed append path. PR #6613 is a separate
+partial optimization for the rare summary refreshes and is not required for
+the measured agent-write path.
+
+Live before/after measurements:
+
+| Build              |         Samples |     Mean |  Median |      p95 |      Max |
+| ------------------ | --------------: | -------: | ------: | -------: | -------: |
+| Unpatched          | traced baseline | 813.9 ms |  687 ms |   1.96 s |   5.92 s |
+| `.1093` + PR #6608 |              22 |  9.29 ms | 8.71 ms | 11.20 ms | 16.74 ms |
+
+That is about an 88x reduction in mean append latency. Lifecycle/session events
+can still perform a shell-summary refresh; they are no longer on each streamed
+agent activity append.
+
+## Validation — 2026-08-14
+
+- Official `.1093` installer: exact release size `148095040`; release
+  SHA-512 matched; Authenticode status `Valid`, signer `T3 Tools Inc`.
+- PR #6608 regression suites: server 23/23 and client runtime 31/31 passed.
+- Carried WSL/cookie suites: desktop 87/87 across three runnable files and
+  server 50/51 passed. The one server failure is an unrelated settings-watcher
+  timing test already present on upstream `main`; the isolated local Codex cwd
+  regression passes.
+- Typecheck passed for contracts, client runtime, web, desktop, and server.
+- Combined production desktop/server build passed.
+- Installed bundle markers include cookie IPC, native WSL cache, isolated
+  non-login shell, mirrored networking, and `activityAffectsShellSummary`.
+- Installed WSL `bin.mjs` matches the build SHA-256
+  `c78991fe0a65b9d5bf30efacc58f92f8f893b32e3990e2ca8458d5b601f178f8`.
+- First `.1093` WSL staging took 71.63 s; the warm restart stage lookup took
+  274.9 ms and total WSL preflight took 946.6 ms.
+- Backend: healthy on `0.0.0.0:3774`, cwd `/home/kixey`, entrypoint under the
   ext4 runtime cache, Linux x64 environment endpoint healthy.
+- Five-second post-start sample: 10% average of one CPU core (four seconds at
+  0-1%, one short 49% checkpoint), no read I/O, about 782 MiB RSS.
 - Desktop trace: `backend ready` and `main window created`; Windows main window
   is responsive.
-- Windows file version: `0.0.34-nightly.20260812.1076`. The server package
-  reports `0.0.33`, matching `apps/server/package.json` in this release.
 
-One desktop-configuration test file could not import Electron because the user
-environment intentionally sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1`; the five
-other focused files completed and passed. This is a test-runtime setup issue,
-not an application failure.
+One desktop-configuration test file still cannot import Electron because the
+user environment intentionally sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1`. Its
+other three focused files pass; this is a test-runtime setup limitation.
 
 ## Resource-churn note
 
