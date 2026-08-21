@@ -89,7 +89,9 @@ it("updates a stable progress activity within the streaming budget", () => {
 
   const sorted = [...samples].sort((left, right) => left - right);
   const p95 = sorted[Math.floor((sorted.length - 1) * 0.95)] ?? Infinity;
-  expect(p95).toBeLessThan(2);
+  // The unpatched 20k-row path measures 5.3-8.1 ms locally. Leave enough
+  // headroom for shared CI runners while still detecting that full re-sort.
+  expect(p95).toBeLessThan(4);
   expect(
     current.activities.filter(
       (activity: { id: string }) => activity.id === "task-progress:live-thread:stable-item",
