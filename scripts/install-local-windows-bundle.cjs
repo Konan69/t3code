@@ -17,9 +17,12 @@ if (buildRootArg === undefined || resourcesArg === undefined) {
 const buildRoot = path.resolve(buildRootArg);
 const resourcesDir = path.resolve(resourcesArg);
 const archivePath = path.join(resourcesDir, "app.asar");
+const serverArchivePath = path.join(resourcesDir, "server.asar");
 const desktopBuild = path.join(buildRoot, "apps", "desktop", "dist-electron");
 const serverBuild = path.join(buildRoot, "apps", "server", "dist");
-const serverTarget = path.join(`${archivePath}.unpacked`, "apps", "server", "dist");
+const legacyServerTarget = path.join(`${archivePath}.unpacked`, "apps", "server", "dist");
+const usesServerArchive = fs.existsSync(serverArchivePath);
+const serverTarget = usesServerArchive ? serverArchivePath : legacyServerTarget;
 
 for (const requiredPath of [archivePath, desktopBuild, serverBuild, serverTarget]) {
   if (!fs.existsSync(requiredPath)) {
@@ -108,6 +111,57 @@ const encodeHeader = (header) => {
   return [sizePickle.toBuffer(), headerBuffer];
 };
 
+const rewriteArchiveSubtree = ({ sourceArchive, archiveRoot, buildDirectory, stagedArchive }) => {
+  const rawHeader = asar.getRawHeader(sourceArchive);
+  const archiveBuffer = fs.readFileSync(sourceArchive);
+  const packedDataStart = 8 + rawHeader.headerSize;
+  const packedData = archiveBuffer.subarray(packedDataStart);
+  const subtree = getHeaderNode(rawHeader.header, archiveRoot);
+  if (subtree.files === undefined) {
+    fail(`installed archive entry is not a directory: ${archiveRoot}`);
+  }
+
+  const replacementFiles = {};
+  const replacements = [];
+  let nextOffset = BigInt(packedData.length);
+
+  for (const buildFile of walkFiles(buildDirectory)) {
+    const relativePath = path.relative(buildDirectory, buildFile).split(path.sep).join("/");
+    const components = relativePath.split("/");
+    const fileName = components.pop();
+    if (fileName === undefined) {
+      fail(`could not resolve archive path for ${buildFile}`);
+    }
+
+    let directory = replacementFiles;
+    for (const component of components) {
+      const existing = directory[component];
+      if (existing === undefined) {
+        directory[component] = { files: {} };
+      } else if (existing.files === undefined) {
+        fail(`archive build path collides with a file: ${relativePath}`);
+      }
+      directory = directory[component].files;
+    }
+
+    const content = fs.readFileSync(buildFile);
+    directory[fileName] = {
+      size: content.length,
+      offset: nextOffset.toString(),
+      integrity: fileIntegrity(content),
+    };
+    nextOffset += BigInt(content.length);
+    replacements.push(content);
+  }
+
+  subtree.files = replacementFiles;
+  const [sizeBuffer, headerBuffer] = encodeHeader(rawHeader.header);
+  fs.writeFileSync(
+    stagedArchive,
+    Buffer.concat([sizeBuffer, headerBuffer, packedData, ...replacements]),
+  );
+};
+
 const nextBackupPath = (target) => {
   const stamp = new Date().toISOString().replaceAll(":", "-");
   let candidate = `${target}.pre-local-${stamp}`;
@@ -119,7 +173,7 @@ const nextBackupPath = (target) => {
   return candidate;
 };
 
-const verifyArchive = (candidateArchive) => {
+const verifyDesktopArchive = (candidateArchive) => {
   const main = asar
     .extractFile(candidateArchive, "apps/desktop/dist-electron/main.cjs")
     .toString("utf8");
@@ -136,8 +190,29 @@ const verifyArchive = (candidateArchive) => {
   }
 };
 
+const verifyServerArchive = (candidateArchive) => {
+  const server = asar.extractFile(candidateArchive, "apps/server/dist/bin.mjs").toString("utf8");
+  for (const marker of ["activityAffectsShellSummary", "preview_set_cookie", "subscribeChanges"]) {
+    if (!server.includes(marker)) {
+      fail(`candidate server bundle is missing marker: ${marker}`);
+    }
+  }
+};
+
+const verifyLegacyServer = (candidateDirectory) => {
+  const serverEntry = path.join(candidateDirectory, "bin.mjs");
+  if (!fs.existsSync(serverEntry) || fs.statSync(serverEntry).size === 0) {
+    fail(`server bundle is missing: ${serverEntry}`);
+  }
+};
+
 const stagedArchive = path.join(resourcesDir, `.app.asar.local-new-${process.pid}`);
-const stagedServer = path.join(path.dirname(serverTarget), `.dist.local-new-${process.pid}`);
+const stagedServerArchive = path.join(resourcesDir, `.server.asar.local-new-${process.pid}`);
+const stagedLegacyServer = path.join(
+  path.dirname(legacyServerTarget),
+  `.dist.local-new-${process.pid}`,
+);
+const stagedServer = usesServerArchive ? stagedServerArchive : stagedLegacyServer;
 const cleanup = () => {
   fs.rmSync(stagedArchive, { force: true });
   fs.rmSync(stagedServer, { recursive: true, force: true });
@@ -149,41 +224,28 @@ let archiveInstalled = false;
 let serverInstalled = false;
 
 try {
-  const rawHeader = asar.getRawHeader(archivePath);
-  const archiveBuffer = fs.readFileSync(archivePath);
-  const packedDataStart = 8 + rawHeader.headerSize;
-  const packedData = archiveBuffer.subarray(packedDataStart);
-  const replacements = [];
-  let nextOffset = BigInt(packedData.length);
-
-  console.log("[local-bundle] rewriting compiled desktop files only");
-  for (const buildFile of walkFiles(desktopBuild)) {
-    const relativePath = path.relative(desktopBuild, buildFile).split(path.sep).join("/");
-    const archiveRelativePath = `apps/desktop/dist-electron/${relativePath}`;
-    const node = getHeaderNode(rawHeader.header, archiveRelativePath);
-    if (node.files !== undefined || node.link !== undefined || node.unpacked === true) {
-      fail(`desktop build entry is not a packed file: ${archiveRelativePath}`);
-    }
-    const content = fs.readFileSync(buildFile);
-    node.offset = nextOffset.toString();
-    node.size = content.length;
-    node.integrity = fileIntegrity(content);
-    nextOffset += BigInt(content.length);
-    replacements.push(content);
-  }
-
-  const [sizeBuffer, headerBuffer] = encodeHeader(rawHeader.header);
-  fs.writeFileSync(
+  console.log("[local-bundle] rewriting compiled desktop subtree");
+  rewriteArchiveSubtree({
+    sourceArchive: archivePath,
+    archiveRoot: "apps/desktop/dist-electron",
+    buildDirectory: desktopBuild,
     stagedArchive,
-    Buffer.concat([sizeBuffer, headerBuffer, packedData, ...replacements]),
-  );
-  verifyArchive(stagedArchive);
+  });
+  verifyDesktopArchive(stagedArchive);
 
-  console.log("[local-bundle] staging compiled server/web bundle");
-  fs.cpSync(serverBuild, stagedServer, { recursive: true, dereference: false });
-  const stagedServerEntry = path.join(stagedServer, "bin.mjs");
-  if (!fs.existsSync(stagedServerEntry) || fs.statSync(stagedServerEntry).size === 0) {
-    fail(`staged server bundle is missing: ${stagedServerEntry}`);
+  if (usesServerArchive) {
+    console.log("[local-bundle] rewriting compiled server/web archive subtree");
+    rewriteArchiveSubtree({
+      sourceArchive: serverArchivePath,
+      archiveRoot: "apps/server/dist",
+      buildDirectory: serverBuild,
+      stagedArchive: stagedServer,
+    });
+    verifyServerArchive(stagedServer);
+  } else {
+    console.log("[local-bundle] staging legacy compiled server/web directory");
+    fs.cpSync(serverBuild, stagedServer, { recursive: true, dereference: false });
+    verifyLegacyServer(stagedServer);
   }
 
   archiveBackup = nextBackupPath(archivePath);
@@ -195,9 +257,11 @@ try {
   fs.renameSync(stagedServer, serverTarget);
   serverInstalled = true;
 
-  verifyArchive(archivePath);
-  if (!fs.existsSync(path.join(serverTarget, "bin.mjs"))) {
-    fail("installed server bundle failed verification");
+  verifyDesktopArchive(archivePath);
+  if (usesServerArchive) {
+    verifyServerArchive(serverTarget);
+  } else {
+    verifyLegacyServer(serverTarget);
   }
   console.log(`[local-bundle] installed; archive backup: ${archiveBackup}`);
   console.log(`[local-bundle] installed; server backup: ${serverBackup}`);
