@@ -25,6 +25,34 @@ each official update.
 | Provider settings       | `2a765559`                         | Acquires the settings PubSub subscription before forking its watcher, closing a dropped-update race                 |
 | `.1151` packaging       | `20d1459a`                         | Atomically overlays the new dedicated `server.asar` as well as `app.asar`                                           |
 
+### Complete reapply manifest
+
+Apply every entry below, in order, after rebasing onto a new official release.
+This is the authoritative code/test/tooling patch list; do not select only the
+WSL commits.
+
+```text
+6ecd5e4c fix(desktop): stabilize WSL startup
+ce3c6f7c feat(preview): add cookie setting
+2de6f4e2 fix(preview): cookie writes skip session sync
+7cbeae77 fix(desktop): isolate WSL backend shell
+1d8e2946 perf: make streaming projection and activity appends incremental
+1898c035 perf: index activity ids so streamed appends stop rescanning history
+7bdd63bd fix: gate the activity append fast path on reducer-produced ordering
+c211c471 perf(client): update stable activities incrementally
+2a765559 fix(server): subscribe before provider settings hydration
+fc8a06b2 test: reconcile local regressions with nightly 1151
+20d1459a fix(desktop): overlay dedicated server archive
+```
+
+The slow-write fix is the four-commit block from `1d8e2946` through
+`c211c471`; both its server and client halves are mandatory. `fc8a06b2` carries
+the rebased regression coverage and must travel with the code.
+
+Documentation-only history (`5058cc41`, `317e69e7`, `deb7d2f9`, `c4cf4ac2`,
+and `2abc39ff`) records older installed states and is not part of the next
+release's code cherry-pick. Rewrite this file after validating the new build.
+
 ### WSL startup
 
 Upstream `.1151` now extracts the signed server sidecar into Windows storage.
