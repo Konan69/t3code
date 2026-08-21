@@ -1,83 +1,72 @@
-# T3 Code Windows/WSL, preview-cookie, and activity-performance patches
+# T3 Code local Windows/WSL patch overlay
 
-## Current build
+## Current build — 2026-08-21
 
-- Installed official shell/tag: `v0.0.34-nightly.20260814.1093`
-  (`184d8ef3`)
-- Source base: upstream `main` at `1add47b3`, three commits newer than `.1093`
-- Local branch: `local/main-20260814-pr6608-patched`
-- Previous patched build backup: `backup/nightly-1076-patched-20260814`
-- WSL commits: `3694fce3 fix(desktop): stabilize WSL startup` and
-  `d58e028d fix(desktop): isolate WSL backend shell`
-- Cookie commits: `3381df48 feat(preview): add cookie setting` and
-  `c5b1a89d fix(preview): cookie writes skip session sync`
-- Activity-performance commits from upstream PR #6608: `1a76870a`,
-  `b917d9f4`, and `ef2eb07f`
-- Stable-ID client fix: `9f4671f7 perf(client): update stable activities
-incrementally`
+- Official shell/tag: `v0.0.34-nightly.20260821.1151` (`be7d35aa`)
+- Upstream `origin/main`: `be7d35aa` (identical to the shipped tag when fetched)
+- Local branch: `local/main-20260821-nightly-1151-patched`
+- Local overlay head before this documentation commit: `20d1459a`
+- Pre-rebase backup branch:
+  `backup/nightly-1093-patched-pre-1151-20260821`
 
-The signed `.1093` installer was installed first. A production build from this
-branch was then overlaid on its desktop/server bundles. The official tag and
-current upstream `main` contain none of the local WSL/cookie patches and do not
-yet contain PR #6608.
+The signed `.1151` installer was installed first. A production build from this
+branch was then overlaid on its desktop and server archives. Automatic T3 Code
+updates replace the overlay, so rebuild and rerun the installer script after
+each official update.
 
-## WSL failures and fixes
+## Patch set
 
-The packaged backend originally loaded about 256 MB across thousands of files
-from `app.asar.unpacked` on the Windows `C:` drive. Cold DrvFS/9P reads could
-outlive the hard-coded ten-second `node-pty` preflight and leave the app on
-`Connecting to WSL…` or show repeated unavailable-backend dialogs.
+| Area                    | Commits                            | Result                                                                                                              |
+| ----------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| WSL startup             | `6ecd5e4c`, `7cbeae77`             | Native-ext4 runtime staging, 60-second probe, isolated non-login shell, stable Codex cwd, mirrored-network loopback |
+| Preview cookies         | `ce3c6f7c`, `2de6f4e2`             | Typed cookie IPC/tool/UI; cookie writes skip unrelated preview-session sync                                         |
+| Server activity writes  | `1d8e2946`                         | Streaming/tool activity no longer reloads the entire thread history to rebuild its shell summary                    |
+| Client activity updates | `1898c035`, `7bdd63bd`, `c211c471` | Indexed append/replacement path; stable-ID progress updates stop filtering and sorting the full activity history    |
+| Provider settings       | `2a765559`                         | Acquires the settings PubSub subscription before forking its watcher, closing a dropped-update race                 |
+| `.1151` packaging       | `20d1459a`                         | Atomically overlays the new dedicated `server.asar` as well as `app.asar`                                           |
 
-The source patch:
+### WSL startup
 
-1. Stages packaged `apps/server` and `node_modules` in native ext4 storage at
-   `${XDG_CACHE_HOME:-$HOME/.cache}/t3code/wsl-runtime/current`.
-2. Uses a version marker, `flock`, bounded staging, and an atomic swap.
-3. Raises the WSL probe window from 10 to 60 seconds.
-4. Launches the backend from the staged entrypoint with the Linux home as cwd.
-5. Uses loopback in mirrored WSL networking instead of selecting a Docker
-   bridge returned first by `hostname -I`.
-6. Gives Codex provider checks a stable cwd from `HOME`, then `USERPROFILE`,
-   then `process.cwd()`.
-
-### Login-profile exit-code regression
-
-On this machine, a strict Bash script succeeds but `bash -l` changes its exit
-status during login/logout profile handling:
+Upstream `.1151` now extracts the signed server sidecar into Windows storage.
+The local patch retains that upstream mechanism, then stages the backend and
+dependencies into native WSL ext4 storage at:
 
 ```text
-strict-ok
-strict-login-exit=1
-strict-plain-exit=0
+${XDG_CACHE_HOME:-$HOME/.cache}/t3code/wsl-runtime/current
 ```
 
-That produced the misleading `.1068` dialog:
+Staging is versioned, locked with `flock`, bounded, and atomically swapped. The
+backend launches from ext4 with the Linux home as cwd. The probe timeout is 60
+seconds, and WSL commands use `bash --noprofile --norc -s`; login profiles had
+previously changed a successful staging script's exit status to `1`.
 
-```text
-Failed to stage the T3 backend in WSL native storage (exit 1):
-runtimeRoot:/home/kixey/.cache/t3code/wsl-runtime/current
-```
+### Activity slow-write fix
 
-`DesktopWslEnvironment` now invokes
-`bash --noprofile --norc -s`. The shared Node resolver already discovers the
-supported version managers, so user profiles are unnecessary. The exact stage
-script now prints the same runtime root and exits `0`.
+The regression was full-history read amplification, not Claude/Codex
+authentication. Each ordinary `thread.activity-appended` event rebuilt the
+thread shell summary. On the largest measured thread that meant decoding about
+19,555 rows / 67.2 MiB per streamed update.
 
-## Preview-cookie patch
+The server patch limits summary refreshes to events that can change approval or
+user-input counters. The client patches use a per-array ID index and preserve
+sorted order without rescanning the whole activity history. Previous measured
+server append mean fell from 813.9 ms to 9.29 ms; the 20,192-row client replay
+p95 fell from 5.3–8.1 ms per stable-ID update to 0.20 ms.
 
-The preview stack now exposes a typed `desktop:preview-set-cookie` IPC path,
-desktop session handling, MCP/tooling support, and renderer controls for
-setting cookies. Cookie-only mutations bypass the preview-session sync path so
-writing one cookie does not trigger the unrelated session synchronization
-cycle.
+Upstream `.1151` still lacks the local `activityAffectsShellSummary` and
+indexed-reducer changes. See
+[the upstream comparison](docs/internals/thread-activity-projection-upstream-status.md).
 
-The original cookie worktree at `/home/kixey/t3code` was not modified; its
-uncommitted provider-probe edits remain there untouched.
+### Provider settings race
 
-## Installing a locally built bundle
+The `.1151` rebase exposed a real lazy-PubSub race: the settings watcher was
+forked before its stream acquired a subscription, so an update published in
+that scheduling window was permanently lost. `2a765559` acquires
+`subscribeChanges` synchronously, then forks the consumer. Its regression test
+waits on a `Deferred` at the second provider probe, making the previously flaky
+failure deterministic.
 
-The signed official installer remains the Windows shell. Build the combined
-source and overlay only the compiled app files:
+## Build and install
 
 ```bash
 vp install --frozen-lockfile
@@ -87,91 +76,44 @@ node scripts/install-local-windows-bundle.cjs \
   '/mnt/c/Users/kixey/AppData/Local/Programs/t3code/resources'
 ```
 
-The overlay script updates packed `apps/desktop/dist-electron` entries and
-unpacked `apps/server/dist` while preserving the official dependency tree. It
-updates ASAR offsets, sizes, and SHA-256 entry integrity, validates the cookie
-and WSL markers, and keeps timestamped archive/server backups. It avoids
-recopying all of `node_modules` across DrvFS.
+The script replaces only the compiled desktop and server/web subtrees. It
+rebuilds ASAR offsets and SHA-256 integrity metadata, validates patch markers,
+performs atomic swaps, and keeps timestamped official backups. It supports both
+the older unpacked-server layout and `.1151`'s dedicated `server.asar`.
 
-For an unmodified official artifact, the older same-length workaround remains
-available as `scripts/patch-installed-wsl-timeout.cjs <resources/app.asar>`.
-It patches only the 10→60 second timeout and mirrored-network loopback choice.
+Current official backups:
 
-The `.1093` WSL runtime is staged on ext4 and its `bin.mjs` SHA-256 matches the
-source build. Earlier `.1026` and `.1068` caches remain available as rollback
-copies.
+```text
+app.asar.pre-local-2026-08-21T13-23-14.698Z
+server.asar.pre-local-2026-08-21T13-23-14.700Z
+```
 
-## Thread activity slow-write fix
+For an untouched older artifact, the narrow same-length fallback remains:
 
-The write regression was server-side read amplification, not Claude/Codex
-authentication. Every `thread.activity-appended` event rebuilt the thread shell
-summary, loading and decoding the thread's full activity history. The largest
-active thread had about 19,555 activity rows / 67.2 MiB, and the local database
-was about 1.23 GiB.
+```bash
+node scripts/patch-installed-wsl-timeout.cjs <resources/app.asar>
+```
 
-[Upstream status](docs/internals/thread-activity-projection-upstream-status.md)
-confirms that `.1076`, `.1093`, and current `main` have byte-identical hot-path
-code. Open PR #6608 makes ordinary streaming/tool activity projection
-incremental and gives the client an indexed append path. A second local client
-fix keeps same-ID progress updates on that indexed path: it replaces the
-existing row in a copied sorted array and ignores byte-equivalent redeliveries.
-Previously, each same-ID update filtered, sorted, and rebuilt an index for all
-activities. PR #6613 is a separate partial optimization for the rare summary
-refreshes and is not required for the measured agent-write path.
+That fallback changes only the timeout and mirrored-network choice; it does not
+install the full patch set.
 
-Live before/after measurements:
+## Validation
 
-| Build              |         Samples |     Mean |  Median |      p95 |      Max |
-| ------------------ | --------------: | -------: | ------: | -------: | -------: |
-| Unpatched          | traced baseline | 813.9 ms |  687 ms |   1.96 s |   5.92 s |
-| `.1093` + PR #6608 |              22 |  9.29 ms | 8.71 ms | 11.20 ms | 16.74 ms |
-
-That is about an 88x reduction in mean append latency. Lifecycle/session events
-can still perform a shell-summary refresh; they are no longer on each streamed
-agent activity append.
-
-The remaining client slowdown reproduced on the active 20,192-activity Codex
-thread. Stable-ID `task.progress` reducer updates took 5.3–8.1 ms at this size
-and crossed 2 ms around 5,000 activities. The indexed replacement fix reduced
-the 20,192-row replay p95 to 0.20 ms and suppresses identical redeliveries,
-avoiding unnecessary React updates.
-
-## Validation — 2026-08-14
-
-- Official `.1093` installer: exact release size `148095040`; release
-  SHA-512 matched; Authenticode status `Valid`, signer `T3 Tools Inc`.
-- PR #6608 plus stable-ID regression suites: client runtime 605/605 passed;
-  the focused reducer suite passed 33/33.
-- Carried WSL/cookie suites: desktop 87/87 across three runnable files and
-  server 50/51 passed. The one server failure is an unrelated settings-watcher
-  timing test already present on upstream `main`; the isolated local Codex cwd
-  regression passes.
-- Typecheck passed for contracts, client runtime, web, desktop, and server.
+- Official installer size: `146191400`; release SHA-512 matched; Authenticode
+  status `Valid`, signer `T3 Tools Inc`.
+- Targeted tests passed: desktop 134/134, server 81/81, client reducer 33/33,
+  preview target 5/5.
+- Typechecks passed for contracts, client runtime, server, desktop, and web.
 - Combined production desktop/server build passed.
-- Installed bundle markers include cookie IPC, native WSL cache, isolated
-  non-login shell, mirrored networking, and `activityAffectsShellSummary`.
-- Installed WSL `bin.mjs` matches the build SHA-256
-  `62be5f8a01836740695786309ea19ff46143abd8eafe71a2e98ca74288a6c43d`.
-- The production client asset SHA-256 matches across source, the Windows
-  overlay, and the ext4 WSL runtime.
-- First `.1093` WSL staging took 71.63 s; the warm restart stage lookup took
-  274.9 ms and total WSL preflight took 946.6 ms.
-- Backend: healthy on `0.0.0.0:3773`, cwd `/home/kixey`, entrypoint under the
-  ext4 runtime cache, Linux x64 environment endpoint healthy.
-- Five-second post-install sample: backend averaged 1.2% of one CPU core at
-  about 397 MiB RSS; the four Windows processes totaled 2.8% and 571 MiB.
-- Desktop trace: `backend ready` and `main window created`; Windows main window
-  is responsive.
+- Dry-run overlay on copies matched source hashes for desktop main, server
+  entrypoint, and the hashed client asset.
+- Live runtime version: `0.0.34-nightly.20260821.1151`.
+- Live backend: WSL ext4 entrypoint, listening on `0.0.0.0:3773`.
+- Live `bin.mjs` SHA-256 matches source and `server.asar`:
+  `2920fefb4c298b45f027936a0fc80aa69c5e309c44ebf5fee558d0250a7c748b`.
+- Live client asset SHA-256 matches source:
+  `7d1663bbafd9f852696e374bd58a4fa7fc32fe7d2bea836c2c90d63ab2730005`.
+- Post-start sample: no WSL I/O wait; backend wrote about 40 KiB in four
+  seconds and averaged 6% of one CPU core during provider/thread hydration.
 
-One desktop-configuration test file still cannot import Electron because the
-user environment intentionally sets `ELECTRON_SKIP_BINARY_DOWNLOAD=1`. Its
-other three focused files pass; this is a test-runtime setup limitation.
-
-## Resource-churn note
-
-The large CPU spike was not this build or Supermemory. A separate T3 Codex
-desktop session, `019ff1f2-5307-7343-a75c-fe6c1908ac98`, launched whole-home
-`rg` scans from `/home/kixey/agency/garden` while handling “find the old PRs and
-restore them.” One scan reached roughly 590% CPU. Those scans exited, and a
-follow-up process check found no matching whole-home `rg` and no stray T3
-server before installation.
+The original cookie worktree at `/home/kixey/t3code` remains untouched.

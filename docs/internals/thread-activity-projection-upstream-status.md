@@ -1,28 +1,50 @@
 # Thread activity projection: upstream status
 
-Checked against the official `pingdotgg/t3code` repository on 2026-08-14.
+Checked against the official `pingdotgg/t3code` repository on 2026-08-21.
 
 ## Verdict
 
-The slow-write read-amplification bug is **unfixed** in both the latest shipped nightly, [`v0.0.34-nightly.20260814.1093`](https://github.com/pingdotgg/t3code/tree/v0.0.34-nightly.20260814.1093) (`184d8ef33b8f42869fb84f66a33984185b81dc47`), and current [`main`](https://github.com/pingdotgg/t3code/commit/1a6599437b6ad77330923819613cc28be3b33945) (`1a6599437b6ad77330923819613cc28be3b33945`). Two complementary fixes exist as open pull requests, but neither has shipped or reached `main`.
+The measured server read-amplification and client stable-ID update regressions
+remain in shipped nightly
+[`v0.0.34-nightly.20260821.1151`](https://github.com/pingdotgg/t3code/tree/v0.0.34-nightly.20260821.1151)
+(`be7d35aa`). Fetched `origin/main` was the same commit.
+
+Upstream has added other useful activity-retention and WSL sidecar work since
+the previous `.1093` check, but it does not contain the local server fast path
+or indexed client reducer.
 
 ## Evidence
 
-The two hot-path files are byte-identical in nightly `.1076`, nightly `.1093`, and current `main`. Current `main` still:
+At `be7d35aa`, the server still groups every `thread.activity-appended` with
+events that call `refreshThreadShellSummary`. That refresh reads the full
+message, plan, activity, and approval history to derive a small shell summary.
 
-- Handles every `thread.activity-appended` by calling `refreshThreadShellSummary` in [`ProjectionPipeline.ts`](https://github.com/pingdotgg/t3code/blob/1a6599437b6ad77330923819613cc28be3b33945/apps/server/src/orchestration/Layers/ProjectionPipeline.ts#L853-L869).
-- Loads every message, proposed plan, activity, and pending approval during that refresh in [`ProjectionPipeline.ts`](https://github.com/pingdotgg/t3code/blob/1a6599437b6ad77330923819613cc28be3b33945/apps/server/src/orchestration/Layers/ProjectionPipeline.ts#L555-L598).
-- Selects `payload_json` for every activity in the thread and applies the `CASE` ordering in [`ProjectionThreadActivities.ts`](https://github.com/pingdotgg/t3code/blob/1a6599437b6ad77330923819613cc28be3b33945/apps/server/src/persistence/Layers/ProjectionThreadActivities.ts#L75-L138).
+The client still handles every activity event by:
 
-`main` is [49 commits ahead of nightly `.1076`](https://github.com/pingdotgg/t3code/compare/849bac8946c40420174b4187e36fcf17b5ea7cc4...1a6599437b6ad77330923819613cc28be3b33945), but neither hot-path file changed in that range.
+1. filtering the full activity array;
+2. appending the incoming row; and
+3. sorting the full result.
 
-## Fix candidates
+This happens even when a progress event replaces a row with the same stable ID.
+The source tree contains neither `activityAffectsShellSummary` nor the local
+`activityById` weak index.
 
-| Target                                                    | Commit                                                                                           | Classification | What it changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Nightly `.1093`                                           | [`184d8ef`](https://github.com/pingdotgg/t3code/commit/184d8ef33b8f42869fb84f66a33984185b81dc47) | **Unfixed**    | Same hot paths as `.1076`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `main`                                                    | [`1a65994`](https://github.com/pingdotgg/t3code/commit/1a6599437b6ad77330923819613cc28be3b33945) | **Unfixed**    | Same hot paths as `.1076`; no mitigation merged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| [PR #6613](https://github.com/pingdotgg/t3code/pull/6613) | [`845bcf4`](https://github.com/pingdotgg/t3code/commit/845bcf4c695f06854e973351a3fcb6d76865f60e) | **Partial**    | Filters the summary read to the three user-input activity kinds in [`ProjectionPipeline.ts`](https://github.com/pingdotgg/t3code/blob/845bcf4c695f06854e973351a3fcb6d76865f60e/apps/server/src/orchestration/Layers/ProjectionPipeline.ts#L576-L588) and adds a filtered repository query in [`ProjectionThreadActivities.ts`](https://github.com/pingdotgg/t3code/blob/845bcf4c695f06854e973351a3fcb6d76865f60e/apps/server/src/persistence/Layers/ProjectionThreadActivities.ts#L115-L138). It makes each remaining refresh cheap, but still refreshes on every activity event. |
-| [PR #6608](https://github.com/pingdotgg/t3code/pull/6608) | [`e310099`](https://github.com/pingdotgg/t3code/commit/e3100992847f15e695ac91ffa80e39e1f7e7c29c) | **Partial**    | Skips the full summary refresh for ordinary streaming/tool activities in [`ProjectionPipeline.ts`](https://github.com/pingdotgg/t3code/blob/e3100992847f15e695ac91ffa80e39e1f7e7c29c/apps/server/src/orchestration/Layers/ProjectionPipeline.ts#L888-L905). Lifecycle events still use the full-history read.                                                                                                                                                                                                                                                                     |
+Relevant shipped sources:
 
-PRs #6613 and #6608 are complementary: one reduces the cost of a refresh, while the other reduces its frequency. Together they address the observed server-side slow-write path, but their code remains unshipped.
+- [server projection pipeline](https://github.com/pingdotgg/t3code/blob/be7d35aa/apps/server/src/orchestration/Layers/ProjectionPipeline.ts)
+- [client thread reducer](https://github.com/pingdotgg/t3code/blob/be7d35aa/packages/client-runtime/src/state/threadReducer.ts)
+
+## Local overlay
+
+The rebased local commits are:
+
+| Commit     | Scope                                                                                         |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| `1d8e2946` | Incrementally updates the shell row and refreshes only for approval/user-input activity kinds |
+| `1898c035` | Adds a per-array activity ID index and binary insertion path                                  |
+| `7bdd63bd` | Uses the append fast path only for reducer-produced sorted arrays                             |
+| `c211c471` | Replaces same-ID activities incrementally and suppresses equivalent redelivery                |
+
+Historical PRs [#6608](https://github.com/pingdotgg/t3code/pull/6608) and
+[#6613](https://github.com/pingdotgg/t3code/pull/6613) contain related work,
+but their relevant hot-path behavior was not present in `.1151`/`be7d35aa`.
