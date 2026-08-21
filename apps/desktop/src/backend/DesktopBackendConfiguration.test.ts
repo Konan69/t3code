@@ -386,6 +386,11 @@ describe("DesktopBackendConfiguration", () => {
               }),
             ),
             Layer.provideMerge(
+              DesktopWslServerTree.layerTest({
+                result: { ok: true, root: path.join(baseDir, "app.asar.unpacked") },
+              }),
+            ),
+            Layer.provideMerge(
               makeEnvironmentLayer(baseDir, {
                 appPath: baseDir,
                 platform: "win32",
