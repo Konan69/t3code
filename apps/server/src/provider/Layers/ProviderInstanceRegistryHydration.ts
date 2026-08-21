@@ -118,7 +118,12 @@ const SettingsWatcherLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const mutator = yield* ProviderInstanceRegistryMutator;
     const serverSettings = yield* ServerSettingsService;
-    yield* serverSettings.streamChanges.pipe(
+    // Acquire the PubSub subscription before forking the consumer. Building a
+    // stream from the PubSub inside the fork leaves a scheduling window where
+    // a settings update can publish before the fiber subscribes, permanently
+    // dropping the provider reconfiguration.
+    const settingsChanges = yield* serverSettings.subscribeChanges;
+    yield* settingsChanges.pipe(
       Stream.runForEach((next) =>
         mutator
           .reconcile(deriveProviderInstanceConfigMap(next))
