@@ -42,8 +42,12 @@ ce3c6f7c feat(preview): add cookie setting
 c211c471 perf(client): update stable activities incrementally
 2a765559 fix(server): subscribe before provider settings hydration
 fc8a06b2 test: reconcile local regressions with nightly 1151
-20d1459a fix(desktop): overlay dedicated server archive
+c0dc19d4 feat(provider): add native pi driver over pi --mode rpc
 ```
+
+20d1459a fix(desktop): overlay dedicated server archive
+
+````
 
 The slow-write fix is the four-commit block from `1d8e2946` through
 `c211c471`; both its server and client halves are mandatory. `fc8a06b2` carries
@@ -61,7 +65,7 @@ dependencies into native WSL ext4 storage at:
 
 ```text
 ${XDG_CACHE_HOME:-$HOME/.cache}/t3code/wsl-runtime/current
-```
+````
 
 Staging is versioned, locked with `flock`, bounded, and atomically swapped. The
 backend launches from ext4 with the Linux home as cwd. The probe timeout is 60
@@ -93,6 +97,18 @@ that scheduling window was permanently lost. `2a765559` acquires
 `subscribeChanges` synchronously, then forks the consumer. Its regression test
 waits on a `Deferred` at the second provider probe, making the previously flaky
 failure deterministic.
+
+### pi driver
+
+`c0dc19d4` adds a first-class `pi` provider driver speaking `pi --mode rpc`
+(JSONL over stdin/stdout). One child process per thread; prompt/steer/abort,
+streaming text + reasoning deltas, tool lifecycle items, usage updates,
+compaction items, and turn settle/abort are mapped to canonical runtime
+events. Extension UI dialogs auto-cancel in v1; thread replay (`readThread`)
+and `rollbackThread` are stubs. Enable it in Settings → Providers → pi
+(off by default, like Grok/OpenCode). Typecheck clean across contracts,
+shared, server, web, desktop; mobile has 55 pre-existing baseline errors
+unrelated to this change. Provider registry tests updated (44/44).
 
 ## Build and install
 
