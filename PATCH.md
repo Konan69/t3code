@@ -1,63 +1,131 @@
-# T3 Code Windows/WSL startup patch
+# T3 Code local Windows/WSL patch overlay
 
-## Scope
+## Current build — 2026-08-26
 
-- Patch base: `v0.0.33-nightly.20260807.1026`
-- Installed Windows build: `0.0.33-nightly.20260807.1026`
-- Upgraded from: `0.0.32-nightly.20260806.1014`
-- Symptoms: T3 Code blocked during WSL preflight, showed repeated `WSL backend is still unavailable` dialogs, or remained on `Connecting to WSL…` after the backend was already healthy.
+- Official shell/tag: `v0.0.35-nightly.20260826.1194`
+- Upstream `origin/main`: `a3a8cbd6` (identical to the shipped tag when fetched)
+- Local branch: `local/main-20260826-nightly-1194-patched`
+- Pre-rebase backup branch:
+  `backup/pre-1194-rebase-20260826` (old head `adab47ef`, base `be7d35aa`)
+- Previous installed state: official `.1194` (the release had replaced the
+  `.1151` overlay before this rebase)
 
-## Root cause
+Automatic T3 Code updates replace the overlay. After each official update,
+rebase onto the new tag, rebuild, and rerun the installer script.
 
-The packaged backend and its dependency tree were loaded directly from Windows at:
+## Rebase audit — what was dropped
 
-`/mnt/c/Users/kixey/AppData/Local/Programs/t3code/resources/app.asar.unpacked`
+Every manifest commit was checked against upstream `be7d35aa..a3a8cbd6`
+(100 commits). None of the functional patches were absorbed:
 
-Cold WSL reads crossed the DrvFS/9P boundary repeatedly. The package is about 256 MB and 14,664 files, but startup read hundreds of megabytes before the hard-coded 10-second `node-pty` preflight expired. The backend also inherited `/mnt/c/Users/kixey` as its working directory, which made later provider discovery sensitive to the same slow boundary.
+| Area                                                                           | Upstream signal                    | Verdict     |
+| ------------------------------------------------------------------------------ | ---------------------------------- | ----------- |
+| WSL ext4 staging                                                               | no `wsl-runtime` in upstream       | keep        |
+| Preview cookie set IPC                                                         | upstream added `clearCookies` only | keep        |
+| Activity append/index perf                                                     | no equivalent commits              | keep        |
+| Settings hydration race                                                        | not fixed upstream                 | keep        |
+| Docs-only history (`5058cc41`, `317e69e7`, `deb7d2f9`, `c4cf4ac2`, `2abc39ff`) | superseded by this file            | **dropped** |
 
-With WSL mirrored networking and Docker bridges present, `hostname -I` returned `172.19.0.1` first. T3 selected that unrelated Linux-only bridge as the renderer and readiness host. The backend listened successfully and Windows could reach it through `127.0.0.1`, but the desktop retried `http://172.19.0.1:3773` forever and left the splash visible.
+One tooling regression from dropping docs history was caught and fixed: the
+local installer script `scripts/install-local-windows-bundle.cjs` used to
+travel inside a docs commit; it is restored as explicit tooling.
 
-## Source changes
+## Patch set
 
-1. `DesktopWslEnvironment` stages packaged `apps/server` and `node_modules` into WSL's native filesystem at `${XDG_CACHE_HOME:-$HOME/.cache}/t3code/wsl-runtime/current`.
-2. Staging uses a version marker, `flock`, a ten-minute bounded copy, and an atomic `current`/`previous` swap so an interrupted refresh keeps the last usable runtime.
-3. The `node-pty` preflight resolves and loads dependencies from the staged Linux path.
-4. The WSL probe timeout is raised from 10 seconds to 60 seconds so a cold distro does not immediately fall back to the Windows backend.
-5. The WSL backend launches the staged `apps/server/dist/bin.mjs` and adds `wsl.exe --cd ~` so provider processes start from the Linux home directory.
-6. The Codex status probe uses provider `HOME`, then `USERPROFILE`, then `process.cwd()` as a final fallback.
-7. WSL address discovery queries `wslinfo --networking-mode`, uses loopback for mirrored networking, and preserves the distro address for NAT mode.
-8. Tests cover packaged staging, native launch paths, mirrored/NAT address selection, the WSL home working directory, and the Codex probe working directory.
+| Area                    | Commits (new hashes)               | Result                                                                                                                                                 |
+| ----------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| WSL startup             | `d0871926`, `ec50fea7`             | Native-ext4 runtime staging, 60-second probe, isolated non-login shell, stable Codex cwd, mirrored-network loopback                                    |
+| Preview cookies         | `5aedee97`, `bd56186d`             | Typed cookie IPC/tool/UI; cookie writes skip unrelated preview-session sync                                                                            |
+| Server activity writes  | `d3f43128`                         | Streaming/tool activity no longer reloads entire thread history to rebuild its shell summary (upstream added its own refresh gate; both gates coexist) |
+| Client activity updates | `e66bb95e`, `c5090bc3`, `91e874d0` | Indexed append/replacement path; stable-ID progress updates stop filtering and sorting full activity history                                           |
+| Provider settings       | `e77c558e`                         | Acquires the settings PubSub subscription before forking its watcher                                                                                   |
+| Regression tests        | `f09e724b`                         | Local test reconciliation; must travel with the code                                                                                                   |
+| Packaging tooling       | `fa57c241`                         | Restores `scripts/install-local-windows-bundle.cjs` with dedicated `server.asar` support                                                               |
+| pi provider             | `86c88f24`                         | Native `pi --mode rpc` driver (see below)                                                                                                              |
 
-## Installed-build workaround
+### Complete reapply manifest
 
-Until a Windows artifact containing the source patch is installed, the unpacked `.1026` runtime is copied to:
+Apply every entry below, in order, after rebasing onto a new official
+release. This is the authoritative code/test/tooling patch list.
 
-`/home/kixey/.cache/t3code/wsl-runtime/current`
+```text
+d0871926 fix(desktop): stabilize WSL startup
+5aedee97 feat(preview): add cookie setting
+bd56186d fix(preview): cookie writes skip session sync
+ec50fea7 fix(desktop): isolate WSL backend shell
+d3f43128 perf: make streaming projection and activity appends incremental
+e66bb95e perf: index activity ids so streamed appends stop rescanning history
+c5090bc3 fix: gate the activity append fast path on reducer-produced ordering
+91e874d0 perf(client): update stable activities incrementally
+e77c558e fix(server): subscribe before provider settings hydration
+f09e724b test: reconcile local regressions with nightly 1151
+fa57c241 chore(desktop): restore local Windows bundle installer
+86c88f24 feat(provider): add native pi driver over pi --mode rpc
+```
 
-That native directory is bind-mounted over the WSL view of `app.asar.unpacked`. Windows still sees the original installation, while WSL reads the backend from ext4. Refresh this cache after every T3 update before relaunching the app.
+Note for future rebases: `20d1459a` (server-archive installer support) is now
+part of `fa57c241`; upstream deleted nothing it depended on, but the script
+itself remains local-only tooling.
 
-The cached packaged entrypoint also performs `process.chdir(process.env.HOME)` before server startup. This gives the installed artifact the same provider working-directory behavior as the source patch's `wsl.exe --cd ~` change.
+## pi provider driver
 
-For an official artifact without the source fixes, run `scripts/patch-installed-wsl-timeout.cjs <resources/app.asar>`. It performs same-length replacements for the 10→60 second preflight timeout and mirrored-network loopback selection, updates the ASAR entry integrity hashes, verifies both changes, and keeps the original archive as `app.asar.pre-wsl-hotpatch`.
+`86c88f24` adds a first-class `pi` provider alongside Codex/Claude/Cursor/
+Grok/OpenCode. One `pi --mode rpc` child per thread, strict LF JSONL framing,
+id-correlated command Deferreds, canonical runtime event mapping (content
+deltas, tool lifecycle, usage, compaction, retry warnings, turn settle/abort).
+Enable via Settings → Providers → pi (off by default). Extension UI dialogs
+auto-cancel in v1; thread replay and rollback are stubs.
 
-## Validation
+## Build and install
 
-- Desktop WSL tests: 52 passed.
-- Focused Codex provider test: passed.
-- Desktop and server typechecks: passed.
-- Formatting, lint, and `git diff --check`: passed.
-- Native runtime mount verified as `ext4`.
-- On `.1026`, the backend listened in about 1 second. The live trace reached `backend ready` and created the main window in about 5.6 seconds at `http://127.0.0.1:3773/`.
-- The launched backend's working directory is `/home/kixey`.
-- The running server reports `0.0.33-nightly.20260807.1026`, and the Windows process is responsive.
-- Codex `0.147.0` and Claude `2.1.224` both refreshed to `ready`.
+```bash
+vp install --frozen-lockfile
+vp run build:desktop
+node scripts/install-local-windows-bundle.cjs \
+  /home/kixey/t3code-wsl-fix \
+  '/mnt/c/Users/kixey/AppData/Local/Programs/t3code/resources'
+```
 
-The full `ProviderRegistry.test.ts` still has one pre-existing timing-sensitive test (`re-probes when settings change the codex binaryPath`) that also fails on the unmodified earlier release; it is unrelated to this patch.
+Close all T3 Code processes first — Windows file locks make the atomic swap
+fail with `EACCES`. The script replaces only the compiled desktop and
+server/web subtrees, rebuilds ASAR offsets and SHA-256 integrity metadata,
+validates patch markers, performs atomic swaps, and keeps timestamped
+official backups.
 
-## Update note
+Current official backups:
 
-Official nightly `.1026` was published on 2026-08-07. Its upstream delta does not contain either WSL startup fix, so the patch still has to be reapplied after updating. The server bundle changed, but the dependency lockfile did not; cache refreshes can reuse the existing `node_modules` tree and replace only `apps/server`.
+```text
+app.asar.pre-local-2026-08-26T08-54-35.897Z
+server.asar.pre-local-2026-08-26T08-54-35.927Z
+(app.asar.pre-local-2026-08-21T13-23-14.* retained from the .1151 install)
+```
 
-## 2026-08-07 resource-churn note
+## Validation — 2026-08-26 (.1194 rebase)
 
-The observed CPU and disk spike was not Supermemory; that service remained stopped. The main disk reader was a stale whole-home Codex `rg` search using about 3.9 CPU cores, 850 MB RSS, and 60 MB/s reads. T3 also owned an active Vitest/browser test run. The exact stale search was terminated, and the T3-owned workers ended when the app closed for the update. After relaunch, Linux samples showed no process above 1 MB/s disk I/O. A later provider refresh used about 34% of one CPU core in the T3 backend without disk churn; the Windows T3 process was at 0.7 MB/s and 10% of one core.
+- Rebase conflict resolved in `ProjectionPipeline.ts`: upstream's
+  `shouldRefreshThreadShellSummary` and local `activityAffectsShellSummary`
+  coexist (refresh gate vs incremental-append gate).
+- Typecheck 0 errors: contracts, shared, client-runtime, server, web,
+  desktop.
+- Tests: server provider/orchestration suites 71/71; client-runtime reducer
+  32/32; contracts settings/provider 48/48.
+- Production desktop/server build passed (`vp run build:desktop`).
+- Installer ran clean against the official `.1194` install; atomic swap with
+  backups listed above.
+- Installed-overlay marker checks (raw bytes):
+  - `wsl-runtime` present in `app.asar` ✔
+  - isolated-shell `noprofile` flag present in `app.asar` ✔
+  - `desktop:preview-set-cookie` channel present in `app.asar` ✔
+  - `activityAffectsShellSummary` present in `server.asar` ✔
+  - `pi --mode rpc` / `Drivers/PiDriver` present in `server.asar` ✔
+- Live relaunch check pending: confirm reported version
+  `0.0.35-nightly.20260826.1194`, WSL ext4 entrypoint listening on
+  `0.0.0.0:3773`, and a pi thread streaming end-to-end.
+
+## Historical notes
+
+The `.1026`–`.1151` era notes (WSL root cause analysis, resource-churn note,
+slow-write fix measurements) were consolidated here on 2026-08-26. The slow-
+write fix reduced measured server append mean from 813.9 ms to 9.29 ms and
+client stable-ID update p95 from 5.3–8.1 ms to 0.20 ms; see the backup
+branch `backup/pre-1194-rebase-20260826` for the full historical document.
