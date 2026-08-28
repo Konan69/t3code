@@ -13,12 +13,18 @@ export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;
     readonly worktreePath: string | null;
+    readonly machine?: { readonly hostWorkspaceRoot: string } | null | undefined;
   };
   readonly projects: ReadonlyArray<{
     readonly id: ProjectId;
     readonly workspaceRoot: string;
   }>;
 }): string | undefined {
+  const machineCwd = input.thread.machine?.hostWorkspaceRoot;
+  if (machineCwd) {
+    return machineCwd;
+  }
+
   const worktreeCwd = input.thread.worktreePath ?? undefined;
   if (worktreeCwd) {
     return worktreeCwd;

@@ -1,4 +1,9 @@
-import type { ThreadId } from "@t3tools/contracts";
+import {
+  ThreadMachineBinding as ContractThreadMachineBinding,
+  ThreadMachineState,
+  type ThreadId,
+  type ThreadMachineBinding as ThreadMachineBindingType,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import type * as Effect from "effect/Effect";
@@ -17,17 +22,10 @@ export const machineNameForThread = (threadId: ThreadId): string => `thread-${th
 export const hostWorkspaceRootForThread = (threadId: ThreadId): string =>
   `${MACHINE_HOST_DATASET_ROOT}/threads/${threadId}/ws`;
 
-export const MachineState = Schema.Literals(["running", "stopped", "archived"]);
+export const MachineState = ThreadMachineState;
 export type MachineState = typeof MachineState.Type;
-
-export const ThreadMachineBinding = Schema.Struct({
-  machineId: Schema.String,
-  machineName: Schema.String,
-  state: MachineState,
-  hostWorkspaceRoot: Schema.String,
-  guestWorkspaceRoot: Schema.String,
-});
-export type ThreadMachineBinding = typeof ThreadMachineBinding.Type;
+export const ThreadMachineBinding = ContractThreadMachineBinding;
+export type ThreadMachineBinding = ThreadMachineBindingType;
 
 export class MachineServiceError extends Schema.TaggedErrorClass<MachineServiceError>()(
   "MachineServiceError",

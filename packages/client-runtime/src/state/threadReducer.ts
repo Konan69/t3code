@@ -149,6 +149,7 @@ export function applyThreadDetailEvent(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          machine: null,
           latestTurn: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
@@ -166,6 +167,28 @@ export function applyThreadDetailEvent(
           session: null,
         },
       };
+
+    case "thread.machine-bound":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          machine: event.payload.binding,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.machine-state-set":
+      return thread.machine == null
+        ? { kind: "unchanged" }
+        : {
+            kind: "updated",
+            thread: {
+              ...thread,
+              machine: { ...thread.machine, state: event.payload.state },
+              updatedAt: event.payload.updatedAt,
+            },
+          };
 
     case "thread.deleted":
       return { kind: "deleted" };

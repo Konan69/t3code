@@ -105,6 +105,51 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread machine binding", () => {
+    it("binds a machine and updates its state", () => {
+      const binding = {
+        machineId: "thread-1",
+        machineName: "thread-thread-1",
+        state: "running" as const,
+        hostWorkspaceRoot: "/tank/threads/thread-1/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+      };
+      const bound = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 2,
+        occurredAt: "2026-04-01T02:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.machine-bound",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          binding,
+          updatedAt: "2026-04-01T02:00:00.000Z",
+        },
+      });
+      expect(bound.kind).toBe("updated");
+      if (bound.kind !== "updated") return;
+
+      const stopped = applyThreadDetailEvent(bound.thread, {
+        ...baseEventFields,
+        sequence: 3,
+        occurredAt: "2026-04-01T03:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.machine-state-set",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          state: "stopped",
+          updatedAt: "2026-04-01T03:00:00.000Z",
+        },
+      });
+      expect(stopped.kind).toBe("updated");
+      if (stopped.kind === "updated") {
+        expect(stopped.thread.machine).toEqual({ ...binding, state: "stopped" });
+      }
+    });
+  });
+
   describe("thread.deleted", () => {
     it("returns deleted signal", () => {
       const result = applyThreadDetailEvent(baseThread, {
