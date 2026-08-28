@@ -366,10 +366,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: thread.projectId,
       });
       const occurredAt = yield* nowIso;
       return {
@@ -383,15 +388,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           deletedAt: occurredAt,
+          projectWorkspaceRoot: project.workspaceRoot,
+          machine: thread.machine,
         },
       };
     }
 
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const thread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: thread.projectId,
       });
       const occurredAt = yield* nowIso;
       return {
@@ -406,6 +418,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           archivedAt: occurredAt,
           updatedAt: occurredAt,
+          projectWorkspaceRoot: project.workspaceRoot,
+          machine: thread.machine,
         },
       };
     }

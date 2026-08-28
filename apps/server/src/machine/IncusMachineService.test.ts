@@ -69,6 +69,9 @@ describe("IncusMachineService", () => {
           datasetExists = true;
           return Effect.succeed(makeHandle({}));
         }
+        if (args.slice(0, 2).join(" ") === "image list") {
+          return Effect.succeed(makeHandle({ stdout: '[{"type":"container"}]' }));
+        }
         if (args[0] === "list") {
           return Effect.succeed(
             makeHandle({
@@ -78,7 +81,7 @@ describe("IncusMachineService", () => {
             }),
           );
         }
-        if (args[0] === "copy") {
+        if (args[0] === "init") {
           machineExists = true;
           return Effect.succeed(makeHandle({}));
         }
@@ -102,6 +105,7 @@ describe("IncusMachineService", () => {
 
       return Effect.gen(function* () {
         const machines = yield* MachineService;
+        yield* machines.ensureWorkspace(ThreadId.make("thread-1"));
         const first = yield* machines.createFromGolden(ThreadId.make("thread-1"));
         const second = yield* machines.createFromGolden(ThreadId.make("thread-1"));
 
@@ -113,7 +117,13 @@ describe("IncusMachineService", () => {
           guestWorkspaceRoot: "/home/kixey/ws",
         });
         expect(Option.getOrThrow(second)).toEqual(Option.getOrThrow(first));
-        expect(commands.filter((entry) => entry.args[0] === "copy")).toHaveLength(1);
+        expect(commands.filter((entry) => entry.args[0] === "copy")).toHaveLength(0);
+        expect(commands.filter((entry) => entry.args[0] === "init")).toHaveLength(1);
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: ["init", "golden", "thread-thread-1", "-c", "security.nesting=true"],
+          stdin: "ignore",
+        });
         expect(commands.filter((entry) => entry.args[0] === "start")).toHaveLength(1);
         expect(
           commands.filter((entry) => entry.args.slice(0, 3).join(" ") === "config device add"),
@@ -143,10 +153,91 @@ describe("IncusMachineService", () => {
     },
   );
 
+  it.effect("initializes VM images with --vm and destroys the instance before its dataset", () => {
+    const commands: Array<{ command: string; args: ReadonlyArray<string>; stdin?: unknown }> = [];
+    let machineExists = false;
+    let running = false;
+    const spawner = ChildProcessSpawner.make((input) => {
+      const command = input as unknown as {
+        command: string;
+        args: ReadonlyArray<string>;
+        options: { stdin?: unknown };
+      };
+      commands.push({ command: command.command, args: command.args, stdin: command.options.stdin });
+      const args = command.args;
+      if (command.command === "zfs" && args[0] === "list") {
+        return Effect.succeed(makeHandle({}));
+      }
+      if (command.command === "zfs" && args[0] === "destroy") {
+        return Effect.succeed(makeHandle({}));
+      }
+      if (args.slice(0, 2).join(" ") === "image list") {
+        return Effect.succeed(makeHandle({ stdout: '[{"type":"virtual-machine"}]' }));
+      }
+      if (args[0] === "list") {
+        return Effect.succeed(
+          makeHandle({
+            stdout: machineExists
+              ? `[{"name":"thread-thread-1","status":"${running ? "Running" : "Stopped"}"}]`
+              : "[]",
+          }),
+        );
+      }
+      if (args[0] === "init") {
+        machineExists = true;
+        return Effect.succeed(makeHandle({}));
+      }
+      if (args.slice(0, 3).join(" ") === "config device get") {
+        return Effect.succeed(makeHandle({ code: 1 }));
+      }
+      if (args[0] === "start") {
+        running = true;
+      }
+      if (args[0] === "delete") {
+        machineExists = false;
+      }
+      return Effect.succeed(makeHandle({}));
+    });
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const created = Option.getOrThrow(
+        yield* machines.createFromGolden(ThreadId.make("thread-1")),
+      );
+      yield* machines.destroy(created);
+
+      expect(commands).toContainEqual({
+        command: "incus",
+        args: ["init", "golden", "thread-thread-1", "--vm"],
+        stdin: "ignore",
+      });
+      expect(commands.some((entry) => entry.args.includes("security.nesting=true"))).toBe(false);
+      const deleteIndex = commands.findIndex((entry) => entry.args[0] === "delete");
+      const datasetDestroyIndex = commands.findIndex(
+        (entry) => entry.command === "zfs" && entry.args[0] === "destroy",
+      );
+      expect(deleteIndex).toBeGreaterThanOrEqual(0);
+      expect(datasetDestroyIndex).toBeGreaterThan(deleteIndex);
+      expect(
+        commands
+          .filter((entry) => entry.command === "incus")
+          .every((entry) => entry.stdin === "ignore"),
+      ).toBe(true);
+    }).pipe(Effect.provide(provideIncus(spawner)));
+  });
+
   it.effect("maps cwd and preserves argv while forcing non-piped incus stdin to null", () => {
     let captured: unknown;
     const spawner = ChildProcessSpawner.make((input) => {
-      captured = input;
+      const command = input as unknown as { args: ReadonlyArray<string> };
+      if (command.args[0] === "list") {
+        return Effect.succeed(
+          makeHandle({ stdout: '[{"name":"thread-thread-1","status":"Running"}]' }),
+        );
+      }
+      if (command.args.includes("codex")) {
+        captured = input;
+      }
       return Effect.succeed(makeHandle({}));
     });
     const binding = {

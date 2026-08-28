@@ -1,5 +1,7 @@
 import {
   CommandId,
+  type OrchestrationProjectShell,
+  type OrchestrationThread,
   type ProjectId,
   type ThreadId,
   type ThreadMachineBinding,
@@ -7,10 +9,13 @@ import {
 import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
+import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { MachineService } from "./MachineService.ts";
@@ -36,9 +41,17 @@ export type ThreadMachineSetupResult =
       readonly scriptName: string;
     };
 
+export interface MachineWorktreePreparation {
+  readonly projectCwd: string;
+  readonly baseBranch: string;
+  readonly branch?: string | undefined;
+  readonly startFromOrigin?: boolean | undefined;
+}
+
 export interface ThreadMachineServiceShape {
   readonly ensureForThread: (
     threadId: ThreadId,
+    preparation?: MachineWorktreePreparation,
   ) => Effect.Effect<Option.Option<ThreadMachineBinding>, ThreadMachineServiceError>;
   readonly runSetupForThread: (input: {
     readonly threadId: ThreadId;
@@ -51,10 +64,6 @@ export class ThreadMachineService extends Context.Service<
   ThreadMachineService,
   ThreadMachineServiceShape
 >()("t3/machine/ThreadMachineService") {}
-
-export function shouldPrepareGitWorktree(binding: ThreadMachineBinding | undefined): boolean {
-  return binding === undefined;
-}
 
 function sameMachineIdentity(
   left: ThreadMachineBinding | null | undefined,
@@ -70,7 +79,10 @@ function sameMachineIdentity(
 
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const gitWorkflow = yield* GitWorkflowService;
   const machines = yield* MachineService;
+  const ensureSemaphore = yield* Semaphore.make(1);
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const commandId = (operation: string) =>
@@ -79,8 +91,68 @@ export const make = Effect.gen(function* () {
       Effect.map((id) => CommandId.make(`server:machine:${operation}:${id}`)),
     );
 
+  const ensureWorktree = Effect.fn("ThreadMachineService.ensureWorktree")(function* (
+    thread: OrchestrationThread,
+    project: OrchestrationProjectShell,
+    binding: ThreadMachineBinding,
+    preparation?: MachineWorktreePreparation,
+  ) {
+    if (yield* fileSystem.exists(`${binding.hostWorkspaceRoot}/.git`)) {
+      return;
+    }
+
+    let baseRef = preparation?.baseBranch;
+    if (!baseRef) {
+      const status = yield* gitWorkflow.localStatus({ cwd: project.workspaceRoot });
+      if (!status.isRepo || !status.refName) {
+        return yield* new ThreadMachineServiceError({
+          operation: "prepare-worktree",
+          threadId: thread.id,
+          detail: `Project '${project.id}' has no current Git branch for a machine worktree.`,
+        });
+      }
+      baseRef = status.refName;
+    }
+
+    if (
+      preparation?.startFromOrigin === true &&
+      (yield* gitWorkflow.remoteExists({ cwd: preparation.projectCwd, remoteName: "origin" }))
+    ) {
+      yield* gitWorkflow.fetchRemote({ cwd: preparation.projectCwd, remoteName: "origin" });
+      baseRef = (yield* gitWorkflow.resolveRemoteTrackingCommit({
+        cwd: preparation.projectCwd,
+        refName: preparation.baseBranch,
+        fallbackRemoteName: "origin",
+      })).commitSha;
+    }
+
+    const branch = preparation?.branch ?? thread.branch ?? `t3/${binding.machineName}`;
+    const projectCwd = preparation?.projectCwd ?? project.workspaceRoot;
+    const matchingRefs = yield* gitWorkflow.listRefs({ cwd: projectCwd, query: branch, limit: 20 });
+    const branchExists = matchingRefs.refs.some(
+      (ref) => ref.name === branch && ref.isRemote !== true,
+    );
+    const worktree = yield* gitWorkflow.createWorktree({
+      cwd: projectCwd,
+      refName: branchExists ? branch : baseRef,
+      ...(branchExists
+        ? {}
+        : { newRefName: branch, baseRefName: preparation?.baseBranch ?? baseRef }),
+      path: binding.hostWorkspaceRoot,
+    });
+    if (thread.branch !== worktree.worktree.refName) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: yield* commandId("worktree"),
+        threadId: thread.id,
+        branch: worktree.worktree.refName,
+      });
+    }
+  });
+
   const ensureForThreadRaw = Effect.fn("ThreadMachineService.ensureForThread")(function* (
     threadId: ThreadId,
+    preparation?: MachineWorktreePreparation,
   ) {
     const thread = yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
@@ -98,6 +170,12 @@ export const make = Effect.gen(function* () {
     if (project?.machineMode !== "thread") {
       return Option.none();
     }
+
+    const workspace = yield* machines.ensureWorkspace(threadId);
+    if (Option.isNone(workspace)) {
+      return Option.none();
+    }
+    yield* ensureWorktree(thread, project, workspace.value, preparation);
 
     const created = yield* machines.createFromGolden(threadId);
     if (Option.isNone(created)) {
@@ -121,19 +199,21 @@ export const make = Effect.gen(function* () {
     }
     return Option.some(binding);
   });
-  const ensureForThread: ThreadMachineServiceShape["ensureForThread"] = (threadId) =>
-    ensureForThreadRaw(threadId).pipe(
-      Effect.mapError((cause) =>
-        isThreadMachineServiceError(cause)
-          ? cause
-          : new ThreadMachineServiceError({
-              operation: "ensure",
-              threadId,
-              detail: "Failed to ensure thread machine.",
-              cause,
-            }),
-      ),
-    );
+  const ensureForThread: ThreadMachineServiceShape["ensureForThread"] = (threadId, preparation) =>
+    ensureSemaphore
+      .withPermits(1)(ensureForThreadRaw(threadId, preparation))
+      .pipe(
+        Effect.mapError((cause) =>
+          isThreadMachineServiceError(cause)
+            ? cause
+            : new ThreadMachineServiceError({
+                operation: "ensure",
+                threadId,
+                detail: "Failed to ensure thread machine.",
+                cause,
+              }),
+        ),
+      );
 
   const runSetupForThreadRaw = Effect.fn("ThreadMachineService.runSetupForThread")(function* (
     input: Parameters<ThreadMachineServiceShape["runSetupForThread"]>[0],

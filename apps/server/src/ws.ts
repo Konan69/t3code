@@ -1125,7 +1125,10 @@ const makeWsRpcLayer = (
               createdThread = true;
             }
 
-            const machineBinding = yield* threadMachines.ensureForThread(command.threadId);
+            const machineBinding = yield* threadMachines.ensureForThread(
+              command.threadId,
+              bootstrap?.prepareWorktree,
+            );
             targetMachineBinding = Option.getOrUndefined(machineBinding);
             if (targetMachineBinding) {
               targetWorktreePath = targetMachineBinding.hostWorkspaceRoot;
@@ -1135,10 +1138,7 @@ const makeWsRpcLayer = (
               }
             }
 
-            if (
-              bootstrap?.prepareWorktree &&
-              ThreadMachineService.shouldPrepareGitWorktree(targetMachineBinding)
-            ) {
+            if (bootstrap?.prepareWorktree && !targetMachineBinding) {
               let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
               // "Start from origin" is a stored default; repos without the
               // requested remote branch fall back to the local base branch.

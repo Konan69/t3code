@@ -24,7 +24,7 @@ const INCUS_BINARY = "incus";
 const ZFS_BINARY = "zfs";
 const INCUS_STORAGE_POOL = "tank";
 const WORKSPACE_DEVICE_NAME = "workspace";
-const VM_AGENT_WAIT_LIMIT = "90 seconds";
+const MACHINE_AGENT_WAIT_LIMIT = "180 seconds";
 
 interface CommandResult {
   readonly code: number;
@@ -124,6 +124,20 @@ export const make = Effect.gen(function* () {
       : Option.none<{ readonly status: string }>();
   });
 
+  const bindingForThread = (threadId: ThreadId) => {
+    const machineName = machineNameForThread(threadId);
+    return {
+      machineId: machineName,
+      machineName,
+      state: "running",
+      hostWorkspaceRoot: hostWorkspaceRootForThread(threadId),
+      guestWorkspaceRoot: MACHINE_GUEST_WORKSPACE_ROOT,
+    } satisfies ThreadMachineBinding;
+  };
+
+  const datasetForBinding = (binding: ThreadMachineBinding) =>
+    binding.hostWorkspaceRoot.replace(/^\/+/, "");
+
   const ensureDataset = Effect.fn("IncusMachineService.ensureDataset")(function* (
     threadId: ThreadId,
   ) {
@@ -138,6 +152,23 @@ export const make = Effect.gen(function* () {
     if (listed.code !== 0) {
       yield* runChecked("dataset.create", ZFS_BINARY, ["create", "-p", dataset]);
     }
+  });
+
+  const imageType = Effect.fn("IncusMachineService.imageType")(function* () {
+    const result = yield* runChecked("image.inspect", INCUS_BINARY, [
+      "image",
+      "list",
+      GOLDEN_IMAGE_ALIAS,
+      "--format=json",
+    ]);
+    return yield* Effect.try({
+      try: () => {
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        const parsed = JSON.parse(result.stdout) as ReadonlyArray<{ type?: string }>;
+        return parsed[0]?.type === "virtual-machine" ? "virtual-machine" : "container";
+      },
+      catch: (cause) => commandError("image.inspect", "Incus returned invalid image JSON.", cause),
+    });
   });
 
   const ensureWorkspaceDevice = Effect.fn("IncusMachineService.ensureWorkspaceDevice")(function* (
@@ -171,7 +202,7 @@ export const make = Effect.gen(function* () {
     runChecked("agent.wait", INCUS_BINARY, ["exec", binding.machineName, "--", "true"]).pipe(
       Effect.retry({
         schedule: Schedule.spaced("500 millis").pipe(
-          Schedule.upTo({ duration: VM_AGENT_WAIT_LIMIT }),
+          Schedule.upTo({ duration: MACHINE_AGENT_WAIT_LIMIT }),
         ),
       }),
       Effect.asVoid,
@@ -190,22 +221,28 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const ensureWorkspace: MachineServiceShape["ensureWorkspace"] = Effect.fn(
+    "IncusMachineService.ensureWorkspace",
+  )(function* (threadId) {
+    yield* ensureDataset(threadId);
+    return Option.some(bindingForThread(threadId));
+  });
+
   const createFromGolden: MachineServiceShape["createFromGolden"] = Effect.fn(
     "IncusMachineService.createFromGolden",
   )(function* (threadId) {
-    const machineName = machineNameForThread(threadId);
-    const binding = {
-      machineId: machineName,
-      machineName,
-      state: "running",
-      hostWorkspaceRoot: hostWorkspaceRootForThread(threadId),
-      guestWorkspaceRoot: MACHINE_GUEST_WORKSPACE_ROOT,
-    } satisfies ThreadMachineBinding;
-
+    const binding = bindingForThread(threadId);
     yield* ensureDataset(threadId);
-    const current = yield* inspect(machineName);
+    const current = yield* inspect(binding.machineName);
     if (Option.isNone(current)) {
-      yield* runChecked("copy", INCUS_BINARY, ["copy", GOLDEN_IMAGE_ALIAS, machineName]);
+      const type = yield* imageType();
+      yield* runChecked(
+        "init",
+        INCUS_BINARY,
+        type === "virtual-machine"
+          ? ["init", GOLDEN_IMAGE_ALIAS, binding.machineName, "--vm"]
+          : ["init", GOLDEN_IMAGE_ALIAS, binding.machineName, "-c", "security.nesting=true"],
+      );
     }
     yield* ensureWorkspaceDevice(binding);
     yield* start(binding);
@@ -251,6 +288,7 @@ export const make = Effect.gen(function* () {
 
     return Effect.gen(function* () {
       const binding = input.binding!;
+      yield* start(binding);
       const cwd = input.cwd
         ? yield* mappedPath(
             "hostToGuestPath",
@@ -302,6 +340,17 @@ export const make = Effect.gen(function* () {
       if (Option.isSome(current)) {
         yield* runChecked("destroy", INCUS_BINARY, ["delete", binding.machineName, "--force"]);
       }
+      const dataset = datasetForBinding(binding);
+      const listed = yield* runCommand("dataset.inspect", ZFS_BINARY, [
+        "list",
+        "-H",
+        "-o",
+        "name",
+        dataset,
+      ]);
+      if (listed.code === 0) {
+        yield* runChecked("dataset.destroy", ZFS_BINARY, ["destroy", "-r", dataset]);
+      }
     },
   );
 
@@ -341,6 +390,7 @@ export const make = Effect.gen(function* () {
   });
 
   return MachineService.of({
+    ensureWorkspace,
     createFromGolden,
     start,
     stop,

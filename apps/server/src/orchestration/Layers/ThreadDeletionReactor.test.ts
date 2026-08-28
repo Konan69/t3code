@@ -4,6 +4,7 @@ import {
   EventId,
   type OrchestrationEvent,
   ThreadId,
+  type ThreadMachineBinding,
 } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -27,6 +28,7 @@ import {
 } from "../Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import {
+  cleanupMachineWorktree,
   logCleanupCauseUnlessInterrupted,
   ThreadDeletionReactorLive,
 } from "./ThreadDeletionReactor.ts";
@@ -44,6 +46,58 @@ describe("logCleanupCauseUnlessInterrupted", () => {
     );
 
     expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
+  it("removes the registered worktree before destroying its machine dataset", async () => {
+    const order: string[] = [];
+    const machine = {
+      machineId: "thread-cleanup",
+      machineName: "thread-cleanup",
+      state: "running",
+      hostWorkspaceRoot: "/tank/threads/cleanup/ws",
+      guestWorkspaceRoot: "/home/kixey/ws",
+    } satisfies ThreadMachineBinding;
+    const event = {
+      sequence: 1,
+      eventId: EventId.make("event-cleanup"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.deleted",
+      payload: {
+        threadId,
+        deletedAt: "2026-01-01T00:00:00.000Z",
+        projectWorkspaceRoot: "/repo",
+        machine,
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.deleted" }>;
+
+    await Effect.runPromise(
+      cleanupMachineWorktree({
+        machine: event.payload.machine,
+        projectWorkspaceRoot: event.payload.projectWorkspaceRoot,
+        gitWorkflow: {
+          removeWorktree: (input) => {
+            expect(input).toEqual({ cwd: "/repo", path: "/tank/threads/cleanup/ws" });
+            order.push("worktree.remove");
+            return Effect.void;
+          },
+        },
+        machines: {
+          destroy: (binding) => {
+            expect(binding).toEqual(machine);
+            order.push("dataset.destroy");
+            return Effect.void;
+          },
+        },
+      }),
+    );
+
+    expect(order).toEqual(["worktree.remove", "dataset.destroy"]);
   });
 
   it("preserves interrupt causes", async () => {
