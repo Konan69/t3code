@@ -36,12 +36,13 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import type * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
-import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -74,6 +75,16 @@ const PROVIDER = ProviderDriverKind.make("pi");
 const READY_TIMEOUT_MS = 45_000;
 const COMMAND_RESPONSE_TIMEOUT_MS = 30_000;
 const ENCODER = new TextEncoder();
+const PI_STDIN_QUEUE_CAPACITY = 256;
+
+export const runPiStdinWriter = (
+  queue: Queue.Queue<string>,
+  stdin: ChildProcessSpawner.ChildProcessHandle["stdin"],
+) =>
+  Stream.fromQueue(queue).pipe(
+    Stream.map((text) => ENCODER.encode(text)),
+    Stream.run(stdin),
+  );
 
 export function makePiProcessLaunchInput(input: {
   readonly threadId: ThreadId;
@@ -110,6 +121,8 @@ interface PiSessionContext {
   readonly child: ChildProcessSpawner.ChildProcessHandle;
   readonly sessionScope: Scope.Closeable;
   readonly pendingCommands: Map<string, PiPendingCommand>;
+  readonly stdinQueue: Queue.Queue<string>;
+  readonly stdinWriter: Fiber.Fiber<void, PlatformError.PlatformError>;
   readonly nextCommandId: Ref.Ref<number>;
   readonly activeTurnId: Ref.Ref<TurnId | undefined>;
   readonly lastStopReason: Ref.Ref<string | undefined>;
@@ -317,6 +330,8 @@ export function makePiAdapter(
         if (yield* Ref.getAndSet(context.stopped, true)) {
           return;
         }
+        yield* Queue.shutdown(context.stdinQueue);
+        yield* Fiber.await(context.stdinWriter).pipe(Effect.ignore);
         for (const [, pending] of context.pendingCommands) {
           yield* Deferred.done(
             pending.deferred,
@@ -348,18 +363,15 @@ export function makePiAdapter(
       });
 
     const writeToPiStdin = (context: PiSessionContext, text: string) =>
-      Stream.make(text).pipe(
-        Stream.run(Sink.mapInput(context.child.stdin, (chunk: string) => ENCODER.encode(chunk))),
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterProcessError({
-              provider: PROVIDER,
-              threadId: context.threadId,
-              detail: "Failed to write to pi process stdin.",
-              cause,
-            }),
-        ),
-      );
+      Effect.gen(function* () {
+        if (!(yield* Queue.offer(context.stdinQueue, text))) {
+          return yield* new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: context.threadId,
+            detail: "Failed to write to pi process stdin because the session writer is closed.",
+          });
+        }
+      });
 
     const sendCommand = (context: PiSessionContext, command: PiRpcMessage) =>
       writeToPiStdin(context, encodeRpcLine(command));
@@ -1024,6 +1036,10 @@ export function makePiAdapter(
           );
 
         const initialId = yield* Ref.make(0);
+        const stdinQueue = yield* Queue.bounded<string>(PI_STDIN_QUEUE_CAPACITY);
+        const stdinWriter = yield* runPiStdinWriter(stdinQueue, child.stdin).pipe(
+          Effect.forkIn(sessionScope),
+        );
         const context: PiSessionContext = {
           threadId: input.threadId,
           cwd: input.cwd ?? serverConfig.cwd,
@@ -1032,6 +1048,8 @@ export function makePiAdapter(
           child,
           sessionScope,
           pendingCommands: new Map(),
+          stdinQueue,
+          stdinWriter,
           nextCommandId: initialId,
           activeTurnId: yield* Ref.make<TurnId | undefined>(undefined),
           lastStopReason: yield* Ref.make<string | undefined>(undefined),
