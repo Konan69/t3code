@@ -23,6 +23,12 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import {
+  formatProviderChildExitReason,
+  logUnexpectedProviderChildExit,
+  makeProviderStderrBuffer,
+  observeProviderProcessExit,
+} from "../providerChildDiagnostics.ts";
+import {
   HostProcessLauncherLive,
   ProcessLauncher,
   type ProcessLaunchInput,
@@ -55,6 +61,13 @@ function formatConfigOptionValue(value: string | boolean): string {
   return JSON.stringify(value);
 }
 
+export interface AcpProcessExitedEvent {
+  readonly _tag: "ProcessExited";
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  readonly reason: string;
+}
+
 export interface AcpSessionEventStreamBarrier {
   readonly _tag: "EventStreamBarrier";
   readonly acknowledge: Deferred.Deferred<void>;
@@ -66,7 +79,8 @@ export type AcpSessionRuntimeEvent =
   | {
       readonly _tag: "ConnectionTerminated";
       readonly error: EffectAcpErrors.AcpError;
-    };
+    }
+  | AcpProcessExitedEvent;
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
@@ -468,13 +482,16 @@ export const makeWithProcessLauncher = (
         ),
       );
 
+    const stderr = makeProviderStderrBuffer();
     yield* child.stderr.pipe(
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
-        (options.onStderr
-          ? options.onStderr(chunk.slice(-maxStderrChunkLength))
-          : Effect.void
-        ).pipe(
+        Effect.sync(() => stderr.append(chunk)).pipe(
+          Effect.andThen(
+            options.onStderr
+              ? options.onStderr(chunk.slice(-maxStderrChunkLength))
+              : Effect.void,
+          ),
           Effect.catch((error) =>
             Effect.gen(function* () {
               yield* Deferred.fail(stderrFailure, error);
@@ -484,6 +501,29 @@ export const makeWithProcessLauncher = (
           ),
         ),
       ),
+      Effect.ignore,
+      Effect.forkIn(runtimeScope),
+    );
+    yield* observeProviderProcessExit(child.exitCode).pipe(
+      Effect.flatMap(({ exitCode, signal }) => {
+        const exitDetail = {
+          provider: options.clientInfo.name,
+          ...(options.threadId !== undefined ? { threadId: options.threadId } : {}),
+          exitCode,
+          signal,
+          stderr: stderr.read(),
+        } as const;
+        return logUnexpectedProviderChildExit(exitDetail).pipe(
+          Effect.andThen(
+            Queue.offer(eventQueue, {
+              _tag: "ProcessExited",
+              exitCode: exitDetail.exitCode,
+              signal: exitDetail.signal,
+              reason: formatProviderChildExitReason(exitDetail),
+            }),
+          ),
+        );
+      }),
       Effect.ignore,
       Effect.forkIn(runtimeScope),
     );
