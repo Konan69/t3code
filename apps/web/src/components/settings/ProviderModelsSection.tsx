@@ -12,8 +12,10 @@ import { normalizeCustomModelSlug } from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+import { scoreModelPickerSearch } from "../chat/modelPickerSearch";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -159,6 +161,7 @@ export function ProviderModelsSection({
   const [input, setInput] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [filter, setFilter] = useState("");
+  const [selectedSubProvider, setSelectedSubProvider] = useState("__all__");
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // Slug of a just-added custom model, scrolled into view once its row exists.
@@ -178,16 +181,56 @@ export function ProviderModelsSection({
   const hiddenCount = displayModels.filter(
     (model) => !model.isCustom && hiddenModelSet.has(model.slug),
   ).length;
+  const subProviderOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          models
+            .map((model) => model.subProvider)
+            .filter((provider): provider is string => typeof provider === "string"),
+        ),
+      ].toSorted((left, right) => left.localeCompare(right)),
+    [models],
+  );
   const showFilter = models.length > FILTER_THRESHOLD;
-  const normalizedFilter = filter.trim().toLowerCase();
-  const isFiltering = showFilter && normalizedFilter.length > 0;
-  const visibleModels = isFiltering
-    ? displayModels.filter(
-        (model) =>
-          model.name.toLowerCase().includes(normalizedFilter) ||
-          model.slug.toLowerCase().includes(normalizedFilter),
-      )
-    : displayModels;
+  const isFiltering =
+    (showFilter && filter.trim().length > 0) || selectedSubProvider !== "__all__";
+  const visibleModels = useMemo(
+    () =>
+      displayModels.filter((model) => {
+        if (selectedSubProvider !== "__all__" && model.subProvider !== selectedSubProvider) {
+          return false;
+        }
+        return (
+          scoreModelPickerSearch(
+            {
+              slug: model.slug,
+              name: model.name,
+              ...(model.shortName ? { shortName: model.shortName } : {}),
+              ...(model.subProvider ? { subProvider: model.subProvider } : {}),
+              driverKind: driverKind ?? "",
+              providerDisplayName: driverKind ?? "",
+              isFavorite: favoriteModelSet.has(model.slug),
+            },
+            showFilter ? filter : "",
+          ) !== null
+        );
+      }),
+    [
+      displayModels,
+      driverKind,
+      favoriteModelSet,
+      filter,
+      selectedSubProvider,
+      showFilter,
+    ],
+  );
+
+  useEffect(() => {
+    if (selectedSubProvider !== "__all__" && !subProviderOptions.includes(selectedSubProvider)) {
+      setSelectedSubProvider("__all__");
+    }
+  }, [selectedSubProvider, subProviderOptions]);
 
   // The parent commits the new custom model and hands back an updated
   // `models` list, so the row can only be scrolled to after that render.
@@ -427,6 +470,11 @@ export function ProviderModelsSection({
       >
         {starButton(model, isFavorite)}
         <span className="flex min-w-0 items-baseline gap-2">
+          {model.subProvider ? (
+            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {model.subProvider}
+            </span>
+          ) : null}
           <span className={cn(nameClassName, "truncate")}>{model.name}</span>
           {model.isCustom ? (
             <span className="text-[11px] text-muted-foreground/70">custom</span>
@@ -460,19 +508,41 @@ export function ProviderModelsSection({
   return (
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        {showFilter ? (
-          <Input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter models"
-            size="sm"
-            className="w-56"
-            spellCheck={false}
-            aria-label="Filter models"
-          />
-        ) : null}
+        <div className="flex flex-1 flex-wrap items-center gap-2">
+          {showFilter ? (
+            <Input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder="Search model, slug, or provider (e.g. open 5.4)"
+              size="sm"
+              className="min-w-56 flex-1"
+              spellCheck={false}
+              aria-label="Filter models"
+            />
+          ) : null}
+          {subProviderOptions.length > 1 ? (
+            <Select
+              value={selectedSubProvider}
+              onValueChange={(value) => value && setSelectedSubProvider(value)}
+            >
+              <SelectTrigger size="compact" className="w-48">
+                <SelectValue placeholder="All upstream providers" />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false} matchTriggerWidth className="max-h-64">
+                <SelectItem value="__all__">All upstream providers</SelectItem>
+                {subProviderOptions.map((provider) => (
+                  <SelectItem key={provider} value={provider}>
+                    {provider}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+        </div>
         <span className="text-xs text-muted-foreground">
-          {models.length} model{models.length === 1 ? "" : "s"}
+          {visibleModels.length === models.length
+            ? `${models.length} model${models.length === 1 ? "" : "s"}`
+            : `${visibleModels.length} of ${models.length} models`}
           {favoriteCount > 0 ? ` · ${favoriteCount} favorite${favoriteCount === 1 ? "" : "s"}` : ""}
           {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
         </span>
@@ -483,7 +553,9 @@ export function ProviderModelsSection({
       >
         {visibleModels.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
-            {isFiltering ? "No models match." : "No models reported for this provider yet."}
+            {isFiltering
+              ? "No models match this search and provider filter."
+              : "No models reported for this provider yet."}
           </p>
         ) : null}
         {visibleModels.map((model, index) => {

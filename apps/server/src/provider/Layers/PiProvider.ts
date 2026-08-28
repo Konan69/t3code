@@ -1,25 +1,25 @@
 /**
- * PiProvider — availability probe and snapshot builder for the pi driver.
+ * PiProvider — availability probe and live model discovery for the pi driver.
  *
- * Mirrors GrokProvider: a cheap `pi --version` probe decides installed /
- * missing, model discovery is static (pi resolves its own models at session
- * start; T3 Code surfaces configured custom models plus common defaults).
+ * `pi --version` decides installed/missing. A second short-lived RPC process
+ * requests `get_available_models` and `get_state`, preserving pi extension
+ * providers (for example claude-bridge) while skipping skills and tools.
+ * Models carry `subProvider` so every T3 model surface can show provenance.
  *
  * @module provider/Layers/PiProvider
  */
 import {
   type ModelCapabilities,
   type PiSettings,
-  type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -43,40 +43,208 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 });
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
+const MODEL_DISCOVERY_TIMEOUT_MS = 45_000;
+const MODEL_COMMAND_ID = "t3-pi-models";
+const STATE_COMMAND_ID = "t3-pi-state";
+
+const PI_DISCOVERY_STDIN = [
+  JSON.stringify({ id: MODEL_COMMAND_ID, type: "get_available_models" }),
+  JSON.stringify({ id: STATE_COMMAND_ID, type: "get_state" }),
+  "",
+].join("\n");
+
+const PI_PROVIDER_LABELS: Readonly<Record<string, string>> = {
+  "claude-bridge": "Claude Bridge",
+  google: "Google",
+  "openai-codex": "OpenAI Codex",
+  opencode: "OpenCode",
+  "opencode-go": "OpenCode Go",
+  openrouter: "OpenRouter",
+};
+
+interface PiRpcModel {
+  readonly provider: string;
+  readonly id: string;
+  readonly name: string;
+  readonly reasoning: boolean;
+}
+
+export interface PiModelDiscovery {
+  readonly models: ReadonlyArray<PiRpcModel>;
+  readonly currentModelSlug?: string | undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function decodePiRpcModel(value: unknown): PiRpcModel | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const provider = nonEmptyString(record.provider);
+  const id = nonEmptyString(record.id);
+  const name = nonEmptyString(record.name);
+  if (!provider || !id || !name) {
+    return undefined;
+  }
+  return {
+    provider,
+    id,
+    name,
+    reasoning: record.reasoning === true,
+  };
+}
 
 /**
- * Static presentation models. pi's live model catalog depends on which
- * providers the user authenticated (`pi auth`), so the snapshot keeps a
- * small default set and lets `customModels` extend it. Sessions always run
- * with pi's own model resolution unless the user picks one here.
+ * Decode the strict-LF pi JSONL response. Unrelated extension UI events and
+ * malformed lines are ignored; the model response is mandatory.
  */
-const PI_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
-  {
-    slug: "anthropic/claude-sonnet-5",
-    name: "Claude Sonnet 5",
-    isCustom: false,
-    capabilities: EMPTY_CAPABILITIES,
-  },
-  {
-    slug: "openai/gpt-5.6-codex",
-    name: "GPT-5.6 Codex",
-    isCustom: false,
-    capabilities: EMPTY_CAPABILITIES,
-  },
-  {
-    slug: "google/gemini-3-flash",
-    name: "Gemini 3 Flash",
-    isCustom: false,
-    capabilities: EMPTY_CAPABILITIES,
-  },
-];
+export function parsePiModelDiscovery(stdout: string): PiModelDiscovery | undefined {
+  let models: ReadonlyArray<PiRpcModel> | undefined;
+  let currentModelSlug: string | undefined;
+
+  for (let rawLine of stdout.split("\n")) {
+    if (rawLine.endsWith("\r")) rawLine = rawLine.slice(0, -1);
+    if (rawLine.length === 0) continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawLine);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    const message = parsed as Record<string, unknown>;
+    if (message.type !== "response" || message.success !== true) {
+      continue;
+    }
+    const data = message.data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      continue;
+    }
+    const dataRecord = data as Record<string, unknown>;
+
+    if (message.id === MODEL_COMMAND_ID && Array.isArray(dataRecord.models)) {
+      models = dataRecord.models
+        .map(decodePiRpcModel)
+        .filter((model): model is PiRpcModel => model !== undefined);
+      continue;
+    }
+
+    if (message.id === STATE_COMMAND_ID) {
+      const model = dataRecord.model;
+      if (model !== null && typeof model === "object" && !Array.isArray(model)) {
+        const modelRecord = model as Record<string, unknown>;
+        const provider = nonEmptyString(modelRecord.provider);
+        const id = nonEmptyString(modelRecord.id);
+        if (provider && id) currentModelSlug = `${provider}/${id}`;
+      }
+    }
+  }
+
+  return models ? { models, ...(currentModelSlug ? { currentModelSlug } : {}) } : undefined;
+}
+
+export function piProviderLabel(providerId: string): string {
+  return (
+    PI_PROVIDER_LABELS[providerId] ??
+    providerId
+      .split(/[-_]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  );
+}
+
+export function parseExcludedPiProviders(value: string | undefined): ReadonlySet<string> {
+  return new Set(
+    (value ?? "")
+      .split(",")
+      .map((provider) => provider.trim().toLowerCase())
+      .filter((provider) => provider.length > 0),
+  );
+}
+
+export function piModelsFromDiscovery(
+  discovery: PiModelDiscovery,
+  excludedProviders: ReadonlySet<string>,
+): ReadonlyArray<ServerProviderModel> {
+  const seen = new Set<string>();
+  const models: ServerProviderModel[] = [];
+
+  for (const model of discovery.models) {
+    const providerId = model.provider.toLowerCase();
+    if (excludedProviders.has(providerId)) continue;
+    const slug = `${model.provider}/${model.id}`;
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    models.push({
+      slug,
+      name: model.name,
+      subProvider: piProviderLabel(model.provider),
+      isCustom: false,
+      ...(slug === discovery.currentModelSlug ? { isDefault: true } : {}),
+      capabilities: EMPTY_CAPABILITIES,
+    });
+  }
+
+  return models.toSorted(
+    (left, right) =>
+      (left.subProvider ?? "").localeCompare(right.subProvider ?? "") ||
+      left.name.localeCompare(right.name) ||
+      left.slug.localeCompare(right.slug),
+  );
+}
+
+function providerIdFromModelSlug(slug: string): string | undefined {
+  const withoutThinking = slug.split(":", 1)[0] ?? slug;
+  const separator = withoutThinking.indexOf("/");
+  return separator > 0 ? withoutThinking.slice(0, separator).toLowerCase() : undefined;
+}
+
+function fallbackModelSlugs(piSettings: PiSettings): ReadonlyArray<string> {
+  const configuredDefault = piSettings.defaultModel.trim();
+  return [
+    ...(configuredDefault ? [configuredDefault.split(":", 1)[0] ?? configuredDefault] : []),
+    ...piSettings.customModels,
+  ];
+}
+
+export function piModelsFromSettings(
+  piSettings: PiSettings,
+  discoveredModels: ReadonlyArray<ServerProviderModel> = [],
+): ReadonlyArray<ServerProviderModel> {
+  const excludedProviders = parseExcludedPiProviders(piSettings.excludedProviders);
+  const visibleDiscovered = discoveredModels.filter((model) => {
+    const providerId = providerIdFromModelSlug(model.slug);
+    return providerId === undefined || !excludedProviders.has(providerId);
+  });
+  return providerModelsFromSettings(
+    visibleDiscovered,
+    fallbackModelSlugs(piSettings).filter((slug) => {
+      const providerId = providerIdFromModelSlug(slug);
+      return providerId === undefined || !excludedProviders.has(providerId);
+    }),
+    EMPTY_CAPABILITIES,
+  ).map((model) => {
+    if (model.subProvider || !model.isCustom) return model;
+    const providerId = providerIdFromModelSlug(model.slug);
+    return providerId ? { ...model, subProvider: piProviderLabel(providerId) } : model;
+  });
+}
 
 export function buildInitialPiProviderSnapshot(
   piSettings: PiSettings,
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    const models = piModelsFromSettings(piSettings.customModels);
+    const models = piModelsFromSettings(piSettings);
 
     if (!piSettings.enabled) {
       return buildServerProvider({
@@ -104,16 +272,10 @@ export function buildInitialPiProviderSnapshot(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Checking pi CLI availability...",
+        message: "Checking pi CLI and discovering models...",
       },
     });
   });
-}
-
-export function piModelsFromSettings(
-  customModels: ReadonlyArray<string> | undefined,
-): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(PI_BUILT_IN_MODELS, customModels ?? [], EMPTY_CAPABILITIES);
 }
 
 const runPiVersionCommand = (
@@ -134,16 +296,30 @@ const runPiVersionCommand = (
     );
   });
 
+const runPiModelDiscovery = (
+  piSettings: PiSettings,
+  environment: NodeJS.ProcessEnv = process.env,
+) =>
+  Effect.gen(function* () {
+    const command = piSettings.binaryPath || "pi";
+    const args = ["--mode", "rpc", "--no-session", "--no-skills", "--no-tools"];
+    const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
+    return yield* spawnAndCollect(
+      command,
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        env: environment,
+        shell: spawnCommand.shell,
+        stdin: { stream: Stream.encodeText(Stream.make(PI_DISCOVERY_STDIN)) },
+      }),
+    );
+  });
+
 export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function* (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
-): Effect.fn.Return<
-  ServerProviderDraft,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
-> {
+): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const fallbackModels = piModelsFromSettings(piSettings.customModels);
+  const fallbackModels = piModelsFromSettings(piSettings);
 
   if (!piSettings.enabled) {
     return buildServerProvider({
@@ -168,12 +344,10 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
-    yield* Effect.logWarning("pi CLI health check failed.", {
-      errorTag: error._tag,
-    });
+    yield* Effect.logWarning("pi CLI health check failed.", { errorTag: error._tag });
     return buildServerProvider({
       presentation: PI_PRESENTATION,
-      enabled: piSettings.enabled,
+      enabled: true,
       checkedAt,
       models: fallbackModels,
       probe: {
@@ -191,7 +365,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   if (Option.isNone(versionResult.success)) {
     return buildServerProvider({
       presentation: PI_PRESENTATION,
-      enabled: piSettings.enabled,
+      enabled: true,
       checkedAt,
       models: fallbackModels,
       probe: {
@@ -204,22 +378,91 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
-  const result = versionResult.success.value;
-  const version = parseGenericCliVersion(result.stdout) ?? parseGenericCliVersion(result.stderr);
+  const versionOutput = versionResult.success.value;
+  const version =
+    parseGenericCliVersion(versionOutput.stdout) ?? parseGenericCliVersion(versionOutput.stderr);
+
+  const discoveryResult = yield* runPiModelDiscovery(piSettings, environment).pipe(
+    Effect.timeoutOption(MODEL_DISCOVERY_TIMEOUT_MS),
+    Effect.result,
+  );
+
+  if (Result.isFailure(discoveryResult)) {
+    yield* Effect.logWarning("pi model discovery failed.", {
+      errorTag: discoveryResult.failure._tag,
+    });
+    return buildServerProvider({
+      presentation: PI_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version,
+        status: "warning",
+        auth: { status: "unknown" },
+        message: "pi is ready, but live model discovery failed.",
+      },
+    });
+  }
+
+  if (Option.isNone(discoveryResult.success)) {
+    return buildServerProvider({
+      presentation: PI_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version,
+        status: "warning",
+        auth: { status: "unknown" },
+        message: `pi is ready, but model discovery timed out after ${String(
+          MODEL_DISCOVERY_TIMEOUT_MS / 1000,
+        )} seconds.`,
+      },
+    });
+  }
+
+  const discoveryCommand = discoveryResult.success.value;
+  const discovery =
+    discoveryCommand.code === 0 ? parsePiModelDiscovery(discoveryCommand.stdout) : undefined;
+  if (!discovery) {
+    return buildServerProvider({
+      presentation: PI_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version,
+        status: "warning",
+        auth: { status: "unknown" },
+        message: "pi is ready, but returned an invalid model discovery response.",
+      },
+    });
+  }
+
+  const discoveredModels = piModelsFromDiscovery(
+    discovery,
+    parseExcludedPiProviders(piSettings.excludedProviders),
+  );
+  const models = piModelsFromSettings(piSettings, discoveredModels);
+  const providerCount = new Set(models.map((model) => model.subProvider).filter(Boolean)).size;
 
   return buildServerProvider({
     presentation: PI_PRESENTATION,
-    enabled: piSettings.enabled,
+    enabled: true,
     checkedAt,
-    models: fallbackModels,
+    models,
     probe: {
       installed: true,
       version,
-      // pi defers authentication to whichever provider credentials exist in
-      // ~/.pi/agent/auth.json; there is no cheap offline auth probe, so we
-      // report unknown rather than guessing.
       status: "ready",
       auth: { status: "unknown" },
+      message: `Discovered ${String(models.length)} models across ${String(
+        providerCount,
+      )} pi providers.`,
     },
   });
 });

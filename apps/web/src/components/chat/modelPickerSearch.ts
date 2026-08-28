@@ -9,6 +9,8 @@ type ModelPickerSearchableModel = {
    * models directly instead of just the driver kind.
    */
   providerDisplayName: string;
+  /** Full provider/model slug; indexed so exact IDs remain searchable. */
+  slug?: string;
   name: string;
   shortName?: string;
   subProvider?: string;
@@ -19,6 +21,7 @@ const MODEL_PICKER_FAVORITE_SCORE_BOOST = 24;
 
 function getModelPickerSearchFields(model: ModelPickerSearchableModel): string[] {
   return [
+    ...(model.slug ? [normalizeSearchQuery(model.slug)] : []),
     normalizeSearchQuery(model.name),
     ...(model.shortName ? [normalizeSearchQuery(model.shortName)] : []),
     ...(model.subProvider ? [normalizeSearchQuery(model.subProvider)] : []),
@@ -46,7 +49,14 @@ function scoreModelPickerSearchToken(
 
 export function buildModelPickerSearchText(model: ModelPickerSearchableModel): string {
   return normalizeSearchQuery(
-    [model.name, model.shortName, model.subProvider, model.driverKind, model.providerDisplayName]
+    [
+      model.slug,
+      model.name,
+      model.shortName,
+      model.subProvider,
+      model.driverKind,
+      model.providerDisplayName,
+    ]
       .filter((value): value is string => typeof value === "string" && value.length > 0)
       .join(" "),
   );
