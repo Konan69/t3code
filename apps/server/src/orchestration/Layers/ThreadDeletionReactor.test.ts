@@ -1,5 +1,6 @@
 import {
   EventId,
+  GitCommandError,
   ThreadId,
   type OrchestrationEvent,
   type ThreadMachineBinding,
@@ -79,6 +80,43 @@ describe("logCleanupCauseUnlessInterrupted", () => {
     );
 
     expect(order).toEqual(["worktree.remove", "dataset.destroy"]);
+  });
+
+  it("destroys machine resources when Git worktree removal fails", async () => {
+    const machine = {
+      machineId: "thread-failed-create",
+      machineName: "thread-failed-create",
+      state: "running",
+      hostWorkspaceRoot: "/tank/threads/failed-create/ws",
+      guestWorkspaceRoot: "/home/kixey/ws",
+    } satisfies ThreadMachineBinding;
+    let destroyed = false;
+
+    await Effect.runPromise(
+      cleanupMachineWorktree({
+        machine,
+        projectWorkspaceRoot: "/repo",
+        gitWorkflow: {
+          removeWorktree: () =>
+            Effect.fail(
+              new GitCommandError({
+                operation: "GitVcsDriver.removeWorktree",
+                command: "git worktree remove",
+                cwd: "/repo",
+                detail: "worktree was never created",
+              }),
+            ),
+        },
+        machines: {
+          destroy: () =>
+            Effect.sync(() => {
+              destroyed = true;
+            }),
+        },
+      }),
+    );
+
+    expect(destroyed).toBe(true);
   });
 
   it("preserves interrupt causes", async () => {
