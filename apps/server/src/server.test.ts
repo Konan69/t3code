@@ -136,6 +136,7 @@ import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
+import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
@@ -418,6 +419,7 @@ const buildAppUnderTest = (options?: {
     projectSetupScriptRunner?: Partial<
       ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
     >;
+    threadMachineService?: Partial<ThreadMachineService.ThreadMachineService["Service"]>;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     threadDeletionReactor?: Partial<ThreadDeletionReactor["Service"]>;
@@ -770,10 +772,17 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
       Layer.provide(
-        Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
-          runForThread: () => Effect.succeed({ status: "no-script" as const }),
-          ...options?.layers?.projectSetupScriptRunner,
-        }),
+        Layer.mergeAll(
+          Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+            runForThread: () => Effect.succeed({ status: "no-script" as const }),
+            ...options?.layers?.projectSetupScriptRunner,
+          }),
+          Layer.mock(ThreadMachineService.ThreadMachineService)({
+            ensureForThread: () => Effect.succeed(Option.none()),
+            runSetupForThread: () => Effect.succeed({ status: "no-script" }),
+            ...options?.layers?.threadMachineService,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(TerminalManager.TerminalManager)({
@@ -8261,6 +8270,114 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           assert.equal(finalCommand.bootstrap, undefined);
         }
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("skips bootstrap worktree creation and runs setup in a thread machine", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const createWorktree = vi.fn(
+        (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.die("machine bootstrap must not create a git worktree"),
+      );
+      const runForThread = vi.fn(
+        (
+          _: Parameters<
+            ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
+          >[0],
+        ) => Effect.die("machine bootstrap must not use the host setup runner"),
+      );
+      const machineBinding = {
+        machineId: "thread-thread-bootstrap-machine",
+        machineName: "thread-thread-bootstrap-machine",
+        state: "running" as const,
+        hostWorkspaceRoot: "/tank/threads/thread-bootstrap-machine/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+      };
+      const runSetupForThread = vi.fn(
+        (
+          _: Parameters<
+            ThreadMachineService.ThreadMachineService["Service"]["runSetupForThread"]
+          >[0],
+        ) =>
+          Effect.succeed({
+            status: "completed" as const,
+            scriptId: "setup",
+            scriptName: "Setup",
+          }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: { createWorktree },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectSetupScriptRunner: { runForThread },
+          threadMachineService: {
+            ensureForThread: () => Effect.succeed(Option.some(machineBinding)),
+            runSetupForThread,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-machine-turn-start"),
+            threadId: ThreadId.make("thread-bootstrap-machine"),
+            message: {
+              messageId: MessageId.make("msg-bootstrap-machine"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Machine Bootstrap Thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/machine-bootstrap",
+              },
+              runSetupScript: true,
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 4);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.create", "thread.activity.append", "thread.activity.append", "thread.turn.start"],
+      );
+      assert.equal(createWorktree.mock.calls.length, 0);
+      assert.equal(runForThread.mock.calls.length, 0);
+      assert.deepEqual(runSetupForThread.mock.calls[0]?.[0], {
+        threadId: ThreadId.make("thread-bootstrap-machine"),
+        projectId: defaultProjectId,
+        binding: machineBinding,
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(

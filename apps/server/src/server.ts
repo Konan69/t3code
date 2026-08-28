@@ -22,7 +22,8 @@ import {
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
-import * as HostMachineService from "./machine/HostMachineService.ts";
+import * as MachineServiceLive from "./machine/MachineServiceLive.ts";
+import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
 import * as ProcessLauncher from "./process/ProcessLauncher.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
@@ -64,6 +65,7 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
+import { MachineReactorLive } from "./orchestration/Layers/MachineReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -253,12 +255,19 @@ const PlatformServicesLive = Layer.unwrap(
   }),
 );
 
+const MachineServiceLayerLive = MachineServiceLive.layer;
+const ThreadMachineServiceLayerLive = ThreadMachineService.layer.pipe(
+  Layer.provide(MachineServiceLayerLive),
+);
+
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
+  Layer.provideMerge(MachineReactorLive),
+  Layer.provideMerge(ThreadMachineServiceLayerLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
@@ -401,7 +410,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
 
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
-  Layer.provideMerge(Layer.mergeAll(ServerSettingsLayerLive, HostMachineService.layer)),
+  Layer.provideMerge(Layer.mergeAll(ServerSettingsLayerLive, MachineServiceLayerLive)),
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
