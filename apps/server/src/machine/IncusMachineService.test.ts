@@ -35,7 +35,7 @@ function makeHandle(input: {
 }
 
 const provideIncus = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
-  Layer.effect(MachineService, IncusMachineService.make(1000)).pipe(
+  Layer.effect(MachineService, IncusMachineService.make({ uid: 1001, gid: 1002 })).pipe(
     Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
     Layer.provide(NodeServices.layer),
   );
@@ -209,7 +209,7 @@ describe("IncusMachineService", () => {
         });
         expect(commands).toContainEqual({
           command: "sudo",
-          args: ["-n", "chown", "1000:1000", "/tank/threads/thread-1/ws"],
+          args: ["-n", "chown", "1001:1002", "/tank/threads/thread-1/ws"],
           stdin: "ignore",
         });
         expect(commands.some((entry) => entry.command === "zfs")).toBe(false);

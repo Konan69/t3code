@@ -16,6 +16,11 @@ import type * as ChildProcess from "effect/unstable/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 export const GOLDEN_IMAGE_ALIAS = "golden";
+/**
+ * The golden image owns this guest account at uid 1000. Host workspace
+ * datasets remain owned by the server process's effective uid/gid; Incus's
+ * idmapped `shift=true` disk bridges those different host and guest IDs.
+ */
 export const MACHINE_GUEST_USER = "kixey";
 export const MACHINE_GUEST_WORKSPACE_ROOT = "/home/kixey/ws";
 export const MACHINE_HOST_DATASET_ROOT = "/tank";

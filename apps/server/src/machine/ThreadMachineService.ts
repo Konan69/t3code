@@ -175,6 +175,15 @@ export const make = Effect.gen(function* () {
     if (Option.isNone(workspace)) {
       return Option.none();
     }
+    const cleanupBinding = { ...workspace.value, state: "stopped" as const };
+    if (!sameMachineIdentity(thread.machine, cleanupBinding)) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.machine.bind",
+        commandId: yield* commandId("bind-workspace"),
+        threadId,
+        binding: cleanupBinding,
+      });
+    }
     yield* ensureWorktree(thread, project, workspace.value, preparation);
 
     const created = yield* machines.createFromGolden(threadId);

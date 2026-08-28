@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  GitCommandError,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -102,6 +103,7 @@ const makeLayer = (input: {
   readonly onExec?: (execInput: unknown) => void;
   readonly existingMachine?: ThreadMachineBinding | null;
   readonly existingBranch?: boolean;
+  readonly failWorktreeCreate?: boolean;
 }) => {
   const machineLayer = Layer.succeed(
     MachineService,
@@ -172,6 +174,16 @@ const makeLayer = (input: {
           }),
         createWorktree: (worktreeInput) => {
           input.onWorktree?.(worktreeInput);
+          if (input.failWorktreeCreate) {
+            return Effect.fail(
+              new GitCommandError({
+                operation: "GitVcsDriver.createWorktree",
+                command: "git worktree add",
+                cwd: "/repo",
+                detail: "workspace is not writable",
+              }),
+            );
+          }
           return Effect.succeed({
             worktree: {
               path: binding.hostWorkspaceRoot,
@@ -237,6 +249,31 @@ describe("ThreadMachineService", () => {
             worktreeInput = value;
           },
           onCreate: () => order.push("device-and-start"),
+          onDispatch: (command) => dispatched.push(command),
+        }),
+      ),
+    );
+  });
+
+  it.effect("persists a cleanup binding before worktree creation can fail", () => {
+    const dispatched: unknown[] = [];
+    return Effect.gen(function* () {
+      const service = yield* ThreadMachineService;
+      const result = yield* service.ensureForThread(threadId).pipe(Effect.exit);
+
+      expect(result._tag).toBe("Failure");
+      expect(dispatched).toContainEqual(
+        expect.objectContaining({
+          type: "thread.machine.bind",
+          threadId,
+          binding: { ...binding, state: "stopped" },
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          machineMode: "thread",
+          failWorktreeCreate: true,
           onDispatch: (command) => dispatched.push(command),
         }),
       ),
