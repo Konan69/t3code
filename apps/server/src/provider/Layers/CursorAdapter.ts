@@ -795,6 +795,23 @@ export function makeCursorAdapter(
                   case "EventStreamBarrier":
                     yield* Deferred.succeed(event.acknowledge, undefined);
                     return;
+                  case "ProcessExited":
+                    if (ctx.stopped) return;
+                    ctx.stopped = true;
+                    sessions.delete(ctx.threadId);
+                    yield* offerRuntimeEvent({
+                      type: "session.exited",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      payload: {
+                        exitKind: "error",
+                        recoverable: true,
+                        reason: event.reason,
+                      },
+                    });
+                    yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+                    return;
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted":
