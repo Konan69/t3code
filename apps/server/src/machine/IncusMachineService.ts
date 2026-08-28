@@ -26,7 +26,11 @@ const ZFS_BINARY = "zfs";
 const INCUS_STORAGE_POOL = "tank";
 const WORKSPACE_DEVICE_NAME = "workspace";
 const MACHINE_AGENT_WAIT_LIMIT = "180 seconds";
-const BOX_USER_ID = 1000;
+
+export interface EffectiveIds {
+  readonly uid: number;
+  readonly gid: number;
+}
 
 export interface CommandSpec {
   readonly command: string;
@@ -53,12 +57,13 @@ const commandError = (operation: string, detail: string, cause?: unknown) =>
   new MachineServiceError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
 
 const isMachineServiceError = Schema.is(MachineServiceError);
-class EffectiveUid extends Context.Service<EffectiveUid, number>()(
-  "t3/machine/IncusMachineService/EffectiveUid",
+class EffectiveIdsService extends Context.Service<EffectiveIdsService, EffectiveIds>()(
+  "t3/machine/IncusMachineService/EffectiveIdsService",
 ) {}
 
-const makeWithUid = Effect.gen(function* () {
-  const uid = yield* EffectiveUid;
+const makeWithEffectiveIds = Effect.gen(function* () {
+  const effectiveIds = yield* EffectiveIdsService;
+  const uid = effectiveIds.uid;
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -223,7 +228,7 @@ const makeWithUid = Effect.gen(function* () {
       );
     }
     yield* runPrivilegedChecked("dataset.chown", "chown", [
-      `${BOX_USER_ID}:${BOX_USER_ID}`,
+      `${effectiveIds.uid}:${effectiveIds.gid}`,
       mountpoint,
     ]);
   });
@@ -484,7 +489,11 @@ const makeWithUid = Effect.gen(function* () {
   });
 });
 
-export const make = (uid: number | undefined = process.getuid?.()) =>
-  makeWithUid.pipe(Effect.provideService(EffectiveUid, uid ?? -1));
+export const make = (
+  effectiveIds: EffectiveIds = {
+    uid: process.getuid?.() ?? -1,
+    gid: process.getgid?.() ?? -1,
+  },
+) => makeWithEffectiveIds.pipe(Effect.provideService(EffectiveIdsService, effectiveIds));
 
 export const layer = Layer.effect(MachineService, make());

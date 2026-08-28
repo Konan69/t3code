@@ -46,15 +46,32 @@ export const cleanupMachineWorktree = (input: {
   readonly gitWorkflow: Pick<GitWorkflowService["Service"], "removeWorktree">;
   readonly machines: Pick<MachineService["Service"], "destroy">;
 }) => {
-  if (!input.machine || !input.projectWorkspaceRoot) {
+  const machine = input.machine;
+  const projectWorkspaceRoot = input.projectWorkspaceRoot;
+  if (!machine || !projectWorkspaceRoot) {
     return Effect.void;
   }
-  return input.gitWorkflow
+  const removeWorktree = input.gitWorkflow
     .removeWorktree({
-      cwd: input.projectWorkspaceRoot,
-      path: input.machine.hostWorkspaceRoot,
+      cwd: projectWorkspaceRoot,
+      path: machine.hostWorkspaceRoot,
     })
-    .pipe(Effect.andThen(input.machines.destroy(input.machine)));
+    .pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning(
+          "machine cleanup could not remove Git worktree; destroying machine resources anyway",
+          {
+            machineName: machine.machineName,
+            worktreePath: machine.hostWorkspaceRoot,
+            cause: Cause.pretty(cause),
+          },
+        );
+      }),
+    );
+  return removeWorktree.pipe(Effect.andThen(input.machines.destroy(machine)));
 };
 
 const make = Effect.gen(function* () {
