@@ -30,6 +30,35 @@ describe("scoreModelPickerSearch", () => {
     ).not.toBeNull();
   });
 
+  it("matches provider and model tokens in any order", () => {
+    const model = {
+      driverKind: "pi",
+      providerDisplayName: "pi",
+      slug: "openai-codex/gpt-5.4",
+      name: "GPT-5.4",
+      subProvider: "OpenAI Codex",
+    };
+
+    expect(scoreModelPickerSearch(model, "open 5.4")).not.toBeNull();
+    expect(scoreModelPickerSearch(model, "5.4 open")).not.toBeNull();
+    expect(scoreModelPickerSearch(model, "open missing")).toBeNull();
+  });
+
+  it("indexes full provider/model slugs", () => {
+    expect(
+      scoreModelPickerSearch(
+        {
+          driverKind: "pi",
+          providerDisplayName: "pi",
+          slug: "openrouter/qwen/qwen3-coder",
+          name: "Qwen3 Coder",
+          subProvider: "OpenRouter",
+        },
+        "openrouter qwen3-coder",
+      ),
+    ).not.toBeNull();
+  });
+
   it("rejects results when any query token does not match", () => {
     expect(
       scoreModelPickerSearch(
