@@ -326,6 +326,21 @@ export const ProjectIconOverride = Schema.Union([
 ]);
 export type ProjectIconOverride = typeof ProjectIconOverride.Type;
 
+export const ProjectMachineMode = Schema.Literals(["off", "thread"]);
+export type ProjectMachineMode = typeof ProjectMachineMode.Type;
+
+export const ThreadMachineState = Schema.Literals(["running", "stopped", "archived"]);
+export type ThreadMachineState = typeof ThreadMachineState.Type;
+
+export const ThreadMachineBinding = Schema.Struct({
+  machineId: TrimmedNonEmptyString,
+  machineName: TrimmedNonEmptyString,
+  state: ThreadMachineState,
+  hostWorkspaceRoot: TrimmedNonEmptyString,
+  guestWorkspaceRoot: TrimmedNonEmptyString,
+});
+export type ThreadMachineBinding = typeof ThreadMachineBinding.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
@@ -338,6 +353,8 @@ export const OrchestrationProject = Schema.Struct({
   // Opt-in because background sync performs network I/O and may move the checkout.
   // Optional on the wire so cached snapshots from older servers still decode.
   autoPull: Schema.optional(Schema.Boolean),
+  // Optional/default-off so cached snapshots and older servers remain compatible.
+  machineMode: Schema.optional(ProjectMachineMode),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
@@ -493,6 +510,7 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  machine: Schema.optional(Schema.NullOr(ThreadMachineBinding)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
@@ -551,6 +569,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
+  machineMode: Schema.optional(ProjectMachineMode),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
@@ -571,6 +590,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  machine: Schema.optional(Schema.NullOr(ThreadMachineBinding)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
@@ -774,6 +794,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   // Absent = leave unchanged; null = clear the override.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
+  machineMode: Schema.optional(ProjectMachineMode),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
@@ -1095,6 +1116,20 @@ export const ClientOrchestrationCommand = Schema.Union([
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
+const ThreadMachineBindCommand = Schema.Struct({
+  type: Schema.Literal("thread.machine.bind"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  binding: ThreadMachineBinding,
+});
+
+const ThreadMachineStateSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.machine.state.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  state: ThreadMachineState,
+});
+
 const ThreadSessionSetCommand = Schema.Struct({
   type: Schema.Literal("thread.session.set"),
   commandId: CommandId,
@@ -1170,6 +1205,8 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
+  ThreadMachineBindCommand,
+  ThreadMachineStateSetCommand,
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
@@ -1205,6 +1242,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.machine-bound",
+  "thread.machine-state-set",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1246,6 +1285,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
+  machineMode: Schema.optional(ProjectMachineMode),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
@@ -1365,6 +1405,18 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadMachineBoundPayload = Schema.Struct({
+  threadId: ThreadId,
+  binding: ThreadMachineBinding,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadMachineStateSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  state: ThreadMachineState,
   updatedAt: IsoDateTime,
 });
 
@@ -1574,6 +1626,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.machine-bound"),
+    payload: ThreadMachineBoundPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.machine-state-set"),
+    payload: ThreadMachineStateSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

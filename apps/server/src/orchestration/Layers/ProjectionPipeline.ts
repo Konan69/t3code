@@ -516,6 +516,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             defaultModelSelection: event.payload.defaultModelSelection,
             defaultThreadEnvMode: null,
             autoPull: false,
+            machineMode: "off",
             faviconPath: event.payload.faviconPath ?? null,
             projectIcon: event.payload.projectIcon ?? null,
             scripts: event.payload.scripts,
@@ -545,6 +546,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { defaultThreadEnvMode: event.payload.defaultThreadEnvMode }
               : {}),
             ...(event.payload.autoPull !== undefined ? { autoPull: event.payload.autoPull } : {}),
+            ...(event.payload.machineMode !== undefined
+              ? { machineMode: event.payload.machineMode }
+              : {}),
             ...(event.payload.faviconPath !== undefined
               ? { faviconPath: event.payload.faviconPath }
               : {}),
@@ -624,6 +628,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            machineId: null,
+            machineName: null,
+            machineState: null,
+            machineHostWorkspaceRoot: null,
+            machineGuestWorkspaceRoot: null,
             linkedPullRequest: null,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
@@ -855,6 +864,40 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             interactionMode: event.payload.interactionMode,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.machine-bound": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            machineId: event.payload.binding.machineId,
+            machineName: event.payload.binding.machineName,
+            machineState: event.payload.binding.state,
+            machineHostWorkspaceRoot: event.payload.binding.hostWorkspaceRoot,
+            machineGuestWorkspaceRoot: event.payload.binding.guestWorkspaceRoot,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.machine-state-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow) || existingRow.value.machineId === null) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            machineState: event.payload.state,
             updatedAt: event.payload.updatedAt,
           });
           return;

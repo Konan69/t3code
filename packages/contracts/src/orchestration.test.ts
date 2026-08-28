@@ -569,6 +569,48 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
     assert.strictEqual(thread.settledAt, null);
     assert.strictEqual(shell.settledOverride, null);
     assert.strictEqual(shell.settledAt, null);
+    assert.strictEqual(thread.machine, undefined);
+    assert.strictEqual(shell.machine, undefined);
+  }),
+);
+
+it.effect("keeps machine lifecycle commands internal and decodes bindings", () =>
+  Effect.gen(function* () {
+    const command = {
+      type: "thread.machine.bind",
+      commandId: "cmd-machine-bind-1",
+      threadId: "thread-1",
+      binding: {
+        machineId: "thread-1",
+        machineName: "thread-thread-1",
+        state: "running",
+        hostWorkspaceRoot: "/tank/threads/thread-1/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+      },
+    };
+
+    const internal = yield* decodeOrchestrationCommand(command);
+    assert.strictEqual(internal.type, "thread.machine.bind");
+    assert.ok(Exit.isFailure(yield* Effect.exit(decodeClientOrchestrationCommand(command))));
+  }),
+);
+
+it.effect("decodes project machine mode without widening thread environment mode", () =>
+  Effect.gen(function* () {
+    const project = yield* decodeProjectMetaUpdatedPayload({
+      projectId: "project-1",
+      machineMode: "thread",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(project.machineMode, "thread");
+
+    const invalidThreadMode = yield* decodeClientOrchestrationCommand({
+      type: "project.meta.update",
+      commandId: "cmd-machine-mode-1",
+      projectId: "project-1",
+      defaultThreadEnvMode: "machine",
+    }).pipe(Effect.exit);
+    assert.ok(Exit.isFailure(invalidThreadMode));
   }),
 );
 
