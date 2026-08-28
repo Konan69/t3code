@@ -2310,6 +2310,7 @@ export function makeOpenCodeAdapter(
               // we provide below — closing `sessionScope` kills the child
               // process automatically. No manual `server.close()` needed.
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
+                threadId: input.threadId,
                 binaryPath,
                 directory,
                 serverUrl,

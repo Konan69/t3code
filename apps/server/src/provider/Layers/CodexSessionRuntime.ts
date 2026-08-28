@@ -30,7 +30,6 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
@@ -40,6 +39,7 @@ import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
+import { ProcessLauncher, type ProcessLaunchInput } from "../../process/ProcessLauncher.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -53,6 +53,27 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
+
+export function makeCodexProcessLaunchInput(input: {
+  readonly threadId: ThreadId;
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly extendEnv: boolean;
+  readonly shell: boolean | string;
+}): ProcessLaunchInput {
+  return {
+    threadId: input.threadId,
+    command: input.command,
+    args: input.args,
+    cwd: input.cwd,
+    env: input.env,
+    extendEnv: input.extendEnv,
+    forceKillAfter: CODEX_APP_SERVER_FORCE_KILL_AFTER,
+    shell: input.shell,
+  };
+}
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -1154,10 +1175,10 @@ export const makeCodexSessionRuntime = (
 ): Effect.Effect<
   CodexSessionRuntimeShape,
   CodexErrors.CodexAppServerError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+  ProcessLauncher | Crypto.Crypto | Scope.Scope
 > =>
   Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const processLauncher = yield* ProcessLauncher;
     const runtimeScope = yield* Scope.Scope;
     const crypto = yield* Crypto.Crypto;
     const events = yield* Queue.unbounded<ProviderEvent>();
@@ -1186,13 +1207,15 @@ export const makeCodexSessionRuntime = (
       env,
       extendEnv,
     });
-    const child = yield* spawner
-      .spawn(
-        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+    const child = yield* processLauncher
+      .launch(
+        makeCodexProcessLaunchInput({
+          threadId: options.threadId,
+          command: spawnCommand.command,
+          args: spawnCommand.args,
           cwd: options.cwd,
           env,
           extendEnv,
-          forceKillAfter: CODEX_APP_SERVER_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),
       )

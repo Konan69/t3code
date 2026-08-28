@@ -51,6 +51,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import { HostProcessLauncherLive } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
@@ -154,7 +155,7 @@ const SettingsWatcherLive = Layer.effectDiscard(
  * The mutator tag is technically also exposed; only this module imports
  * it, so the visibility leak is harmless in practice.
  */
-export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
+export const ProviderInstanceRegistryHydrationProcessLauncherLive: Layer.Layer<
   ProviderInstanceRegistry,
   never,
   BuiltInDriversEnv | ServerSettingsService
@@ -177,3 +178,6 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
     return SettingsWatcherLive.pipe(Layer.provideMerge(mutableLayer));
   }),
 ) as Layer.Layer<ProviderInstanceRegistry, never, BuiltInDriversEnv | ServerSettingsService>;
+
+export const ProviderInstanceRegistryHydrationLive =
+  ProviderInstanceRegistryHydrationProcessLauncherLive.pipe(Layer.provide(HostProcessLauncherLive));
