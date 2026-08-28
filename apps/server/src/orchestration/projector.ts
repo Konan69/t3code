@@ -19,6 +19,8 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadMachineBoundPayload,
+  ThreadMachineStateSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -215,6 +217,7 @@ export function projectEvent(
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
             defaultThreadEnvMode: null,
+            machineMode: "off" as const,
             faviconPath: payload.faviconPath ?? null,
             scripts: payload.scripts,
             createdAt: payload.createdAt,
@@ -250,6 +253,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultThreadEnvMode !== undefined
                     ? { defaultThreadEnvMode: payload.defaultThreadEnvMode }
+                    : {}),
+                  ...(payload.machineMode !== undefined
+                    ? { machineMode: payload.machineMode }
                     : {}),
                   ...(payload.faviconPath !== undefined
                     ? { faviconPath: payload.faviconPath }
@@ -297,6 +303,7 @@ export function projectEvent(
             interactionMode: payload.interactionMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            machine: null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -323,6 +330,39 @@ export function projectEvent(
             : [...nextBase.threads, thread],
         };
       });
+
+    case "thread.machine-bound":
+      return decodeForEvent(ThreadMachineBoundPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            machine: payload.binding,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.machine-state-set":
+      return decodeForEvent(
+        ThreadMachineStateSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          return {
+            ...nextBase,
+            threads:
+              thread?.machine == null
+                ? nextBase.threads
+                : updateThread(nextBase.threads, payload.threadId, {
+                    machine: { ...thread.machine, state: payload.state },
+                    updatedAt: payload.updatedAt,
+                  }),
+          };
+        }),
+      );
 
     case "thread.deleted":
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
