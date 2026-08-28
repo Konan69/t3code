@@ -43,10 +43,15 @@ import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { ServerConfig } from "../../config.ts";
+import {
+  ProcessLauncher,
+  makeHostProcessLauncher,
+  type ProcessLaunchInput,
+} from "../../process/ProcessLauncher.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -63,6 +68,26 @@ const PROVIDER = ProviderDriverKind.make("pi");
 const READY_TIMEOUT_MS = 45_000;
 const COMMAND_RESPONSE_TIMEOUT_MS = 30_000;
 const ENCODER = new TextEncoder();
+
+export function makePiProcessLaunchInput(input: {
+  readonly threadId: ThreadId;
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv | undefined;
+  readonly extendEnv: boolean;
+  readonly shell: boolean | string;
+}): ProcessLaunchInput {
+  return {
+    threadId: input.threadId,
+    command: input.command,
+    args: input.args,
+    shell: input.shell,
+    cwd: input.cwd,
+    env: input.env,
+    extendEnv: input.extendEnv,
+  };
+}
 
 /** A decoded line from the pi RPC stdout stream. */
 type PiRpcMessage = Record<string, unknown>;
@@ -90,6 +115,7 @@ interface PiSessionContext {
 export interface PiAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId | undefined;
   readonly environment?: NodeJS.ProcessEnv | undefined;
+  readonly processLauncher?: ProcessLauncher["Service"] | undefined;
   readonly nativeEventLogPath?: string | undefined;
 }
 
@@ -233,6 +259,7 @@ export function makePiAdapter(
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("pi");
     const serverConfig = yield* ServerConfig;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const processLauncher = options?.processLauncher ?? makeHostProcessLauncher(spawner);
     const crypto = yield* Crypto.Crypto;
 
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -956,9 +983,12 @@ export function makePiAdapter(
           ),
         );
 
-        const child = yield* spawner
-          .spawn(
-            ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        const child = yield* processLauncher
+          .launch(
+            makePiProcessLaunchInput({
+              threadId: input.threadId,
+              command: spawnCommand.command,
+              args: spawnCommand.args,
               shell: spawnCommand.shell,
               cwd: input.cwd ?? serverConfig.cwd,
               env: options?.environment ?? undefined,

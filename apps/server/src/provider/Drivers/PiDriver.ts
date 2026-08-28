@@ -20,6 +20,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { makePiTextGeneration } from "../../textGeneration/PiTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProcessLauncher } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makePiAdapter } from "../Layers/PiAdapter.ts";
@@ -67,6 +68,7 @@ export type PiDriverEnv =
   | Crypto.Crypto
   | FileSystem.FileSystem
   | Path.Path
+  | ProcessLauncher
   | ServerConfig
   | ServerSettingsService;
 
@@ -97,6 +99,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const processLauncher = yield* ProcessLauncher;
       const crypto = yield* Crypto.Crypto;
       const serverSettings = yield* ServerSettingsService;
       const processEnv = mergeProviderInstanceEnvironment(environment);
@@ -119,6 +122,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       const adapter = yield* makePiAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        processLauncher,
       });
       const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
 

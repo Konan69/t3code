@@ -10,6 +10,7 @@ import * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
+import { ProcessLauncher, makeHostProcessLauncher } from "../../process/ProcessLauncher.ts";
 import {
   CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
   resolveCursorAcpBaseModelId,
@@ -35,6 +36,7 @@ export interface CursorAcpRuntimeInput extends Omit<
   "authMethodId" | "clientCapabilities" | "spawn"
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  readonly processLauncher?: ProcessLauncher["Service"];
   readonly cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
@@ -72,8 +74,10 @@ export const makeCursorAcpRuntime = (
   Crypto.Crypto | Scope.Scope
 > =>
   Effect.gen(function* () {
+    const processLauncher =
+      input.processLauncher ?? makeHostProcessLauncher(input.childProcessSpawner);
     const acpContext = yield* Layer.build(
-      AcpSessionRuntime.layer({
+      AcpSessionRuntime.layerWithProcessLauncher({
         ...input,
         spawn: buildCursorAcpSpawnInput(
           input.cursorSettings,
@@ -83,11 +87,7 @@ export const makeCursorAcpRuntime = (
         ),
         authMethodId: "cursor_login",
         clientCapabilities: CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
-      }).pipe(
-        Layer.provide(
-          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
-        ),
-      ),
+      }).pipe(Layer.provide(Layer.succeed(ProcessLauncher, processLauncher))),
     );
     return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
       Effect.provide(acpContext),
