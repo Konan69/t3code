@@ -289,6 +289,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             },
           ],
           defaultThreadEnvMode: null,
+          machineMode: "off",
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
@@ -307,6 +308,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          machine: null,
           linkedPullRequest: {
             projectId: asProjectId("project-1"),
             repository: "pingdotgg/t3code",
@@ -416,6 +418,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             },
           ],
           defaultThreadEnvMode: null,
+          machineMode: "off",
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
         },
@@ -433,6 +436,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          machine: null,
           linkedPullRequest: {
             projectId: asProjectId("project-1"),
             repository: "pingdotgg/t3code",
@@ -1095,6 +1099,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           projectId: asProjectId("project-context"),
           workspaceRoot: "/tmp/context-workspace",
           worktreePath: "/tmp/context-worktree",
+          machineHostWorkspaceRoot: null,
           checkpoints: [
             {
               turnId: asTurnId("turn-1"),
