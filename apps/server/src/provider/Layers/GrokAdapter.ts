@@ -1316,6 +1316,24 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   yield* Deferred.succeed(event.acknowledge, undefined);
                   return;
                 }
+                if (event._tag === "ProcessExited") {
+                  if (ctx.stopped) return;
+                  ctx.stopped = true;
+                  sessions.delete(ctx.threadId);
+                  yield* offerRuntimeEvent({
+                    type: "session.exited",
+                    ...(yield* makeEventStamp()),
+                    provider: PROVIDER,
+                    threadId: ctx.threadId,
+                    payload: {
+                      exitKind: "error",
+                      recoverable: true,
+                      reason: event.reason,
+                    },
+                  });
+                  yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+                  return;
+                }
                 if (
                   event._tag === "PlanUpdated" ||
                   event._tag === "ToolCallUpdated" ||
