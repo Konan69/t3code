@@ -30,6 +30,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { ThreadMachineService } from "../../machine/ThreadMachineService.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterRequestError,
@@ -326,6 +327,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const threadMachines = yield* ThreadMachineService;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -490,17 +492,18 @@ const make = Effect.gen(function* () {
     readonly projectId: ProjectId;
     readonly branch: string | null;
     readonly worktreePath: string | null;
+    readonly machine?: { readonly hostWorkspaceRoot: string } | null | undefined;
   }) {
     const { worktreePath, branch } = thread;
-    if (!worktreePath || !branch) {
+    if (!worktreePath || !branch || thread.machine != null) {
+      return;
+    }
+    const project = yield* resolveProject(thread.projectId);
+    if (!project || project.machineMode === "thread") {
       return;
     }
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
     if (exists) {
-      return;
-    }
-    const project = yield* resolveProject(thread.projectId);
-    if (!project) {
       return;
     }
     const cwd = project.workspaceRoot;
@@ -696,9 +699,22 @@ const make = Effect.gen(function* () {
         });
       }
     }
+    const ensuredMachine = yield* threadMachines.ensureForThread(threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: preferredProvider,
+            method: "thread.turn.start",
+            detail: `Failed to ensure machine for thread '${threadId}': ${cause.detail}`,
+          }),
+      ),
+    );
     const project = yield* resolveProject(thread.projectId);
     const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread,
+      thread: {
+        ...thread,
+        machine: Option.getOrUndefined(ensuredMachine) ?? thread.machine,
+      },
       projects: project ? [project] : [],
     });
     const refreshWorkspaceSnapshot = effectiveCwd
@@ -1283,7 +1299,12 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* ensureThreadWorktree(thread);
+    const ensuredMachine = yield* threadMachines.ensureForThread(thread.id);
+    const effectiveThread = {
+      ...thread,
+      machine: Option.getOrUndefined(ensuredMachine) ?? thread.machine,
+    };
+    yield* ensureThreadWorktree(effectiveThread);
 
     const isCompactCommand = isCompactCommandMessage(message);
     const nonCompactUserMessageCount = thread.messages.filter(
@@ -1293,7 +1314,7 @@ const make = Effect.gen(function* () {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =
         resolveThreadWorkspaceCwd({
-          thread,
+          thread: effectiveThread,
           projects: project ? [project] : [],
         }) ?? process.cwd();
       const generationInput = {
