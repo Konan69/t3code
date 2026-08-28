@@ -35,6 +35,7 @@ import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings"
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import { TooltipProvider } from "../ui/tooltip";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import {
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
@@ -118,6 +119,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     onInstanceModelChange,
   } = props;
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSubProvider, setSelectedSubProvider] = useState("__all__");
   const [showTopScrollFade, setShowTopScrollFade] = useState(false);
   const [showBottomScrollFade, setShowBottomScrollFade] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -171,6 +173,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const handleSelectInstance = useCallback(
     (instanceId: ProviderInstanceId | "favorites") => {
       setSelectedInstanceId(instanceId);
+      setSelectedSubProvider("__all__");
       window.requestAnimationFrame(() => {
         focusSearchInput();
       });
@@ -273,6 +276,32 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   const isLocked = props.lockedProvider !== null;
   const isSearching = searchQuery.trim().length > 0;
+  const subProviderOptions = useMemo(() => {
+    let candidates = flatModels;
+    if (!isSearching) {
+      if (selectedInstanceId === "favorites") {
+        candidates = candidates.filter((model) =>
+          favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
+        );
+      } else {
+        candidates = candidates.filter((model) => model.instanceId === selectedInstanceId);
+      }
+    }
+    return [
+      ...new Set(
+        candidates
+          .map((model) => model.subProvider)
+          .filter((provider): provider is string => typeof provider === "string"),
+      ),
+    ].toSorted((left, right) => left.localeCompare(right));
+  }, [favoritesSet, flatModels, isSearching, selectedInstanceId]);
+
+  useEffect(() => {
+    if (selectedSubProvider !== "__all__" && !subProviderOptions.includes(selectedSubProvider)) {
+      setSelectedSubProvider("__all__");
+    }
+  }, [selectedSubProvider, subProviderOptions]);
+
   const lockedDisabledInstanceIds = useMemo(() => {
     if (!isLocked) {
       return undefined;
@@ -311,6 +340,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const filteredModels = useMemo(() => {
     let result = flatModels;
 
+    if (selectedSubProvider !== "__all__") {
+      result = result.filter((model) => model.subProvider === selectedSubProvider);
+    }
+
     // Apply tokenized fuzzy search across the combined provider/model search fields.
     if (searchQuery.trim()) {
       const rankedMatches = result
@@ -318,6 +351,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           model,
           score: scoreModelPickerSearch(
             {
+              slug: model.slug,
               name: model.name,
               ...(model.shortName ? { shortName: model.shortName } : {}),
               ...(model.subProvider ? { subProvider: model.subProvider } : {}),
@@ -329,6 +363,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           ),
           isFavorite: favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
           tieBreaker: buildModelPickerSearchText({
+            slug: model.slug,
             name: model.name,
             ...(model.shortName ? { shortName: model.shortName } : {}),
             ...(model.subProvider ? { subProvider: model.subProvider } : {}),
@@ -411,6 +446,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     props.lockedProvider,
     searchQuery,
     selectedInstanceId,
+    selectedSubProvider,
   ]);
 
   const legacySection = useMemo(() => {
@@ -743,6 +779,30 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   size="sm"
                   unstyled
                 />
+                {subProviderOptions.length > 1 ? (
+                  <div className="mt-2">
+                    <Select
+                      value={selectedSubProvider}
+                      onValueChange={(value) => value && setSelectedSubProvider(value)}
+                    >
+                      <SelectTrigger size="compact" className="w-full text-xs">
+                        <SelectValue placeholder="All upstream providers" />
+                      </SelectTrigger>
+                      <SelectContent
+                        alignItemWithTrigger={false}
+                        matchTriggerWidth
+                        className="max-h-64"
+                      >
+                        <SelectItem value="__all__">All upstream providers</SelectItem>
+                        {subProviderOptions.map((provider) => (
+                          <SelectItem key={provider} value={provider}>
+                            {provider}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
               </div>
             </div>
 

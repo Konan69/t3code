@@ -10,7 +10,7 @@ import {
   StarIcon,
   XIcon,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -21,8 +21,10 @@ import { normalizeCustomModelSlug } from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+import { scoreModelPickerSearch } from "../chat/modelPickerSearch";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
@@ -99,6 +101,8 @@ export function ProviderModelsSection({
   onModelOrderChange,
 }: ProviderModelsSectionProps) {
   const [input, setInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSubProvider, setSelectedSubProvider] = useState("__all__");
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const hiddenModelSet = useMemo(() => new Set(hiddenModels), [hiddenModels]);
@@ -110,6 +114,46 @@ export function ProviderModelsSection({
       modelOrder,
     });
   }, [favoriteModelSet, modelOrder, models]);
+  const subProviderOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          models
+            .map((model) => model.subProvider)
+            .filter((provider): provider is string => typeof provider === "string"),
+        ),
+      ].toSorted((left, right) => left.localeCompare(right)),
+    [models],
+  );
+  const visibleModels = useMemo(
+    () =>
+      orderedModels.filter((model) => {
+        if (selectedSubProvider !== "__all__" && model.subProvider !== selectedSubProvider) {
+          return false;
+        }
+        return (
+          scoreModelPickerSearch(
+            {
+              slug: model.slug,
+              name: model.name,
+              ...(model.shortName ? { shortName: model.shortName } : {}),
+              ...(model.subProvider ? { subProvider: model.subProvider } : {}),
+              driverKind: driverKind ?? "",
+              providerDisplayName: driverKind ?? "",
+              isFavorite: favoriteModelSet.has(model.slug),
+            },
+            searchQuery,
+          ) !== null
+        );
+      }),
+    [driverKind, favoriteModelSet, orderedModels, searchQuery, selectedSubProvider],
+  );
+
+  useEffect(() => {
+    if (selectedSubProvider !== "__all__" && !subProviderOptions.includes(selectedSubProvider)) {
+      setSelectedSubProvider("__all__");
+    }
+  }, [selectedSubProvider, subProviderOptions]);
 
   const handleAdd = () => {
     const normalized = normalizeCustomModelSlug(input);
@@ -189,13 +233,48 @@ export function ProviderModelsSection({
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       <div className="text-xs font-medium text-foreground">Models</div>
       <div className="mt-1 text-xs text-muted-foreground">
-        {models.length} model{models.length === 1 ? "" : "s"} available.
+        {visibleModels.length === models.length
+          ? `${String(models.length)} model${models.length === 1 ? "" : "s"} available.`
+          : `${String(visibleModels.length)} of ${String(models.length)} models shown.`}
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)]">
+        <Input
+          id={`provider-instance-${instanceId}-model-search`}
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="Search model, slug, or provider (e.g. open 5.4)"
+          spellCheck={false}
+        />
+        {subProviderOptions.length > 1 ? (
+          <Select
+            value={selectedSubProvider}
+            onValueChange={(value) => value && setSelectedSubProvider(value)}
+          >
+            <SelectTrigger size="compact" className="w-full">
+              <SelectValue placeholder="All upstream providers" />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} matchTriggerWidth className="max-h-64">
+              <SelectItem value="__all__">All upstream providers</SelectItem>
+              {subProviderOptions.map((provider) => (
+                <SelectItem key={provider} value={provider}>
+                  {provider}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
       </div>
       <div
         ref={listRef}
         className="mt-2 max-h-40 overflow-y-auto pb-1 lg:min-h-0 lg:max-h-none lg:flex-1"
       >
-        {orderedModels.map((model, index) => {
+        {visibleModels.length === 0 ? (
+          <div className="py-6 text-center text-xs text-muted-foreground">
+            No models match this search and provider filter.
+          </div>
+        ) : null}
+        {visibleModels.map((model) => {
+          const index = orderedModels.findIndex((candidate) => candidate.slug === model.slug);
           const caps = model.capabilities;
           const capLabels: string[] = [];
           const isHidden = !model.isCustom && hiddenModelSet.has(model.slug);
@@ -236,6 +315,11 @@ export function ProviderModelsSection({
               )}
             >
               <div className="flex min-w-0 items-center gap-1">
+                {model.subProvider ? (
+                  <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {model.subProvider}
+                  </span>
+                ) : null}
                 <span
                   className={cn(
                     "min-w-0 truncate text-xs",
@@ -260,6 +344,11 @@ export function ProviderModelsSection({
                     </TooltipTrigger>
                     <TooltipPopup side="top" className="max-w-56">
                       <div className="space-y-1">
+                        {model.subProvider ? (
+                          <div className="text-[10px] text-muted-foreground">
+                            Provider: {model.subProvider}
+                          </div>
+                        ) : null}
                         <code className="block text-[11px] text-foreground">{model.slug}</code>
                         {capLabels.length > 0 ? (
                           <div className="flex flex-wrap gap-x-2 gap-y-0.5">
