@@ -1,6 +1,11 @@
 import * as NodeURL from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  ProviderApprovalDecision,
+  RuntimeMode,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   createOpencodeClient,
   type Agent,
@@ -31,6 +36,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
+import {
+  HostProcessLauncherLive,
+  ProcessLauncher,
+  type ProcessLaunchInput,
+} from "../process/ProcessLauncher.ts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -144,6 +154,7 @@ export interface OpenCodeRuntimeShape {
    * (see {@link Scope.make}) and close it when done.
    */
   readonly startOpenCodeServerProcess: (input: {
+    readonly threadId?: ThreadId;
     readonly binaryPath: string;
     readonly environment?: NodeJS.ProcessEnv;
     readonly port?: number;
@@ -156,6 +167,7 @@ export interface OpenCodeRuntimeShape {
    * freshly spawned local server whose lifetime is bound to the caller's scope.
    */
   readonly connectToOpenCodeServer: (input: {
+    readonly threadId?: ThreadId;
     readonly binaryPath: string;
     readonly serverUrl?: string | null;
     readonly environment?: NodeJS.ProcessEnv;
@@ -464,8 +476,31 @@ function ensureRuntimeError(
     : new OpenCodeRuntimeError({ operation, detail, cause });
 }
 
+export function makeOpenCodeServerProcessLaunchInput(input: {
+  readonly threadId?: ThreadId;
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly hostPlatform: NodeJS.Platform;
+  readonly shell: boolean | string;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+}): ProcessLaunchInput {
+  return {
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+    command: input.command,
+    args: input.args,
+    detached: input.hostPlatform !== "win32",
+    shell: input.shell,
+    env: {
+      ...input.environment,
+      OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
+    },
+    extendEnv: input.environment === undefined,
+  };
+}
+
 const makeOpenCodeRuntime = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const processLauncher = yield* ProcessLauncher;
   const netService = yield* NetService.NetService;
   const hostPlatform = yield* HostProcessPlatform;
   const resolveCommand = (command: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
@@ -538,23 +573,19 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
       const spawnCommand = yield* resolveCommand(input.binaryPath, args, input.environment);
 
-      const child = yield* spawner
-        .spawn(
-          ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-            detached: hostPlatform !== "win32",
+      // Respect an OPENCODE_CONFIG_CONTENT provided by the caller or the
+      // inherited process environment, only falling back to the empty config
+      // when neither is set. The value stays explicit because `extendEnv` is
+      // false whenever `input.environment` is provided.
+      const child = yield* processLauncher
+        .launch(
+          makeOpenCodeServerProcessLaunchInput({
+            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            command: spawnCommand.command,
+            args: spawnCommand.args,
+            hostPlatform,
             shell: spawnCommand.shell,
-            env: {
-              ...input.environment,
-              // Respect an OPENCODE_CONFIG_CONTENT provided by the caller or
-              // the inherited process environment, only falling back to the
-              // empty config when neither is set. Setting it unconditionally
-              // previously clobbered the user's opencode config, hiding their
-              // providers/models. The value is set explicitly (rather than
-              // relying on inheritance) because `extendEnv` is false whenever
-              // `input.environment` is provided.
-              OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
-            },
-            extendEnv: input.environment === undefined,
+            environment: input.environment,
           }),
         )
         .pipe(
@@ -691,6 +722,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     }
 
     return startOpenCodeServerProcess({
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
       binaryPath: input.binaryPath,
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
@@ -870,6 +902,11 @@ export class OpenCodeRuntime extends Context.Service<OpenCodeRuntime, OpenCodeRu
   "t3/provider/opencodeRuntime",
 ) {}
 
-export const OpenCodeRuntimeLive = Layer.effect(OpenCodeRuntime, makeOpenCodeRuntime).pipe(
-  Layer.provide(NetService.layer),
+export const OpenCodeRuntimeProcessLauncher = Layer.effect(
+  OpenCodeRuntime,
+  makeOpenCodeRuntime,
+).pipe(Layer.provide(NetService.layer));
+
+export const OpenCodeRuntimeLive = OpenCodeRuntimeProcessLauncher.pipe(
+  Layer.provide(HostProcessLauncherLive),
 );
