@@ -61,6 +61,12 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import type { PiAdapterShape } from "../Services/PiAdapter.ts";
+import {
+  formatProviderChildExitReason,
+  logUnexpectedProviderChildExit,
+  makeProviderStderrBuffer,
+  observeProviderProcessExit,
+} from "../providerChildDiagnostics.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
@@ -849,6 +855,7 @@ export function makePiAdapter(
     const startReaderFiber = (context: PiSessionContext, sessionScope: Scope.Scope) =>
       Effect.gen(function* () {
         let buffer = "";
+        const stderr = makeProviderStderrBuffer();
         yield* context.child.stdout.pipe(
           Stream.decodeText(),
           Stream.runForEach((chunk) =>
@@ -874,24 +881,32 @@ export function makePiAdapter(
         );
         yield* context.child.stderr.pipe(
           Stream.decodeText(),
-          Stream.runForEach(() => Effect.void),
+          Stream.runForEach((chunk) => Effect.sync(() => stderr.append(chunk))),
           Effect.ignore,
           Effect.forkIn(sessionScope),
         );
         // Exit watcher.
-        yield* context.child.exitCode.pipe(
-          Effect.flatMap(() =>
+        yield* observeProviderProcessExit(context.child.exitCode).pipe(
+          Effect.flatMap(({ exitCode, signal }) =>
             Effect.gen(function* () {
               if (yield* Ref.getAndSet(context.stopped, true)) {
                 return;
               }
               sessions.delete(context.threadId);
+              const exitDetail = {
+                provider: "pi",
+                threadId: context.threadId,
+                exitCode,
+                signal,
+                stderr: stderr.read(),
+              } as const;
+              yield* logUnexpectedProviderChildExit(exitDetail);
               const base = yield* buildEventBase({ threadId: context.threadId });
               yield* emit({
                 ...base,
                 type: "session.exited",
                 payload: makeItemEventPayload({
-                  reason: "pi process exited unexpectedly.",
+                  reason: formatProviderChildExitReason(exitDetail),
                   exitKind: "error",
                   recoverable: true,
                 }),

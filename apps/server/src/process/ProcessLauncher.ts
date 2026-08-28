@@ -19,6 +19,16 @@ export interface ProcessLaunchInput {
   readonly forceKillAfter?: Duration.Input | undefined;
 }
 
+export function processLaunchLogFields(input: ProcessLaunchInput) {
+  return {
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+    command: input.command,
+    args: input.args,
+    cwd: input.cwd,
+    envKeys: Object.keys(input.env ?? {}).sort(),
+  };
+}
+
 export interface ProcessLauncherShape {
   readonly launch: (
     input: ProcessLaunchInput,
@@ -38,17 +48,21 @@ export const makeHostProcessLauncher = (
 ): ProcessLauncherShape =>
   ProcessLauncher.of({
     launch: (input) =>
-      spawner.spawn(
-        ChildProcess.make(input.command, input.args, {
-          ...(Object.hasOwn(input, "cwd") ? { cwd: input.cwd } : {}),
-          ...(Object.hasOwn(input, "env") ? { env: input.env } : {}),
-          ...(Object.hasOwn(input, "extendEnv") ? { extendEnv: input.extendEnv } : {}),
-          ...(Object.hasOwn(input, "shell") ? { shell: input.shell } : {}),
-          ...(Object.hasOwn(input, "detached") ? { detached: input.detached } : {}),
-          ...(Object.hasOwn(input, "forceKillAfter")
-            ? { forceKillAfter: input.forceKillAfter }
-            : {}),
-        }),
+      Effect.logDebug("Launching provider child process.", processLaunchLogFields(input)).pipe(
+        Effect.andThen(
+          spawner.spawn(
+            ChildProcess.make(input.command, input.args, {
+              ...(Object.hasOwn(input, "cwd") ? { cwd: input.cwd } : {}),
+              ...(Object.hasOwn(input, "env") ? { env: input.env } : {}),
+              ...(Object.hasOwn(input, "extendEnv") ? { extendEnv: input.extendEnv } : {}),
+              ...(Object.hasOwn(input, "shell") ? { shell: input.shell } : {}),
+              ...(Object.hasOwn(input, "detached") ? { detached: input.detached } : {}),
+              ...(Object.hasOwn(input, "forceKillAfter")
+                ? { forceKillAfter: input.forceKillAfter }
+                : {}),
+            }),
+          ),
+        ),
       ),
   });
 

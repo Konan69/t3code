@@ -35,6 +35,10 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
+import {
+  makeProviderStderrBuffer,
+  observeProviderProcessExit,
+} from "./providerChildDiagnostics.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
 import {
   HostProcessLauncherLive,
@@ -64,12 +68,16 @@ const DEFAULT_HOSTNAME = "127.0.0.1";
 const OPENCODE_SKILL_DISCOVERY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 export interface OpenCodeServerProcess {
   readonly url: string;
-  readonly exitCode: Effect.Effect<number, never>;
+  readonly exitCode: Effect.Effect<number | null, never>;
+  readonly exitSignal?: Effect.Effect<string | null, never>;
+  readonly stderrTail?: Effect.Effect<string, never>;
 }
 
 export interface OpenCodeServerConnection {
   readonly url: string;
-  readonly exitCode: Effect.Effect<number, never> | null;
+  readonly exitCode: Effect.Effect<number | null, never> | null;
+  readonly exitSignal?: Effect.Effect<string | null, never> | null;
+  readonly stderrTail?: Effect.Effect<string, never> | null;
   readonly external: boolean;
 }
 
@@ -620,7 +628,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       yield* Scope.addFinalizer(runtimeScope, terminateChild);
 
       const stdoutRef = yield* Ref.make("");
-      const stderrRef = yield* Ref.make("");
+      const stderr = makeProviderStderrBuffer();
       const readyDeferred = yield* Deferred.make<string, OpenCodeRuntimeError>();
 
       const setReadyFromStdoutChunk = (chunk: string) =>
@@ -641,29 +649,29 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       );
       const stderrFiber = yield* child.stderr.pipe(
         Stream.decodeText(),
-        Stream.runForEach((chunk) => Ref.update(stderrRef, (stderr) => `${stderr}${chunk}`)),
+        Stream.runForEach((chunk) => Effect.sync(() => stderr.append(chunk))),
         Effect.ignore,
         Effect.forkIn(runtimeScope),
       );
 
-      const exitFiber = yield* child.exitCode.pipe(
-        Effect.flatMap((code) =>
+      const processExit = observeProviderProcessExit(child.exitCode);
+      const exitFiber = yield* processExit.pipe(
+        Effect.flatMap(({ exitCode, signal }) =>
           Effect.gen(function* () {
             const stdout = yield* Ref.get(stdoutRef);
-            const stderr = yield* Ref.get(stderrRef);
-            const exitCode = Number(code);
+            const stderrOutput = stderr.read();
             yield* Deferred.fail(
               readyDeferred,
               new OpenCodeRuntimeError({
                 operation: "startOpenCodeServerProcess",
                 detail: [
-                  `OpenCode server exited before startup completed (code: ${String(exitCode)}).`,
+                  `OpenCode server exited before startup completed (code: ${String(exitCode)}, signal: ${signal ?? "unknown"}).`,
                   stdout.trim() ? `stdout:\n${stdout.trim()}` : null,
-                  stderr.trim() ? `stderr:\n${stderr.trim()}` : null,
+                  stderrOutput.trim() ? `stderr:\n${stderrOutput.trim()}` : null,
                 ]
                   .filter(Boolean)
                   .join("\n\n"),
-                cause: { exitCode, stdout, stderr },
+                cause: { exitCode, signal, stdout, stderr: stderrOutput },
               }),
             ).pipe(Effect.ignore);
           }),
@@ -680,9 +688,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       // way). The exit fiber is only interrupted on failure; on success it keeps
       // the caller's `exitCode` effect observable until the scope closes.
       yield* Fiber.interrupt(stdoutFiber).pipe(Effect.ignore);
-      yield* Fiber.interrupt(stderrFiber).pipe(Effect.ignore);
 
       if (Exit.isFailure(readyExit)) {
+        yield* Fiber.interrupt(stderrFiber).pipe(Effect.ignore);
         yield* Fiber.interrupt(exitFiber).pipe(Effect.ignore);
         const squashed = Cause.squash(readyExit.cause);
         return yield* ensureRuntimeError(
@@ -694,6 +702,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
       const readyOption = readyExit.value;
       if (Option.isNone(readyOption)) {
+        yield* Fiber.interrupt(stderrFiber).pipe(Effect.ignore);
         yield* Fiber.interrupt(exitFiber).pipe(Effect.ignore);
         return yield* new OpenCodeRuntimeError({
           operation: "startOpenCodeServerProcess",
@@ -703,10 +712,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
       return {
         url: readyOption.value,
-        exitCode: child.exitCode.pipe(
-          Effect.map(Number),
-          Effect.orElseSucceed(() => 0),
-        ),
+        exitCode: processExit.pipe(Effect.map((exit) => exit.exitCode)),
+        exitSignal: processExit.pipe(Effect.map((exit) => exit.signal)),
+        stderrTail: Effect.sync(() => stderr.read()),
       } satisfies OpenCodeServerProcess;
     });
 
@@ -717,6 +725,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       return Effect.succeed({
         url: serverUrl,
         exitCode: null,
+        exitSignal: null,
+        stderrTail: null,
         external: true,
       });
     }
@@ -732,6 +742,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       Effect.map((server) => ({
         url: server.url,
         exitCode: server.exitCode,
+        ...(server.exitSignal !== undefined ? { exitSignal: server.exitSignal } : {}),
+        ...(server.stderrTail !== undefined ? { stderrTail: server.stderrTail } : {}),
         external: false,
       })),
     );

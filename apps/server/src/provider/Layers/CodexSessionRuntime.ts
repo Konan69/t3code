@@ -40,6 +40,12 @@ import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 import { ProcessLauncher, type ProcessLaunchInput } from "../../process/ProcessLauncher.ts";
+import {
+  formatProviderChildExitReason,
+  logUnexpectedProviderChildExit,
+  makeProviderStderrBuffer,
+  observeProviderProcessExit,
+} from "../providerChildDiagnostics.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -2191,32 +2197,37 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
+    const stderr = makeProviderStderrBuffer();
     const stderrRemainderRef = yield* Ref.make("");
     yield* child.stderr.pipe(
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
-        Ref.modify(stderrRemainderRef, (current) => {
-          const combined = current + chunk;
-          const lines = combined.split("\n");
-          const remainder = lines.pop() ?? "";
-          return [lines.map((line) => line.replace(/\r$/, "")), remainder] as const;
-        }).pipe(
-          Effect.flatMap((lines) =>
-            Effect.forEach(
-              lines,
-              (line) => {
-                const classified = classifyCodexStderrLine(line);
-                if (!classified) {
-                  return Effect.void;
-                }
-                return emitEvent({
-                  kind: "notification",
-                  threadId: options.threadId,
-                  method: "process/stderr",
-                  message: classified.message,
-                });
-              },
-              { discard: true },
+        Effect.sync(() => stderr.append(chunk)).pipe(
+          Effect.andThen(
+            Ref.modify(stderrRemainderRef, (current) => {
+              const combined = current + chunk;
+              const lines = combined.split("\n");
+              const remainder = lines.pop() ?? "";
+              return [lines.map((line) => line.replace(/\r$/, "")), remainder] as const;
+            }).pipe(
+              Effect.flatMap((lines) =>
+                Effect.forEach(
+                  lines,
+                  (line) => {
+                    const classified = classifyCodexStderrLine(line);
+                    if (!classified) {
+                      return Effect.void;
+                    }
+                    return emitEvent({
+                      kind: "notification",
+                      threadId: options.threadId,
+                      method: "process/stderr",
+                      message: classified.message,
+                    });
+                  },
+                  { discard: true },
+                ),
+              ),
             ),
           ),
         ),
@@ -2224,25 +2235,30 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
-    yield* child.exitCode.pipe(
-      Effect.flatMap((exitCode) =>
+    yield* observeProviderProcessExit(child.exitCode).pipe(
+      Effect.flatMap(({ exitCode, signal }) =>
         Ref.get(closedRef).pipe(
           Effect.flatMap((closed) => {
             if (closed) {
               return Effect.void;
             }
+            const exitDetail = {
+              provider: "Codex App Server",
+              threadId: options.threadId,
+              exitCode,
+              signal,
+              stderr: stderr.read(),
+            } as const;
             const nextStatus = exitCode === 0 ? "closed" : "error";
-            return updateSession(sessionRef, {
-              status: nextStatus,
-              activeTurnId: undefined,
-            }).pipe(
+            return logUnexpectedProviderChildExit(exitDetail).pipe(
               Effect.andThen(
-                emitSessionEvent(
-                  "session/exited",
-                  exitCode === 0
-                    ? "Codex App Server exited."
-                    : `Codex App Server exited with code ${exitCode}.`,
-                ),
+                updateSession(sessionRef, {
+                  status: nextStatus,
+                  activeTurnId: undefined,
+                }),
+              ),
+              Effect.andThen(
+                emitSessionEvent("session/exited", formatProviderChildExitReason(exitDetail)),
               ),
             );
           }),
