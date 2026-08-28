@@ -27,6 +27,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { it as effectIt } from "@effect/vitest";
@@ -63,6 +64,7 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import { ThreadMachineService } from "../../machine/ThreadMachineService.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -155,6 +157,8 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    readonly onEnsureMachine?: () => void;
+    readonly onStartSession?: () => void;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -170,7 +174,9 @@ describe("ProviderCommandReactor", () => {
       model: "gpt-5-codex",
     };
     const startSessionEffect = input?.startSessionEffect;
+    const onStartSession = input?.onStartSession;
     const startSession = vi.fn((_: unknown, input: unknown) => {
+      onStartSession?.();
       const sessionIndex = nextSessionIndex++;
       const resumeCursor =
         typeof input === "object" && input !== null && "resumeCursor" in input
@@ -427,6 +433,18 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.succeed(
+          ThreadMachineService,
+          ThreadMachineService.of({
+            ensureForThread: () => {
+              input?.onEnsureMachine?.();
+              return Effect.succeed(Option.none());
+            },
+            runSetupForThread: () => Effect.succeed({ status: "no-script" }),
+          }),
+        ),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -527,6 +545,37 @@ describe("ProviderCommandReactor", () => {
       },
     };
   }
+
+  it("ensures the thread machine before provider session start", async () => {
+    const order: string[] = [];
+    const harness = await createHarness({
+      onEnsureMachine: () => order.push("ensure-machine"),
+      onStartSession: () => order.push("start-session"),
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-machine-order"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-machine-order"),
+          role: "user",
+          text: "hello machine",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(order.at(-1)).toBe("start-session");
+    expect(order.slice(0, -1).every((entry) => entry === "ensure-machine")).toBe(true);
+    expect(order.length).toBeGreaterThan(1);
+  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();

@@ -64,6 +64,7 @@ import {
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
+  type ThreadMachineBinding,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -112,6 +113,7 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
+import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -510,6 +512,7 @@ const makeWsRpcLayer = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const threadMachines = yield* ThreadMachineService.ThreadMachineService;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -894,6 +897,7 @@ const makeWsRpcLayer = (
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+          let targetMachineBinding: ThreadMachineBinding | undefined;
 
           const cleanupCreatedThread = () =>
             createdThread
@@ -993,6 +997,39 @@ const makeWsRpcLayer = (
               }
               const worktreePath = targetWorktreePath;
               const requestedAt = yield* nowIso;
+              const machineBinding = targetMachineBinding;
+              if (machineBinding && targetProjectId) {
+                yield* threadMachines
+                  .runSetupForThread({
+                    threadId: command.threadId,
+                    projectId: targetProjectId,
+                    binding: machineBinding,
+                  })
+                  .pipe(
+                    Effect.matchEffect({
+                      onFailure: (error) =>
+                        appendSetupScriptActivity({
+                          threadId: command.threadId,
+                          kind: "setup-script.failed",
+                          summary: "Setup script failed",
+                          createdAt: requestedAt,
+                          payload: { detail: error.detail, worktreePath },
+                          tone: "error",
+                        }).pipe(Effect.asVoid),
+                      onSuccess: (setupResult) =>
+                        setupResult.status === "no-script"
+                          ? Effect.void
+                          : recordSetupScriptStarted({
+                              requestedAt,
+                              worktreePath,
+                              scriptId: setupResult.scriptId,
+                              scriptName: setupResult.scriptName,
+                              terminalId: `machine:${machineBinding.machineName}:setup`,
+                            }),
+                    }),
+                  );
+                return;
+              }
               yield* projectSetupScriptRunner
                 .runForThread({
                   threadId: command.threadId,
@@ -1042,7 +1079,20 @@ const makeWsRpcLayer = (
               createdThread = true;
             }
 
-            if (bootstrap?.prepareWorktree) {
+            const machineBinding = yield* threadMachines.ensureForThread(command.threadId);
+            targetMachineBinding = Option.getOrUndefined(machineBinding);
+            if (targetMachineBinding) {
+              targetWorktreePath = targetMachineBinding.hostWorkspaceRoot;
+              if (!targetProjectId) {
+                const thread = yield* projectionSnapshotQuery.getThreadShellById(command.threadId);
+                targetProjectId = Option.getOrUndefined(thread)?.projectId;
+              }
+            }
+
+            if (
+              bootstrap?.prepareWorktree &&
+              ThreadMachineService.shouldPrepareGitWorktree(targetMachineBinding)
+            ) {
               let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
               // "Start from origin" is a stored default; repos without an
               // origin remote fall back to the local base branch instead of
@@ -2106,7 +2156,10 @@ const makeWsRpcLayer = (
               }
               return yield* issueAssetUrl({
                 resource: input.resource,
-                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+                workspaceRoot:
+                  thread.value.machine?.hostWorkspaceRoot ??
+                  thread.value.worktreePath ??
+                  project.value.workspaceRoot,
               });
             }),
             { "rpc.aggregate": "workspace" },
