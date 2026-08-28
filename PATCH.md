@@ -83,6 +83,7 @@ The `.1210` rebase applied without conflicts.
 | Packaging tooling       | `1075bb49`                         | Local Windows ASAR overlay installer with dedicated `server.asar` support                                   |
 | pi provider             | `f5f0c955`                         | Native `pi --mode rpc` server driver                                                                        |
 | pi web surfaces         | `da4659dd`                         | Provider settings row, picker option, model placeholder, and `PiAgentIcon`                                  |
+| pi model catalog        | `2f07fc33`                         | Live RPC discovery, provenance, exact provider exclusions, order-independent search, and provider filters   |
 
 ### Complete reapply manifest
 
@@ -102,6 +103,7 @@ c4f00dc3 fix(server): subscribe before provider settings hydration
 1075bb49 chore(desktop): restore local Windows bundle installer
 f5f0c955 feat(provider): add native pi driver over pi --mode rpc
 da4659dd feat(web): surface pi in provider settings, picker, and icons
+2f07fc33 feat(provider): discover pi models and filter by upstream provider
 ```
 
 `20d1459a` (dedicated server archive support) is consolidated into
@@ -121,6 +123,23 @@ and turn-abort events.
 - provider/model picker
 - provider icon maps (`PiAgentIcon`)
 - custom-model placeholder UI
+
+`2f07fc33` replaces the original three-model stub with live
+`get_available_models` + `get_state` discovery. It preserves extension-backed
+providers (including the user's Claude subscription via `claude-bridge`), marks
+the active default model, and stamps `subProvider` provenance. The configured
+exact exclusions are:
+
+```text
+google, openai, anthropic, opencode-go
+```
+
+Exact matching preserves `openai-codex`, `claude-bridge`, `opencode`, and
+`openrouter`. The current live catalog is 446 visible models across those four
+providers. Both the model picker and Settings model list support provider
+dropdowns plus AND-across-token, order-independent searches over model name,
+provider, and full slug (`open 5.4`, `5.4 open`, etc.). OpenCode uses the same
+provenance/search/filter UI.
 
 V1 limitations: extension UI dialogs auto-cancel; historical `readThread` replay
 and `rollbackThread` are not implemented yet.
@@ -156,7 +175,7 @@ Older `.1151`/intermediate backups remain in the resources directory.
   `0.0.36-nightly.20260828.1210`.
 - Typecheck: 0 errors in contracts, client-runtime, server, web, desktop.
 - Tests: server provider/orchestration 72/72; client reducer 32/32; contracts
-  settings/provider 69/69.
+  settings/provider 69/69; pi/OpenCode/provider registry 56/56; model search 9/9.
 - `vp run build:desktop`: passed.
 - Overlay installer: passed against the official `.1210` shell.
 - Installed raw-marker checks:
