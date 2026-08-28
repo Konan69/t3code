@@ -580,6 +580,18 @@ export const PiSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    excludedProviders: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("google, openai, anthropic, opencode-go")),
+      Schema.annotateKey({
+        title: "Excluded model providers",
+        description:
+          "Exact pi provider IDs to hide. Subscription providers such as openai-codex and claude-bridge remain available.",
+        providerSettingsForm: {
+          placeholder: "google, openai, anthropic, opencode-go",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
     launchArgs: Schema.String.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
@@ -597,7 +609,7 @@ export const PiSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "defaultModel", "launchArgs"],
+    order: ["binaryPath", "defaultModel", "excludedProviders", "launchArgs"],
   },
 );
 export type PiSettings = typeof PiSettings.Type;
