@@ -22,6 +22,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProcessLauncher } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeCursorTextGeneration } from "../../textGeneration/CursorTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
@@ -71,6 +72,7 @@ export type CursorDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
+  | ProcessLauncher
   | ProviderEventLoggers
   | ServerConfig
   | ServerSettingsService;
@@ -87,6 +89,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const processLauncher = yield* ProcessLauncher;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
@@ -112,6 +115,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
 
       const adapter = yield* makeCursorAdapter(effectiveConfig, {
         environment: processEnv,
+        processLauncher,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
       });

@@ -9,6 +9,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProcessLauncher } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeGrokTextGeneration } from "../../textGeneration/GrokTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
@@ -54,6 +55,7 @@ export type GrokDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
+  | ProcessLauncher
   | ProviderEventLoggers
   | ServerConfig
   | ServerSettingsService;
@@ -70,6 +72,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const processLauncher = yield* ProcessLauncher;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const { cwd } = yield* ServerConfig;
@@ -94,6 +97,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
 
       const adapter = yield* makeGrokAdapter(effectiveConfig, {
         environment: processEnv,
+        processLauncher,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
       });

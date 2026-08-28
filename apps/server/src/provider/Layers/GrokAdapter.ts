@@ -41,6 +41,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { ProcessLauncher, makeHostProcessLauncher } from "../../process/ProcessLauncher.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -102,6 +103,7 @@ function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
 
 export interface GrokAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
+  readonly processLauncher?: ProcessLauncher["Service"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly instanceId?: ProviderInstanceId;
@@ -342,6 +344,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const processLauncher =
+      options?.processLauncher ?? makeHostProcessLauncher(childProcessSpawner);
     const serverConfig = yield* Effect.service(ServerConfig);
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
@@ -990,6 +994,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             grokSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
+            processLauncher,
+            threadId: input.threadId,
             cwd,
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),

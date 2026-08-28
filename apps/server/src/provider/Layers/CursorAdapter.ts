@@ -43,6 +43,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { ProcessLauncher, makeHostProcessLauncher } from "../../process/ProcessLauncher.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -92,6 +93,7 @@ function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
 
 export interface CursorAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
+  readonly processLauncher?: ProcessLauncher["Service"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   /**
@@ -319,6 +321,8 @@ export function makeCursorAdapter(
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const processLauncher =
+      options?.processLauncher ?? makeHostProcessLauncher(childProcessSpawner);
     const serverConfig = yield* Effect.service(ServerConfig);
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
@@ -536,6 +540,8 @@ export function makeCursorAdapter(
             cursorSettings: effectiveCursorSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
+            processLauncher,
+            threadId: input.threadId,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },

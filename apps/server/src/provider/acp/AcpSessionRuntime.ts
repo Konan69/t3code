@@ -1,3 +1,4 @@
+import type { ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -13,13 +14,18 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+
+import {
+  HostProcessLauncherLive,
+  ProcessLauncher,
+  type ProcessLaunchInput,
+} from "../../process/ProcessLauncher.ts";
 
 import {
   collectSessionConfigOptionValues,
@@ -66,6 +72,7 @@ export interface AcpSpawnInput {
 }
 
 export interface AcpSessionRuntimeOptions {
+  readonly threadId?: ThreadId;
   readonly spawn: AcpSpawnInput;
   readonly cwd: string;
   readonly resumeSessionId?: string;
@@ -83,6 +90,24 @@ export interface AcpSessionRuntimeOptions {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
     readonly logger?: (event: EffectAcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
+  };
+}
+
+export function makeAcpProcessLaunchInput(
+  options: Pick<AcpSessionRuntimeOptions, "threadId" | "spawn">,
+  spawnCommand: {
+    readonly command: string;
+    readonly args: ReadonlyArray<string>;
+    readonly shell: boolean | string;
+  },
+): ProcessLaunchInput {
+  return {
+    ...(options.threadId !== undefined ? { threadId: options.threadId } : {}),
+    command: spawnCommand.command,
+    args: spawnCommand.args,
+    ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
+    ...(options.spawn.env ? { env: options.spawn.env, extendEnv: true } : {}),
+    shell: spawnCommand.shell,
   };
 }
 
@@ -288,16 +313,16 @@ interface EnsureActiveAssistantSegmentResult {
   readonly startedEvent?: Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>;
 }
 
-export const make = (
+export const makeWithProcessLauncher = (
   options: AcpSessionRuntimeOptions,
 ): Effect.Effect<
   AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+  ProcessLauncher | Crypto.Crypto | Scope.Scope
 > =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const processLauncher = yield* ProcessLauncher;
     const runtimeScope = yield* Scope.Scope;
     const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
@@ -356,14 +381,8 @@ export const make = (
       options.spawn.args,
       options.spawn.env ? { env: options.spawn.env, extendEnv: true } : {},
     );
-    const child = yield* spawner
-      .spawn(
-        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-          ...(options.spawn.env ? { env: options.spawn.env, extendEnv: true } : {}),
-          shell: spawnCommand.shell,
-        }),
-      )
+    const child = yield* processLauncher
+      .launch(makeAcpProcessLaunchInput(options, spawnCommand))
       .pipe(
         Effect.provideService(Scope.Scope, runtimeScope),
         Effect.mapError(
@@ -837,13 +856,26 @@ export const make = (
     } satisfies AcpSessionRuntime["Service"];
   });
 
+export const layerWithProcessLauncher = (
+  options: AcpSessionRuntimeOptions,
+): Layer.Layer<AcpSessionRuntime, EffectAcpErrors.AcpError, ProcessLauncher | Crypto.Crypto> =>
+  Layer.effect(AcpSessionRuntime, makeWithProcessLauncher(options));
+
+export const make = (
+  options: AcpSessionRuntimeOptions,
+): Effect.Effect<
+  AcpSessionRuntime["Service"],
+  EffectAcpErrors.AcpError,
+  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+> => makeWithProcessLauncher(options).pipe(Effect.provide(HostProcessLauncherLive));
+
 export const layer = (
   options: AcpSessionRuntimeOptions,
 ): Layer.Layer<
   AcpSessionRuntime,
   EffectAcpErrors.AcpError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
-> => Layer.effect(AcpSessionRuntime, make(options));
+> => layerWithProcessLauncher(options).pipe(Layer.provide(HostProcessLauncherLive));
 
 function sessionConfigOptionsFromSetup(
   response:

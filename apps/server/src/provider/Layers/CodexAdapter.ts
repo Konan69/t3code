@@ -42,6 +42,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { ProcessLauncher, makeHostProcessLauncher } from "../../process/ProcessLauncher.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -77,12 +78,13 @@ const PROVIDER = ProviderDriverKind.make("codex");
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly processLauncher?: ProcessLauncher["Service"];
   readonly makeRuntime?: (
     options: CodexSessionRuntimeOptions,
   ) => Effect.Effect<
     CodexSessionRuntimeShape,
     CodexSessionRuntimeError,
-    ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+    ProcessLauncher | Scope.Scope
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
@@ -1649,6 +1651,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("codex");
   const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const processLauncher = options?.processLauncher ?? makeHostProcessLauncher(childProcessSpawner);
   const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* Effect.service(ServerConfig);
   const nativeEventLogger =
@@ -1723,7 +1726,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const createRuntime = options?.makeRuntime ?? makeCodexSessionRuntime;
         const runtime = yield* createRuntime(runtimeInput).pipe(
           Effect.provideService(Scope.Scope, sessionScope),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+          Effect.provideService(ProcessLauncher, processLauncher),
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError(
             (cause) =>
