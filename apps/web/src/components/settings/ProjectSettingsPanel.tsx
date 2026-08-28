@@ -16,6 +16,7 @@ import type {
   ContextMenuItem,
   ModelSelection,
   ProviderDriverKind,
+  ProjectMachineMode,
   SidebarProjectGroupingMode,
   T3ProjectFileScript,
   ThreadEnvMode,
@@ -371,6 +372,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         title: string;
         defaultModelSelection: ModelSelection | null;
         defaultThreadEnvMode: ThreadEnvMode | null;
+        machineMode: ProjectMachineMode;
         faviconPath: string | null;
       }>,
       failureTitle: string,
@@ -461,6 +463,14 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         { defaultThreadEnvMode: mode },
         "Failed to update new-thread workspace",
       ),
+    [updateAllMembers],
+  );
+
+  // ----- thread machines -----
+  const machineMode = representative.machineMode ?? "off";
+  const setMachineMode = useCallback(
+    (mode: ProjectMachineMode) =>
+      void updateAllMembers({ machineMode: mode }, "Failed to update thread machines"),
     [updateAllMembers],
   );
 
@@ -895,6 +905,28 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               )
             }
           />
+          {selectedServerConfig?.environment.capabilities.threadMachines === true ? (
+            <SettingsRow
+              title="Thread machines"
+              description="Run new threads in isolated Incus machines. Linux hosts only; off preserves normal local and worktree behavior."
+              control={
+                <Select
+                  value={machineMode}
+                  onValueChange={(value) => {
+                    if (value === "off" || value === "thread") setMachineMode(value);
+                  }}
+                >
+                  <SelectTrigger aria-label="Thread machines">
+                    <SelectValue>{machineMode === "thread" ? "On" : "Off"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    <SelectItem value="off">Off</SelectItem>
+                    <SelectItem value="thread">On for new threads</SelectItem>
+                  </SelectPopup>
+                </Select>
+              }
+            />
+          ) : null}
           <SettingsRow
             title="Workspace"
             description="Where new threads in this project start. Overrides t3.json and the global default; applies to every checkout in this group."
