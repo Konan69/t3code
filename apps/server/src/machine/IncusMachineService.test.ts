@@ -35,12 +35,64 @@ function makeHandle(input: {
 }
 
 const provideIncus = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
-  IncusMachineService.layer.pipe(
+  Layer.effect(MachineService, IncusMachineService.make(1000)).pipe(
     Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
     Layer.provide(NodeServices.layer),
   );
 
 describe("IncusMachineService", () => {
+  it("builds explicit root and non-root ZFS command specifications", () => {
+    expect(IncusMachineService.zfsCommand(["list", "tank/threads"], 0)).toEqual({
+      command: "zfs",
+      args: ["list", "tank/threads"],
+    });
+    expect(IncusMachineService.zfsCommand(["list", "tank/threads"], 1000)).toEqual({
+      command: "sudo",
+      args: ["-n", "zfs", "list", "tank/threads"],
+    });
+  });
+
+  it.effect("surfaces sudo failures without retrying plain zfs", () => {
+    const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+    const spawner = ChildProcessSpawner.make((input) => {
+      const command = input as unknown as { command: string; args: ReadonlyArray<string> };
+      commands.push({ command: command.command, args: command.args });
+      return Effect.succeed(makeHandle({ code: 1, stderr: "sudo: a password is required" }));
+    });
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.ensureWorkspace(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("dataset.inspect");
+      expect(error.detail).toContain("sudo -n zfs list");
+      expect(commands).toEqual([
+        {
+          command: "sudo",
+          args: ["-n", "zfs", "list", "-H", "-o", "name", "tank/threads/thread-1/ws"],
+        },
+      ]);
+    }).pipe(Effect.provide(provideIncus(spawner)));
+  });
+
+  it.effect("rejects a dataset mounted somewhere other than its workspace path", () => {
+    const spawner = ChildProcessSpawner.make((input) => {
+      const command = input as unknown as { args: ReadonlyArray<string> };
+      const zfsArgs = command.args.slice(2);
+      return Effect.succeed(
+        zfsArgs[0] === "get" ? makeHandle({ stdout: "/wrong/path\n" }) : makeHandle({}),
+      );
+    });
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.ensureWorkspace(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("dataset.mountpoint");
+      expect(error.detail).toContain("expected '/tank/threads/thread-1/ws'");
+    }).pipe(Effect.provide(provideIncus(spawner)));
+  });
+
   it.effect(
     "creates from golden idempotently, mounts the dataset, starts, and waits for the agent",
     () => {
@@ -62,12 +114,24 @@ describe("IncusMachineService", () => {
           stdin: command.options.stdin,
         });
         const args = command.args;
-        if (command.command === "zfs" && args[0] === "list") {
-          return Effect.succeed(makeHandle({ code: datasetExists ? 0 : 1 }));
+        const zfsArgs =
+          command.command === "sudo" && args[0] === "-n" && args[1] === "zfs"
+            ? args.slice(2)
+            : undefined;
+        if (zfsArgs?.[0] === "list") {
+          return Effect.succeed(
+            makeHandle({
+              code: datasetExists ? 0 : 1,
+              stderr: datasetExists ? "" : "cannot open dataset: dataset does not exist",
+            }),
+          );
         }
-        if (command.command === "zfs" && args[0] === "create") {
+        if (zfsArgs?.[0] === "create") {
           datasetExists = true;
           return Effect.succeed(makeHandle({}));
+        }
+        if (zfsArgs?.[0] === "get") {
+          return Effect.succeed(makeHandle({ stdout: "/tank/threads/thread-1/ws\n" }));
         }
         if (args.slice(0, 2).join(" ") === "image list") {
           return Effect.succeed(makeHandle({ stdout: '[{"type":"container"}]' }));
@@ -125,6 +189,30 @@ describe("IncusMachineService", () => {
           stdin: "ignore",
         });
         expect(commands.filter((entry) => entry.args[0] === "start")).toHaveLength(1);
+        expect(commands).toContainEqual({
+          command: "sudo",
+          args: [
+            "-n",
+            "zfs",
+            "create",
+            "-p",
+            "-o",
+            "mountpoint=/tank/threads/thread-1/ws",
+            "tank/threads/thread-1/ws",
+          ],
+          stdin: "ignore",
+        });
+        expect(commands).toContainEqual({
+          command: "sudo",
+          args: ["-n", "zfs", "get", "-H", "-o", "value", "mountpoint", "tank/threads/thread-1/ws"],
+          stdin: "ignore",
+        });
+        expect(commands).toContainEqual({
+          command: "sudo",
+          args: ["-n", "chown", "1000:1000", "/tank/threads/thread-1/ws"],
+          stdin: "ignore",
+        });
+        expect(commands.some((entry) => entry.command === "zfs")).toBe(false);
         expect(
           commands.filter((entry) => entry.args.slice(0, 3).join(" ") === "config device add"),
         ).toHaveLength(1);
@@ -165,11 +253,15 @@ describe("IncusMachineService", () => {
       };
       commands.push({ command: command.command, args: command.args, stdin: command.options.stdin });
       const args = command.args;
-      if (command.command === "zfs" && args[0] === "list") {
+      const zfsArgs =
+        command.command === "sudo" && args[0] === "-n" && args[1] === "zfs"
+          ? args.slice(2)
+          : undefined;
+      if (zfsArgs?.[0] === "list" || zfsArgs?.[0] === "destroy") {
         return Effect.succeed(makeHandle({}));
       }
-      if (command.command === "zfs" && args[0] === "destroy") {
-        return Effect.succeed(makeHandle({}));
+      if (zfsArgs?.[0] === "get") {
+        return Effect.succeed(makeHandle({ stdout: "/tank/threads/thread-1/ws\n" }));
       }
       if (args.slice(0, 2).join(" ") === "image list") {
         return Effect.succeed(makeHandle({ stdout: '[{"type":"virtual-machine"}]' }));
@@ -214,7 +306,8 @@ describe("IncusMachineService", () => {
       expect(commands.some((entry) => entry.args.includes("security.nesting=true"))).toBe(false);
       const deleteIndex = commands.findIndex((entry) => entry.args[0] === "delete");
       const datasetDestroyIndex = commands.findIndex(
-        (entry) => entry.command === "zfs" && entry.args[0] === "destroy",
+        (entry) =>
+          entry.command === "sudo" && entry.args.slice(0, 3).join(" ") === "-n zfs destroy",
       );
       expect(deleteIndex).toBeGreaterThanOrEqual(0);
       expect(datasetDestroyIndex).toBeGreaterThan(deleteIndex);

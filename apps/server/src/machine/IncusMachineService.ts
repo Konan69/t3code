@@ -1,4 +1,5 @@
 import * as Path from "effect/Path";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -25,6 +26,22 @@ const ZFS_BINARY = "zfs";
 const INCUS_STORAGE_POOL = "tank";
 const WORKSPACE_DEVICE_NAME = "workspace";
 const MACHINE_AGENT_WAIT_LIMIT = "180 seconds";
+const BOX_USER_ID = 1000;
+
+export interface CommandSpec {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+}
+
+export const privilegedCommand = (
+  command: string,
+  args: ReadonlyArray<string>,
+  uid: number | undefined,
+): CommandSpec =>
+  uid === 0 ? { command, args } : { command: "sudo", args: ["-n", command, ...args] };
+
+export const zfsCommand = (args: ReadonlyArray<string>, uid: number | undefined): CommandSpec =>
+  privilegedCommand(ZFS_BINARY, args, uid);
 
 interface CommandResult {
   readonly code: number;
@@ -36,8 +53,12 @@ const commandError = (operation: string, detail: string, cause?: unknown) =>
   new MachineServiceError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
 
 const isMachineServiceError = Schema.is(MachineServiceError);
+class EffectiveUid extends Context.Service<EffectiveUid, number>()(
+  "t3/machine/IncusMachineService/EffectiveUid",
+) {}
 
-export const make = Effect.gen(function* () {
+const makeWithUid = Effect.gen(function* () {
+  const uid = yield* EffectiveUid;
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -91,6 +112,11 @@ export const make = Effect.gen(function* () {
       }).pipe(Effect.scoped),
   );
 
+  const runZfs = (operation: string, args: ReadonlyArray<string>) => {
+    const input = zfsCommand(args, uid);
+    return runCommand(operation, input.command, input.args);
+  };
+
   const runChecked = Effect.fn("IncusMachineService.runChecked")(function* (
     operation: string,
     command: string,
@@ -124,6 +150,36 @@ export const make = Effect.gen(function* () {
       : Option.none<{ readonly status: string }>();
   });
 
+  const runZfsChecked = (operation: string, args: ReadonlyArray<string>) => {
+    const input = zfsCommand(args, uid);
+    return runChecked(operation, input.command, input.args);
+  };
+
+  const runPrivilegedChecked = (
+    operation: string,
+    command: string,
+    args: ReadonlyArray<string>,
+  ) => {
+    const input = privilegedCommand(command, args, uid);
+    return runChecked(operation, input.command, input.args);
+  };
+
+  const datasetExists = Effect.fn("IncusMachineService.datasetExists")(function* (dataset: string) {
+    const args = ["list", "-H", "-o", "name", dataset] as const;
+    const result = yield* runZfs("dataset.inspect", args);
+    if (result.code === 0) {
+      return true;
+    }
+    if (result.stderr.toLowerCase().includes("dataset does not exist")) {
+      return false;
+    }
+    const input = zfsCommand(args, uid);
+    return yield* commandError(
+      "dataset.inspect",
+      `'${input.command} ${input.args.join(" ")}' exited with ${result.code}: ${result.stderr.trim()}`,
+    );
+  });
+
   const bindingForThread = (threadId: ThreadId) => {
     const machineName = machineNameForThread(threadId);
     return {
@@ -142,16 +198,34 @@ export const make = Effect.gen(function* () {
     threadId: ThreadId,
   ) {
     const dataset = `${INCUS_STORAGE_POOL}/threads/${threadId}/ws`;
-    const listed = yield* runCommand("dataset.inspect", ZFS_BINARY, [
-      "list",
+    const mountpoint = hostWorkspaceRootForThread(threadId);
+    if (!(yield* datasetExists(dataset))) {
+      yield* runZfsChecked("dataset.create", [
+        "create",
+        "-p",
+        "-o",
+        `mountpoint=${mountpoint}`,
+        dataset,
+      ]);
+    }
+    const mountedAt = yield* runZfsChecked("dataset.mountpoint", [
+      "get",
       "-H",
       "-o",
-      "name",
+      "value",
+      "mountpoint",
       dataset,
     ]);
-    if (listed.code !== 0) {
-      yield* runChecked("dataset.create", ZFS_BINARY, ["create", "-p", dataset]);
+    if (mountedAt.stdout.trim() !== mountpoint) {
+      return yield* commandError(
+        "dataset.mountpoint",
+        `Dataset '${dataset}' is mounted at '${mountedAt.stdout.trim()}', expected '${mountpoint}'.`,
+      );
     }
+    yield* runPrivilegedChecked("dataset.chown", "chown", [
+      `${BOX_USER_ID}:${BOX_USER_ID}`,
+      mountpoint,
+    ]);
   });
 
   const imageType = Effect.fn("IncusMachineService.imageType")(function* () {
@@ -341,15 +415,8 @@ export const make = Effect.gen(function* () {
         yield* runChecked("destroy", INCUS_BINARY, ["delete", binding.machineName, "--force"]);
       }
       const dataset = datasetForBinding(binding);
-      const listed = yield* runCommand("dataset.inspect", ZFS_BINARY, [
-        "list",
-        "-H",
-        "-o",
-        "name",
-        dataset,
-      ]);
-      if (listed.code === 0) {
-        yield* runChecked("dataset.destroy", ZFS_BINARY, ["destroy", "-r", dataset]);
+      if (yield* datasetExists(dataset)) {
+        yield* runZfsChecked("dataset.destroy", ["destroy", "-r", dataset]);
       }
     },
   );
@@ -370,7 +437,9 @@ export const make = Effect.gen(function* () {
       try: () =>
         // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.parse(result.stdout) as ReadonlyArray<{
-          state?: { network?: Record<string, { addresses?: ReadonlyArray<{ address?: string }> }> };
+          state?: {
+            network?: Record<string, { addresses?: ReadonlyArray<{ address?: string }> }>;
+          };
         }>,
       catch: (cause) =>
         commandError("network.inspect", "Incus returned invalid network JSON.", cause),
@@ -415,4 +484,7 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(MachineService, make);
+export const make = (uid: number | undefined = process.getuid?.()) =>
+  makeWithUid.pipe(Effect.provideService(EffectiveUid, uid ?? -1));
+
+export const layer = Layer.effect(MachineService, make());
