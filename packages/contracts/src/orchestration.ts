@@ -1257,12 +1257,18 @@ export const ThreadCreatedPayload = Schema.Struct({
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
   deletedAt: IsoDateTime,
+  // Optional for replay compatibility. New servers include cleanup metadata so
+  // machine worktrees can be unregistered after the thread projection is gone.
+  projectWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  machine: Schema.optional(Schema.NullOr(ThreadMachineBinding)),
 });
 
 export const ThreadArchivedPayload = Schema.Struct({
   threadId: ThreadId,
   archivedAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  projectWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  machine: Schema.optional(Schema.NullOr(ThreadMachineBinding)),
 });
 
 export const ThreadUnarchivedPayload = Schema.Struct({

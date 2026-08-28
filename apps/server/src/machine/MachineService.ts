@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   ThreadMachineBinding as ContractThreadMachineBinding,
   ThreadMachineState,
@@ -18,7 +20,25 @@ export const MACHINE_GUEST_USER = "kixey";
 export const MACHINE_GUEST_WORKSPACE_ROOT = "/home/kixey/ws";
 export const MACHINE_HOST_DATASET_ROOT = "/tank";
 
-export const machineNameForThread = (threadId: ThreadId): string => `thread-${threadId}`;
+const INCUS_NAME_MAX_LENGTH = 63;
+const MACHINE_NAME_PREFIX = "thread-";
+
+export const machineNameForThread = (threadId: ThreadId): string => {
+  const raw = String(threadId);
+  const sanitized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const plain = `${MACHINE_NAME_PREFIX}${sanitized || "id"}`;
+  if (plain.length <= INCUS_NAME_MAX_LENGTH && sanitized === raw) {
+    return plain;
+  }
+
+  const digest = createHash("sha256").update(raw).digest("hex").slice(0, 12);
+  const available = INCUS_NAME_MAX_LENGTH - MACHINE_NAME_PREFIX.length - digest.length - 1;
+  const prefix = sanitized.slice(0, available).replace(/-+$/g, "") || "id";
+  return `${MACHINE_NAME_PREFIX}${prefix}-${digest}`;
+};
 export const hostWorkspaceRootForThread = (threadId: ThreadId): string =>
   `${MACHINE_HOST_DATASET_ROOT}/threads/${threadId}/ws`;
 
@@ -53,6 +73,9 @@ export interface MachineExecInput {
 }
 
 export interface MachineServiceShape {
+  readonly ensureWorkspace: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ThreadMachineBinding>, MachineServiceError>;
   readonly createFromGolden: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ThreadMachineBinding>, MachineServiceError>;

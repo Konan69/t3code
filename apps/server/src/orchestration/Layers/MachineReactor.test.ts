@@ -8,6 +8,8 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { describe, expect } from "vite-plus/test";
 
+import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import * as HostMachineService from "../../machine/HostMachineService.ts";
 import { ThreadMachineService } from "../../machine/ThreadMachineService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { MachineReactor } from "../Services/MachineReactor.ts";
@@ -47,6 +49,12 @@ describe("MachineReactor", () => {
         Layer.provide(
           Layer.mock(OrchestrationEngineService)({
             streamDomainEvents: Stream.make(createdEvent),
+          }),
+        ),
+        Layer.provide(HostMachineService.layer),
+        Layer.provide(
+          Layer.mock(GitWorkflowService)({
+            removeWorktree: () => Effect.void,
           }),
         ),
         Layer.provide(
