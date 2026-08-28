@@ -5,6 +5,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { MachineService } from "../../machine/MachineService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -37,8 +39,27 @@ export const logCleanupCauseUnlessInterrupted = <R, E>({
     }),
   );
 
+export const cleanupMachineWorktree = (input: {
+  readonly machine: ThreadDeletedEvent["payload"]["machine"];
+  readonly projectWorkspaceRoot: ThreadDeletedEvent["payload"]["projectWorkspaceRoot"];
+  readonly gitWorkflow: Pick<GitWorkflowService["Service"], "removeWorktree">;
+  readonly machines: Pick<MachineService["Service"], "destroy">;
+}) => {
+  if (!input.machine || !input.projectWorkspaceRoot) {
+    return Effect.void;
+  }
+  return input.gitWorkflow
+    .removeWorktree({
+      cwd: input.projectWorkspaceRoot,
+      path: input.machine.hostWorkspaceRoot,
+    })
+    .pipe(Effect.andThen(input.machines.destroy(input.machine)));
+};
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const gitWorkflow = yield* GitWorkflowService;
+  const machines = yield* MachineService;
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager.TerminalManager;
 
@@ -62,6 +83,12 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* stopProviderSession(threadId);
     yield* closeThreadTerminals(threadId);
+    yield* cleanupMachineWorktree({
+      machine: event.payload.machine,
+      projectWorkspaceRoot: event.payload.projectWorkspaceRoot,
+      gitWorkflow,
+      machines,
+    });
   });
 
   const processThreadDeletedSafely = (event: ThreadDeletedEvent) =>

@@ -8011,7 +8011,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("skips bootstrap worktree creation and runs setup in a thread machine", () =>
+  it.effect("delegates bootstrap worktree creation and setup to the thread machine service", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const createWorktree = vi.fn(
@@ -8032,6 +8032,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         hostWorkspaceRoot: "/tank/threads/thread-bootstrap-machine/ws",
         guestWorkspaceRoot: "/home/kixey/ws",
       };
+      const ensureForThread = vi.fn(
+        (
+          _: Parameters<ThreadMachineService.ThreadMachineService["Service"]["ensureForThread"]>[0],
+          __: Parameters<
+            ThreadMachineService.ThreadMachineService["Service"]["ensureForThread"]
+          >[1],
+        ) => Effect.succeed(Option.some(machineBinding)),
+      );
       const runSetupForThread = vi.fn(
         (
           _: Parameters<
@@ -8058,7 +8066,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           projectSetupScriptRunner: { runForThread },
           threadMachineService: {
-            ensureForThread: () => Effect.succeed(Option.some(machineBinding)),
+            ensureForThread,
             runSetupForThread,
           },
         },
@@ -8111,6 +8119,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(createWorktree.mock.calls.length, 0);
       assert.equal(runForThread.mock.calls.length, 0);
+      assert.deepEqual(ensureForThread.mock.calls[0], [
+        ThreadId.make("thread-bootstrap-machine"),
+        {
+          projectCwd: "/tmp/project",
+          baseBranch: "main",
+          branch: "t3code/machine-bootstrap",
+        },
+      ]);
       assert.deepEqual(runSetupForThread.mock.calls[0]?.[0], {
         threadId: ThreadId.make("thread-bootstrap-machine"),
         projectId: defaultProjectId,

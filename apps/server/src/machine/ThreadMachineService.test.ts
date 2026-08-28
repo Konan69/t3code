@@ -16,10 +16,11 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect } from "vite-plus/test";
 
+import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { MachineService } from "./MachineService.ts";
-import { ThreadMachineService, layer, shouldPrepareGitWorktree } from "./ThreadMachineService.ts";
+import { ThreadMachineService, layer } from "./ThreadMachineService.ts";
 
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
@@ -94,14 +95,21 @@ function makeHandle() {
 
 const makeLayer = (input: {
   readonly machineMode: "off" | "thread";
+  readonly onWorkspace?: () => void;
   readonly onCreate?: () => void;
+  readonly onWorktree?: (input: unknown) => void;
   readonly onDispatch?: (command: unknown) => void;
   readonly onExec?: (execInput: unknown) => void;
   readonly existingMachine?: ThreadMachineBinding | null;
+  readonly existingBranch?: boolean;
 }) => {
   const machineLayer = Layer.succeed(
     MachineService,
     MachineService.of({
+      ensureWorkspace: () => {
+        input.onWorkspace?.();
+        return Effect.succeed(Option.some(binding));
+      },
       createFromGolden: () => {
         input.onCreate?.();
         return Effect.succeed(Option.some(binding));
@@ -134,6 +142,46 @@ const makeLayer = (input: {
       }),
     ),
     Layer.provide(
+      Layer.mock(GitWorkflowService)({
+        localStatus: () =>
+          Effect.succeed({
+            isRepo: true,
+            hasPrimaryRemote: false,
+            isDefaultRef: true,
+            refName: "main",
+            hasWorkingTreeChanges: false,
+            workingTree: { files: [], insertions: 0, deletions: 0 },
+          }),
+        remoteExists: () => Effect.succeed(false),
+        listRefs: () =>
+          Effect.succeed({
+            refs: input.existingBranch
+              ? [
+                  {
+                    name: `t3/${binding.machineName}`,
+                    current: false,
+                    isDefault: false,
+                    worktreePath: null,
+                  },
+                ]
+              : [],
+            isRepo: true,
+            hasPrimaryRemote: false,
+            nextCursor: null,
+            totalCount: 0,
+          }),
+        createWorktree: (worktreeInput) => {
+          input.onWorktree?.(worktreeInput);
+          return Effect.succeed({
+            worktree: {
+              path: binding.hostWorkspaceRoot,
+              refName: thread.branch ?? `t3/${binding.machineName}`,
+            },
+          });
+        },
+      }),
+    ),
+    Layer.provide(
       Layer.mock(OrchestrationEngineService)({
         dispatch: (command) => {
           input.onDispatch?.(command);
@@ -146,11 +194,6 @@ const makeLayer = (input: {
 };
 
 describe("ThreadMachineService", () => {
-  it("skips bootstrap worktree creation once a machine binding exists", () => {
-    expect(shouldPrepareGitWorktree(undefined)).toBe(true);
-    expect(shouldPrepareGitWorktree(binding)).toBe(false);
-  });
-
   it.effect("does nothing while project machine mode is off", () => {
     let creates = 0;
     return Effect.gen(function* () {
@@ -161,12 +204,22 @@ describe("ThreadMachineService", () => {
     }).pipe(Effect.provide(makeLayer({ machineMode: "off", onCreate: () => (creates += 1) })));
   });
 
-  it.effect("creates and persists a deterministic binding when mode is on", () => {
+  it.effect("creates the dataset, populates it with a worktree, then creates the machine", () => {
+    const order: string[] = [];
     const dispatched: unknown[] = [];
+    let worktreeInput: unknown;
     return Effect.gen(function* () {
       const service = yield* ThreadMachineService;
       const result = yield* service.ensureForThread(threadId);
       expect(Option.getOrThrow(result)).toEqual(binding);
+      expect(order).toEqual(["dataset", "worktree", "device-and-start"]);
+      expect(worktreeInput).toEqual({
+        cwd: "/repo",
+        refName: "main",
+        newRefName: "t3/thread-thread-1",
+        baseRefName: "main",
+        path: "/tank/threads/thread-1/ws",
+      });
       expect(dispatched).toContainEqual(
         expect.objectContaining({
           type: "thread.machine.bind",
@@ -176,7 +229,37 @@ describe("ThreadMachineService", () => {
       );
     }).pipe(
       Effect.provide(
-        makeLayer({ machineMode: "thread", onDispatch: (command) => dispatched.push(command) }),
+        makeLayer({
+          machineMode: "thread",
+          onWorkspace: () => order.push("dataset"),
+          onWorktree: (value) => {
+            order.push("worktree");
+            worktreeInput = value;
+          },
+          onCreate: () => order.push("device-and-start"),
+          onDispatch: (command) => dispatched.push(command),
+        }),
+      ),
+    );
+  });
+
+  it.effect("reuses an existing branch after an archived machine is recreated", () => {
+    let worktreeInput: unknown;
+    return Effect.gen(function* () {
+      const service = yield* ThreadMachineService;
+      yield* service.ensureForThread(threadId);
+      expect(worktreeInput).toEqual({
+        cwd: "/repo",
+        refName: "t3/thread-thread-1",
+        path: "/tank/threads/thread-1/ws",
+      });
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          machineMode: "thread",
+          existingBranch: true,
+          onWorktree: (value) => (worktreeInput = value),
+        }),
       ),
     );
   });
