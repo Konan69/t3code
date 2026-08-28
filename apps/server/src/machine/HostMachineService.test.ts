@@ -59,6 +59,18 @@ describe("HostMachineService", () => {
     expect(MACHINE_GUEST_WORKSPACE_ROOT).toBe("/home/kixey/ws");
   });
 
+  it("sanitizes arbitrary thread IDs into deterministic valid Incus names", () => {
+    const longId = ThreadId.make(`UPPER / spaces / ${"x".repeat(100)}`);
+    const first = machineNameForThread(longId);
+    const second = machineNameForThread(longId);
+    const other = machineNameForThread(ThreadId.make(`UPPER / spaces / ${"y".repeat(100)}`));
+
+    expect(first).toBe(second);
+    expect(first).not.toBe(other);
+    expect(first.length).toBeLessThanOrEqual(63);
+    expect(first).toMatch(/^[a-z][a-z0-9-]*$/);
+  });
+
   it.effect("is a no-op boundary and never probes a machine runtime", () => {
     let spawnCount = 0;
     const spawner = ChildProcessSpawner.make(() => {
@@ -68,12 +80,14 @@ describe("HostMachineService", () => {
 
     return Effect.gen(function* () {
       const machines = yield* MachineService;
+      const workspace = yield* machines.ensureWorkspace(ThreadId.make("thread-1"));
       const created = yield* machines.createFromGolden(ThreadId.make("thread-1"));
       yield* machines.start(binding);
       yield* machines.stop(binding);
       yield* machines.archive(binding);
       yield* machines.destroy(binding);
 
+      expect(Option.isNone(workspace)).toBe(true);
       expect(Option.isNone(created)).toBe(true);
       expect(yield* machines.hostToGuestPath(binding, "/tmp/project")).toBe("/tmp/project");
       expect(yield* machines.guestToHostPath(binding, "/tmp/project")).toBe("/tmp/project");

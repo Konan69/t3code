@@ -37,6 +37,7 @@ export const layer = Layer.effect(
         );
 
     return MachineService.of({
+      ensureWorkspace: () => Effect.succeed(Option.none()),
       createFromGolden: () => Effect.succeed(Option.none()),
       start: () => Effect.void,
       stop: () => Effect.void,
