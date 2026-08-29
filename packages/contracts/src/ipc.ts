@@ -185,6 +185,14 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   displayName: Schema.String,
 });
 
+export const DesktopCloudboxWakeConfigSchema = Schema.Struct({
+  endpoint: Schema.String,
+  name: Schema.String,
+  secret: Schema.String,
+  environmentId: Schema.NullOr(Schema.String),
+});
+export type DesktopCloudboxWakeConfig = typeof DesktopCloudboxWakeConfigSchema.Type;
+
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
@@ -1094,6 +1102,7 @@ export interface DesktopBridge {
   getConnectionCatalog?: () => Promise<string | null>;
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
+  getCloudboxWakeConfig?: () => Promise<DesktopCloudboxWakeConfig | null>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
