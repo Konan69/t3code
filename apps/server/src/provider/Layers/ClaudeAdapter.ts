@@ -77,7 +77,6 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import type { ProcessLauncherShape } from "../../process/ProcessLauncher.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
@@ -328,7 +327,6 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
 export interface ClaudeAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
-  readonly processLauncher?: Pick<ProcessLauncherShape, "resolveSdkExecutable">;
   readonly createQuery?: (input: {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
@@ -1691,7 +1689,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
   );
-  const hostClaudeSdkExecutablePath = yield* resolveClaudeSdkExecutablePath(
+  const claudeSdkExecutablePath = yield* resolveClaudeSdkExecutablePath(
     claudeSettings.binaryPath,
     claudeEnvironment,
   );
@@ -4243,22 +4241,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         callbackOptions,
       ) => runPromise(handleResumeDialog(request, callbackOptions));
 
-      const claudeBinaryPath = yield* (
-        options?.processLauncher?.resolveSdkExecutable({
-          threadId: input.threadId,
-          command: hostClaudeSdkExecutablePath,
-        }) ?? Effect.succeed(hostClaudeSdkExecutablePath)
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterProcessError({
-              provider: PROVIDER,
-              threadId: input.threadId,
-              detail: "Failed to prepare the Claude executable for this session.",
-              cause,
-            }),
-        ),
-      );
+      const claudeBinaryPath = claudeSdkExecutablePath;
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
