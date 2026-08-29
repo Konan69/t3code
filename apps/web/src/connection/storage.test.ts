@@ -8,7 +8,7 @@ import { afterEach, vi } from "vite-plus/test";
 import { makeCatalogBackend, makeCatalogStore } from "./storage";
 
 const emptyCatalog = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   targets: [],
   profiles: [],
   credentials: [],
