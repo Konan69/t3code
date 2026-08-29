@@ -9,6 +9,7 @@ import {
   ProviderSession,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ThreadMachineBinding,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
@@ -161,6 +162,7 @@ describe("ProviderCommandReactor", () => {
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
     readonly onEnsureMachine?: () => void;
     readonly onStartSession?: () => void;
+    readonly ensuredMachine?: ThreadMachineBinding;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -442,7 +444,9 @@ describe("ProviderCommandReactor", () => {
           ThreadMachineService.of({
             ensureForThread: () => {
               input?.onEnsureMachine?.();
-              return Effect.succeed(Option.none());
+              return Effect.succeed(
+                input?.ensuredMachine ? Option.some(input.ensuredMachine) : Option.none(),
+              );
             },
             runSetupForThread: () => Effect.succeed({ status: "no-script" }),
           }),
@@ -585,6 +589,60 @@ describe("ProviderCommandReactor", () => {
     expect(order.at(-1)).toBe("start-session");
     expect(order.slice(0, -1).every((entry) => entry === "ensure-machine")).toBe(true);
     expect(order.length).toBeGreaterThan(1);
+  });
+
+  it("rejects Claude Agent SDK sessions when machine mode binds the thread", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-4-6",
+      },
+      ensuredMachine: {
+        machineId: "thread-thread-1",
+        machineName: "thread-thread-1",
+        state: "running",
+        hostWorkspaceRoot: "/tank/threads/thread-1/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+      },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-claude-machine"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-machine"),
+          role: "user",
+          text: "hello machine",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
+      );
+    });
+
+    expect(harness.startSession).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("Claude Agent SDK sessions cannot run in thread machines"),
+      },
+    });
   });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
