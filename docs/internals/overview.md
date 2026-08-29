@@ -155,6 +155,12 @@ the host.
 Identity devices are reconciled at creation and before each machine process execution. Desired
 mounts are added or updated by index and guest-path slug; stale `identity-*` devices are removed.
 
+Each thread machine receives its own host Git worktree. An unset thread branch creates
+`t3/<machineName>` from the project checkout's current branch. An existing branch is checked out
+directly only when no project worktree already uses it; otherwise the machine gets a new
+`t3/<machineName>` branch based on the requested branch, and the thread metadata follows that new
+branch. Locked and prunable worktree registrations still reserve their branches.
+
 ## Checkpointing
 
 Each turn is bracketed by workspace checkpoints so diffs and reverts are exact. `CheckpointStore`
