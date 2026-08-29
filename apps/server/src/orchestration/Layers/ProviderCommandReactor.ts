@@ -28,7 +28,11 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { ThreadMachineService } from "../../machine/ThreadMachineService.ts";
+import { MachineServiceError } from "../../machine/MachineService.ts";
+import {
+  ThreadMachineService,
+  ThreadMachineServiceError,
+} from "../../machine/ThreadMachineService.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -49,8 +53,10 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+const isMachineServiceError = Schema.is(MachineServiceError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+const isThreadMachineServiceError = Schema.is(ThreadMachineServiceError);
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -375,11 +381,12 @@ const make = Effect.gen(function* () {
 
   const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
     const failReason = cause.reasons.find(Cause.isFailReason);
-    const providerError = isProviderAdapterRequestError(failReason?.error)
-      ? failReason.error
-      : undefined;
-    if (providerError) {
-      return providerError.detail;
+    const error = failReason?.error;
+    if (isProviderAdapterRequestError(error)) {
+      return error.detail;
+    }
+    if (isThreadMachineServiceError(error) || isMachineServiceError(error)) {
+      return `Could not start the thread machine: ${error.detail}`;
     }
     return Cause.pretty(cause);
   };
@@ -659,7 +666,7 @@ const make = Effect.gen(function* () {
           new ProviderAdapterRequestError({
             provider: preferredProvider,
             method: "thread.turn.start",
-            detail: `Failed to ensure machine for thread '${threadId}': ${cause.detail}`,
+            detail: `Could not start the thread machine: ${cause.detail}`,
           }),
       ),
     );
@@ -1165,7 +1172,50 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const ensuredMachine = yield* threadMachines.ensureForThread(thread.id);
+    const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.void;
+      }
+      const detail = formatFailureDetail(cause);
+      return setThreadSessionErrorOnTurnStartFailure({
+        threadId: event.payload.threadId,
+        detail,
+        createdAt: event.payload.createdAt,
+      }).pipe(
+        Effect.flatMap(() =>
+          appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.start.failed",
+            summary: "Provider turn start failed",
+            detail,
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
+        Effect.asVoid,
+      );
+    };
+
+    const recoverTurnStartFailure = (cause: Cause.Cause<unknown>) =>
+      handleTurnStartFailure(cause).pipe(
+        Effect.catchCause((recoveryCause) =>
+          Effect.logWarning("provider command reactor failed to recover turn start failure", {
+            eventType: event.type,
+            threadId: event.payload.threadId,
+            cause: Cause.pretty(recoveryCause),
+            originalCause: Cause.pretty(cause),
+          }),
+        ),
+      );
+
+    const ensuredMachineResult = yield* threadMachines.ensureForThread(thread.id).pipe(
+      Effect.map(Option.some),
+      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+    );
+    if (Option.isNone(ensuredMachineResult)) {
+      return;
+    }
+    const ensuredMachine = ensuredMachineResult.value;
     const effectiveThread = {
       ...thread,
       machine: Option.getOrUndefined(ensuredMachine) ?? thread.machine,
@@ -1202,42 +1252,6 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.forkScoped);
       }
     }
-
-    const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
-      if (Cause.hasInterruptsOnly(cause)) {
-        return Effect.void;
-      }
-      const detail = formatFailureDetail(cause);
-      return setThreadSessionErrorOnTurnStartFailure({
-        threadId: event.payload.threadId,
-        detail,
-        createdAt: event.payload.createdAt,
-      }).pipe(
-        Effect.flatMap(() =>
-          appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.turn.start.failed",
-            summary: "Provider turn start failed",
-            detail,
-            turnId: null,
-            createdAt: event.payload.createdAt,
-          }),
-        ),
-        Effect.asVoid,
-      );
-    };
-
-    const recoverTurnStartFailure = (cause: Cause.Cause<unknown>) =>
-      handleTurnStartFailure(cause).pipe(
-        Effect.catchCause((recoveryCause) =>
-          Effect.logWarning("provider command reactor failed to recover turn start failure", {
-            eventType: event.type,
-            threadId: event.payload.threadId,
-            cause: Cause.pretty(recoveryCause),
-            originalCause: Cause.pretty(cause),
-          }),
-        ),
-      );
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
