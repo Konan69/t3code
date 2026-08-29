@@ -155,10 +155,16 @@ the host.
 Identity devices are reconciled at creation and before each machine process execution. Desired
 mounts are added or updated by index and guest-path slug; stale `identity-*` devices are removed.
 
-The project checkout is also mounted read-write at the same absolute host and guest path. A Git
-worktree's `.git` file points back into the checkout's `.git/worktrees` directory, so preserving that
-path lets Git resolve the worktree metadata, shared object store, and refs inside the machine. The
-`project` disk device uses `shift=true` and is reconciled before each machine process execution.
+Every provider-facing working directory for a machine-bound thread uses the guest workspace path,
+including session start and restart, per-turn generation, and provider tool or command execution.
+The server keeps host workspace paths in projections and maps the workspace root and its
+subdirectories only at the provider boundary.
+
+The project checkout is mounted read-only at the same absolute host and guest path. A nested,
+read-write mount exposes only the checkout's `.git` directory, so a Git worktree's `.git` file can
+still resolve worktree metadata, shared objects, and refs without letting a confused agent modify the
+user's checkout. The `project` and `project-git` disk devices use `shift=true` and are reconciled
+before each machine process execution.
 
 Dependency seeding for machine workspaces bind-mounts the project checkout's root and workspace
 `node_modules` directories into the same relative paths in the thread worktree. This avoids a slow,

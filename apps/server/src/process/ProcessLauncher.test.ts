@@ -63,12 +63,15 @@ describe("HostProcessLauncher", () => {
         threadId,
         command: "pi",
         args: ["--mode", "rpc"],
-        cwd: "/workspace",
+        cwd: "/home/kixey/ws/packages/app",
         env: undefined,
         extendEnv: true,
         shell: false,
-      }).threadId,
-    ).toBe(threadId);
+      }),
+    ).toMatchObject({
+      threadId,
+      cwd: "/home/kixey/ws/packages/app",
+    });
     expect(
       makeAcpProcessLaunchInput(
         { threadId, spawn: { command: "cursor-agent", args: ["acp"], cwd: "/workspace" } },
