@@ -1353,7 +1353,7 @@ function ChatViewContent(props: ChatViewProps) {
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
-  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
+  const retryEnvironment = useAtomCommand(environmentCatalog.armWake, { reportFailure: false });
   const environmentById = useMemo(
     () => new Map(environments.map((environment) => [environment.environmentId, environment])),
     [environments],
@@ -1545,6 +1545,14 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const pendingWakeSubmissionRef = useRef<{
+    readonly routeThreadKey: string;
+    readonly submissionIntent: ComposerSubmissionIntent;
+    readonly directAnnotation?: {
+      readonly annotation: PreviewAnnotationPayload;
+      readonly image: ComposerImageAttachment | null;
+    };
+  } | null>(null);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
@@ -5590,11 +5598,17 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     if (activeEnvironmentUnavailable) {
+      pendingWakeSubmissionRef.current = {
+        routeThreadKey,
+        submissionIntent,
+        ...(directAnnotation === undefined ? {} : { directAnnotation }),
+      };
+      await handleReconnectActiveEnvironment(activeThread.environmentId);
       toastManager.add(
         stackedThreadToast({
-          type: "warning",
-          title: "Not connected: message not sent",
-          description: "Reconnecting to the environment. Try again once it is connected.",
+          type: "info",
+          title: "Waking the environment",
+          description: "Your prompt will send automatically once T3 Code reconnects.",
         }),
       );
       return;
@@ -6328,6 +6342,18 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  useEffect(() => {
+    const pending = pendingWakeSubmissionRef.current;
+    if (pending === null) return;
+    if (pending.routeThreadKey !== routeThreadKey) {
+      pendingWakeSubmissionRef.current = null;
+      return;
+    }
+    if (activeEnvironmentUnavailable || isConnecting || isSendBusy || threadDetailLoading) return;
+    pendingWakeSubmissionRef.current = null;
+    void onSend(undefined, pending.submissionIntent, pending.directAnnotation);
+  }, [activeEnvironmentUnavailable, isConnecting, isSendBusy, routeThreadKey, threadDetailLoading]);
+
   const onInterrupt = async () => {
     if (!activeThread) return;
     const result = await interruptThreadTurn({
@@ -6346,6 +6372,10 @@ function ChatViewContent(props: ChatViewProps) {
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
       if (!activeThreadId) return;
+      if (activeEnvironmentUnavailable) {
+        await handleReconnectActiveEnvironment(environmentId);
+        return;
+      }
 
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
@@ -6368,12 +6398,23 @@ function ChatViewContent(props: ChatViewProps) {
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, respondToThreadApproval, setThreadError],
+    [
+      activeEnvironmentUnavailable,
+      activeThreadId,
+      environmentId,
+      handleReconnectActiveEnvironment,
+      respondToThreadApproval,
+      setThreadError,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
     async (requestId: ApprovalRequestId, answers: Record<string, unknown>) => {
       if (!activeThreadId) return;
+      if (activeEnvironmentUnavailable) {
+        await handleReconnectActiveEnvironment(environmentId);
+        return;
+      }
 
       setRespondingUserInputRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
@@ -6396,7 +6437,14 @@ function ChatViewContent(props: ChatViewProps) {
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, respondToThreadUserInput, setThreadError],
+    [
+      activeEnvironmentUnavailable,
+      activeThreadId,
+      environmentId,
+      handleReconnectActiveEnvironment,
+      respondToThreadUserInput,
+      setThreadError,
+    ],
   );
 
   const setActivePendingUserInputQuestionIndex = useCallback(
@@ -6522,6 +6570,10 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return;
       }
+      if (activeEnvironmentUnavailable) {
+        await handleReconnectActiveEnvironment(activeThread.environmentId);
+        return;
+      }
 
       const trimmed = text.trim();
       if (!trimmed) {
@@ -6640,12 +6692,14 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeThread,
+      activeEnvironmentUnavailable,
       activeProposedPlan,
       acknowledgeActiveThreadWoke,
       beginLocalDispatch,
       isConnecting,
       isSendBusy,
       isServerThread,
+      handleReconnectActiveEnvironment,
       localCheckoutBranchMismatch,
       persistThreadSettingsForNextTurn,
       resetLocalDispatch,
@@ -6660,6 +6714,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const onImplementPlanInNewThread = useCallback(async () => {
+    if (activeThread && activeEnvironmentUnavailable) {
+      await handleReconnectActiveEnvironment(activeThread.environmentId);
+      return;
+    }
     if (
       !activeThread ||
       !activeProject ||
@@ -6816,6 +6874,7 @@ function ChatViewContent(props: ChatViewProps) {
     runtimeMode,
     startThreadTurn,
     environmentId,
+    handleReconnectActiveEnvironment,
     composerRef,
   ]);
 

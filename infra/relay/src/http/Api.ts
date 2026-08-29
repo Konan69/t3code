@@ -32,6 +32,7 @@ import {
   RelayDpopClientAuth,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
+  RelayEnvironmentWakeScope,
   RelayMobileRegistrationScope,
   RelayAuthInvalidError,
   type RelayAuthInvalidReason,
@@ -64,6 +65,7 @@ import * as RelayConfiguration from "../Config.ts";
 import * as AgentActivityPublisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as EnvironmentConnector from "../environments/EnvironmentConnector.ts";
 import * as EnvironmentLinker from "../environments/EnvironmentLinker.ts";
+import * as HostLifecycle from "../environments/HostLifecycle.ts";
 import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvider.ts";
 import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllocations.ts";
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
@@ -71,7 +73,7 @@ import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
 import * as RelayDb from "../db.ts";
 
-const relayCorsAllowedMethods = ["GET", "POST", "DELETE", "OPTIONS"] as const;
+const relayCorsAllowedMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"] as const;
 const relayCorsAllowedHeaders = [
   "authorization",
   "b3",
@@ -748,11 +750,68 @@ export const tokenApi = HttpApiBuilder.group(
   }),
 );
 
+function mapHostLifecycleErrors<A, R>(
+  effect: Effect.Effect<A, HostLifecycle.HostLifecycleError, R>,
+) {
+  return effect.pipe(
+    Effect.catchTags({
+      HostLifecycleNotAuthorized: (error) =>
+        currentTraceId.pipe(
+          Effect.flatMap((traceId) =>
+            Effect.fail(
+              new RelayEnvironmentConnectNotAuthorizedError({
+                code: "environment_connect_not_authorized",
+                reason: error.reason,
+                traceId,
+              }),
+            ),
+          ),
+        ),
+      HostLifecycleConfigInvalid: () =>
+        currentTraceId.pipe(
+          Effect.flatMap((traceId) =>
+            Effect.fail(
+              new RelayEnvironmentEndpointUnavailableError({
+                code: "environment_endpoint_unavailable",
+                reason: "endpoint_response_invalid",
+                traceId,
+              }),
+            ),
+          ),
+        ),
+      HostLifecycleRequestFailed: (error) =>
+        currentTraceId.pipe(
+          Effect.flatMap((traceId) =>
+            Effect.fail(
+              new RelayEnvironmentEndpointUnavailableError({
+                code: "environment_endpoint_unavailable",
+                reason: error.reason,
+                traceId,
+              }),
+            ),
+          ),
+        ),
+      HostLifecycleRequestTimedOut: () =>
+        currentTraceId.pipe(
+          Effect.flatMap((traceId) =>
+            Effect.fail(
+              new RelayEnvironmentEndpointTimedOutError({
+                code: "environment_endpoint_timed_out",
+                traceId,
+              }),
+            ),
+          ),
+        ),
+    }),
+  );
+}
+
 export const dpopClientApi = HttpApiBuilder.group(
   RelayApi,
   "dpopClient",
   Effect.fnUntraced(function* (handlers) {
     const connector = yield* EnvironmentConnector.EnvironmentConnector;
+    const hostLifecycle = yield* HostLifecycle.HostLifecycle;
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
     return handlers
       .handle(
@@ -847,6 +906,97 @@ export const dpopClientApi = HttpApiBuilder.group(
               }),
           }),
         ),
+      )
+      .handle(
+        "configureEnvironmentHostLifecycle",
+        Effect.fn("relay.api.dpopClient.configureEnvironmentHostLifecycle")(function* (args) {
+          const { userId, token } = yield* RelayClientPrincipal;
+          const proofKeyThumbprint = yield* requireDpopPrincipalScope(RelayEnvironmentWakeScope);
+          yield* requireDpopThumbprint(proofKeyThumbprint, {
+            expectedAccessToken: token,
+          }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
+          return yield* hostLifecycle
+            .configure({
+              userId,
+              environmentId: args.params.environmentId,
+              config: args.payload,
+            })
+            .pipe(
+              Effect.flatMap((configured) =>
+                configured
+                  ? Effect.succeed({ ok: true })
+                  : Effect.fail(
+                      new HostLifecycle.HostLifecycleNotAuthorized({
+                        userId,
+                        environmentId: args.params.environmentId,
+                        reason: "environment_link_not_found",
+                      }),
+                    ),
+              ),
+              mapHostLifecycleErrors,
+            );
+        }, mapRelayCommonApiErrors("invalid_dpop")),
+      )
+      .handle(
+        "removeEnvironmentHostLifecycle",
+        Effect.fn("relay.api.dpopClient.removeEnvironmentHostLifecycle")(function* (args) {
+          const { userId, token } = yield* RelayClientPrincipal;
+          const proofKeyThumbprint = yield* requireDpopPrincipalScope(RelayEnvironmentWakeScope);
+          yield* requireDpopThumbprint(proofKeyThumbprint, {
+            expectedAccessToken: token,
+          }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
+          return yield* hostLifecycle
+            .remove({
+              userId,
+              environmentId: args.params.environmentId,
+            })
+            .pipe(
+              Effect.flatMap((removed) =>
+                removed
+                  ? Effect.succeed({ ok: true })
+                  : Effect.fail(
+                      new HostLifecycle.HostLifecycleNotAuthorized({
+                        userId,
+                        environmentId: args.params.environmentId,
+                        reason: "environment_link_not_found",
+                      }),
+                    ),
+              ),
+              mapHostLifecycleErrors,
+            );
+        }, mapRelayCommonApiErrors("invalid_dpop")),
+      )
+      .handle(
+        "getEnvironmentHostStatus",
+        Effect.fn("relay.api.dpopClient.getEnvironmentHostStatus")(function* (args) {
+          const { userId, token } = yield* RelayClientPrincipal;
+          const proofKeyThumbprint = yield* requireDpopPrincipalScope(RelayEnvironmentStatusScope);
+          yield* requireDpopThumbprint(proofKeyThumbprint, {
+            expectedAccessToken: token,
+          }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
+          return yield* mapHostLifecycleErrors(
+            hostLifecycle.status({
+              userId,
+              environmentId: args.params.environmentId,
+            }),
+          );
+        }, mapRelayCommonApiErrors("invalid_dpop")),
+      )
+      .handle(
+        "wakeEnvironmentHost",
+        Effect.fn("relay.api.dpopClient.wakeEnvironmentHost")(function* (args) {
+          const { userId, token } = yield* RelayClientPrincipal;
+          const proofKeyThumbprint = yield* requireDpopPrincipalScope(RelayEnvironmentWakeScope);
+          yield* requireDpopThumbprint(proofKeyThumbprint, {
+            expectedAccessToken: token,
+          }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
+          return yield* mapHostLifecycleErrors(
+            hostLifecycle.wake({
+              userId,
+              environmentId: args.params.environmentId,
+            }),
+          );
+        }, mapRelayCommonApiErrors("invalid_dpop")),
       );
   }),
 );
@@ -1017,6 +1167,7 @@ const RelayCommonPersistenceError = Schema.Union([
   EnvironmentLinks.EnvironmentLinkListPersistenceError,
   EnvironmentLinks.EnvironmentLinkLookupPersistenceError,
   EnvironmentLinks.EnvironmentLinkRevokePersistenceError,
+  EnvironmentLinks.EnvironmentHostLifecyclePersistenceError,
   ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError,
   EnvironmentCredentials.EnvironmentCredentialAuthenticatePersistenceError,
   EnvironmentCredentials.EnvironmentCredentialRevokePersistenceError,

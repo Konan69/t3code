@@ -53,6 +53,8 @@ function environmentConnectNotAuthorizedReasonMessage(
       return "the client proof key thumbprint is missing";
     case "environment_link_not_found":
       return "no active environment link was found";
+    case "host_lifecycle_not_configured":
+      return "host lifecycle access is not configured";
     case "endpoint_provider_not_managed":
       return "the linked endpoint is not relay-managed";
     case "managed_endpoint_allocation_not_found":
