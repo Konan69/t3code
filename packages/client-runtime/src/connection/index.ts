@@ -26,8 +26,11 @@ export * as ProfileStore from "./profileStore.ts";
 export {
   EnvironmentNotRegisteredError,
   EnvironmentRegistry,
+  type EnvironmentWakeStatusResult,
   PlatformEnvironmentRemovalError,
+  WakePolicyUnsupportedTargetError,
 } from "./registry.ts";
 export { ConnectionResolver } from "./resolver.ts";
 export { EnvironmentSupervisor, type EnvironmentSupervisorOptions } from "./supervisor.ts";
+export type { WakeStatusResult } from "./wakeEndpoint.ts";
 export * as Wakeups from "./wakeups.ts";
