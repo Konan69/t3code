@@ -116,6 +116,10 @@ which agent is behind them. See [providers.md](./providers.md).
 
 Native Linux servers can run a project's threads in Incus machines.
 
+Machine-capable environments carry the requested machine mode in the atomic `project.create`
+command. Web and mobile project creation enable it by default when the server advertises the
+capability, preventing the first thread from racing or silently starting on the host.
+
 | Provider | Thread-machine transport                               |
 | -------- | ------------------------------------------------------ |
 | Codex    | Direct process launch through `MachineProcessLauncher` |

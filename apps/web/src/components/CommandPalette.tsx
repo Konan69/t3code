@@ -8,6 +8,7 @@ import {
   getCloneDirectoryName,
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
+  resolveNewProjectMachineMode,
 } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
@@ -1770,6 +1771,9 @@ function OpenCommandPaletteDialog(props: {
           defaultModelSelection: resolveDefaultProviderModelSelection(
             targetEnvironmentProviders,
             null,
+          ),
+          machineMode: resolveNewProjectMachineMode(
+            environment?.serverConfig?.environment.capabilities.threadMachines,
           ),
         },
       });
