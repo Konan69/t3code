@@ -342,6 +342,9 @@ function mapThreadMachine(
         machineId: row.machineId,
         machineName: row.machineName,
         state: row.machineState,
+        ...(row.machineProjectWorkspaceRoot === null
+          ? {}
+          : { projectWorkspaceRoot: row.machineProjectWorkspaceRoot }),
         hostWorkspaceRoot: row.machineHostWorkspaceRoot,
         guestWorkspaceRoot: row.machineGuestWorkspaceRoot,
       }
@@ -480,6 +483,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           machine_id AS "machineId",
           machine_name AS "machineName",
           machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
           machine_host_workspace_root AS "machineHostWorkspaceRoot",
           machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",
@@ -523,6 +527,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           machine_id AS "machineId",
           machine_name AS "machineName",
           machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
           machine_host_workspace_root AS "machineHostWorkspaceRoot",
           machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",
@@ -568,6 +573,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           machine_id AS "machineId",
           machine_name AS "machineName",
           machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
           machine_host_workspace_root AS "machineHostWorkspaceRoot",
           machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",
@@ -1020,6 +1026,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           machine_id AS "machineId",
           machine_name AS "machineName",
           machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
           machine_host_workspace_root AS "machineHostWorkspaceRoot",
           machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",

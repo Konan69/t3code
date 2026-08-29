@@ -140,6 +140,11 @@ the host.
 Identity devices are reconciled at creation and before each machine process execution. Desired
 mounts are added or updated by index and guest-path slug; stale `identity-*` devices are removed.
 
+The project checkout is also mounted read-write at the same absolute host and guest path. A Git
+worktree's `.git` file points back into the checkout's `.git/worktrees` directory, so preserving that
+path lets Git resolve the worktree metadata, shared object store, and refs inside the machine. The
+`project` disk device uses `shift=true` and is reconciled before each machine process execution.
+
 Each thread machine receives its own host Git worktree. An unset thread branch creates
 `t3/<machineName>` from the project checkout's current branch. An existing branch is checked out
 directly only when no project worktree already uses it; otherwise the machine gets a new
