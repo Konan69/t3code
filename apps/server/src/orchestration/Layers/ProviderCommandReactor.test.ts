@@ -54,6 +54,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  mapProviderCwdForMachine,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -565,6 +566,8 @@ describe("ProviderCommandReactor", () => {
       stateDir,
       drain,
       runEffect,
+      mapProviderCwd: (binding: ThreadMachineBinding, hostCwd: string) =>
+        Effect.runPromise(mapProviderCwdForMachine(binding, hostCwd)),
       get titleRegenerationCompletionDispatchAttempts() {
         return titleRegenerationCompletionDispatchAttempts;
       },
@@ -665,7 +668,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("starts Claude Agent SDK sessions after machine mode binds the thread", async () => {
+  it("uses guest workspace paths for machine-bound provider sessions and generation", async () => {
     const machine = {
       machineId: "thread-thread-1",
       machineName: "thread-thread-1",
@@ -693,6 +696,7 @@ describe("ProviderCommandReactor", () => {
           text: "hello machine",
           attachments: [],
         },
+        titleSeed: "Thread",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
@@ -701,14 +705,40 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       provider: "claudeAgent",
-      cwd: machine.hostWorkspaceRoot,
+      cwd: machine.guestWorkspaceRoot,
       modelSelection: {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-sonnet-4-6",
       },
     });
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
+      cwd: machine.guestWorkspaceRoot,
+    });
+    await expect(
+      harness.mapProviderCwd(machine, `${machine.hostWorkspaceRoot}/packages/app`),
+    ).resolves.toBe(`${machine.guestWorkspaceRoot}/packages/app`);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-claude-machine-follow-up"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-machine-follow-up"),
+          role: "user",
+          text: "continue in the machine",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
 
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
