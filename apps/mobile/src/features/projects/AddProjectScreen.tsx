@@ -13,6 +13,7 @@ import {
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
+  resolveNewProjectMachineMode,
   sortAddProjectProviderSources,
   type AddProjectRemoteSource,
 } from "@t3tools/client-runtime/operations/projects";
@@ -69,6 +70,7 @@ interface EnvironmentOption {
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
   readonly connectionErrorTraceId: string | null;
+  readonly threadMachines: boolean;
 }
 
 const environmentOptionOrder = Order.mapInput(
@@ -356,6 +358,7 @@ function useEnvironmentOptions(): ReadonlyArray<EnvironmentOption> {
         connectionState: runtime?.connectionState ?? "available",
         connectionError: runtime?.connectionError ?? null,
         connectionErrorTraceId: runtime?.connectionErrorTraceId ?? null,
+        threadMachines: config?.environment.capabilities.threadMachines === true,
       };
     });
     return Arr.sort(options, environmentOptionOrder);
@@ -605,6 +608,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
         commandId: CommandId.make(uuidv4()),
         projectId,
         workspaceRoot,
+        machineMode: resolveNewProjectMachineMode(environment.threadMachines),
         createdAt: new Date().toISOString(),
       });
       const result = await createProject({

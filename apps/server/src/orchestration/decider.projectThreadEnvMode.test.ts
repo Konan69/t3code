@@ -39,6 +39,33 @@ const seedProjectCreated = (sequence: number): OrchestrationEvent => ({
 });
 
 it.layer(NodeServices.layer)("decider project defaultThreadEnvMode", (it) => {
+  it.effect("persists machine mode atomically when the project is created", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "project.create",
+          commandId: CommandId.make("cmd-project-machine-create"),
+          projectId,
+          title: "Machine project",
+          workspaceRoot: "/tmp/machine-project",
+          machineMode: "thread",
+          createdAt: now,
+        },
+        readModel: createEmptyReadModel(now),
+      });
+
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.type).toBe("project.created");
+      expect((event.payload as { machineMode?: unknown }).machineMode).toBe("thread");
+
+      const readModel = yield* projectEvent(createEmptyReadModel(now), {
+        ...event,
+        sequence: 1,
+      });
+      expect(readModel.projects[0]?.machineMode).toBe("thread");
+    }),
+  );
+
   it.effect("propagates defaultThreadEnvMode through meta.update into the read model", () =>
     Effect.gen(function* () {
       const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
