@@ -669,14 +669,6 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (Option.isSome(ensuredMachine) && preferredProvider === "claudeAgent") {
-      return yield* new ProviderAdapterRequestError({
-        provider: preferredProvider,
-        method: "thread.turn.start",
-        detail:
-          "Claude Agent SDK sessions cannot run in thread machines because the SDK owns its child-process transport. Disable project machine mode or select another provider.",
-      });
-    }
     const project = yield* resolveProject(thread.projectId);
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread: {

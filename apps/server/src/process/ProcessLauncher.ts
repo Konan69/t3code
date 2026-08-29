@@ -32,6 +32,10 @@ export function processLaunchLogFields(input: ProcessLaunchInput) {
 }
 
 export interface ProcessLauncherShape {
+  readonly resolveSdkExecutable: (input: {
+    readonly threadId?: ThreadId | undefined;
+    readonly command: string;
+  }) => Effect.Effect<string, MachineServiceError>;
   readonly hostReachableUrl?:
     | ((input: {
         readonly threadId?: ThreadId | undefined;
@@ -55,6 +59,7 @@ export const makeHostProcessLauncher = (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ): ProcessLauncherShape =>
   ProcessLauncher.of({
+    resolveSdkExecutable: (input) => Effect.succeed(input.command),
     hostReachableUrl: (input) => Effect.succeed(input.url),
     launch: (input) =>
       Effect.logDebug("Launching provider child process.", processLaunchLogFields(input)).pipe(

@@ -84,6 +84,11 @@ describe("MachineProcessLauncher", () => {
           machineInput = input;
           return Effect.succeed(handle);
         },
+        ensureExecutableShim: ({ binding: machineBinding, command }) => {
+          expect(machineBinding).toEqual(binding);
+          expect(command).toBe("/host/bin/claude");
+          return Effect.succeed("/t3/machine-shims/thread-machine-launch-thread/claude");
+        },
         hostReachableUrl: (machineBinding, url) => {
           hostReachableInput = { binding: machineBinding, url };
           return Effect.succeed("http://10.42.0.18:4301/");
@@ -114,6 +119,9 @@ describe("MachineProcessLauncher", () => {
         extendEnv: false,
         shell: false,
       });
+      expect(yield* launcher.resolveSdkExecutable({ threadId, command: "/host/bin/claude" })).toBe(
+        "/t3/machine-shims/thread-machine-launch-thread/claude",
+      );
       expect(yield* launcher.hostReachableUrl!({ threadId, url: "http://127.0.0.1:4301" })).toBe(
         "http://10.42.0.18:4301/",
       );
@@ -138,6 +146,7 @@ describe("MachineProcessLauncher", () => {
           machineLaunches += 1;
           return Effect.succeed(handle);
         },
+        ensureExecutableShim: () => Effect.die("machine shim resolution should not run"),
         hostReachableUrl: () => Effect.die("machine URL resolution should not run"),
       },
       {
@@ -169,6 +178,9 @@ describe("MachineProcessLauncher", () => {
           shell: false,
         },
       });
+      expect(yield* launcher.resolveSdkExecutable({ threadId, command: "/host/bin/claude" })).toBe(
+        "/host/bin/claude",
+      );
       expect(yield* launcher.hostReachableUrl!({ threadId, url: "http://127.0.0.1:4301" })).toBe(
         "http://127.0.0.1:4301",
       );
