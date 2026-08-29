@@ -3260,17 +3260,25 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
         },
+        machineMode: "thread",
         createdAt,
       });
 
-      const projectRows = yield* sql<{ readonly title: string; readonly scriptsJson: string }>`
+      const projectRows = yield* sql<{
+        readonly title: string;
+        readonly scriptsJson: string;
+        readonly machineMode: string;
+      }>`
         SELECT
           title,
-          scripts_json AS "scriptsJson"
+          scripts_json AS "scriptsJson",
+          machine_mode AS "machineMode"
         FROM projection_projects
         WHERE project_id = 'project-live'
       `;
-      assert.deepEqual(projectRows, [{ title: "Live Project", scriptsJson: "[]" }]);
+      assert.deepEqual(projectRows, [
+        { title: "Live Project", scriptsJson: "[]", machineMode: "thread" },
+      ]);
 
       const projectorRows = yield* sql<{ readonly lastAppliedSequence: number }>`
         SELECT
