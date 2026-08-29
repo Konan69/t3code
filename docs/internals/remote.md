@@ -155,8 +155,17 @@ Worker itself. See [t3-connect.md](./t3-connect.md).
 
 ### Cloudbox wake-on-connect
 
-The desktop client can attach a local wake policy to one T3 Connect relay target without adding a
-settings UI. Start the desktop process with all three required variables:
+A saved T3 Connect environment can carry a device-local wake policy. The easiest way to attach one is
+Settings → Connections: the environment row shows **Set up wake-on-connect…** (or **Edit wake
+policy** once configured) and asks for the wake service URL, the cloudbox name, and the wake secret.
+With a policy in place the row shows the host state read from the service's read-only
+`GET /status/<name>` endpoint — Asleep, Waking…, Awake, Stopped — polled every 30 seconds while the
+page is visible (every 5 seconds while a wake is pending), plus a **Wake** button. The button is the
+same explicit intent as Connect: it arms the one-shot wake and retries the relay connection. The
+page never wakes the host by merely being open.
+
+The desktop client can also attach the policy at startup without the UI. Start the desktop process
+with all three required variables:
 
 ```sh
 export CLOUDBOX_WAKE_URL="https://wake.example.com"
