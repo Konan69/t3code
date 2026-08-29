@@ -66,20 +66,51 @@ export function CloudEnvironmentConnectRows({
   const registerEnvironment = useAtomCommand(environmentCatalog.register, {
     reportFailure: false,
   });
+  const armWakeEnvironment = useAtomCommand(environmentCatalog.armWake, {
+    reportFailure: false,
+  });
   const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
     reportFailure: false,
   });
   const connectRelayEnvironment = useCallback(
-    (environment: RelayClientEnvironmentRecord) =>
-      registerEnvironment(
+    async (environment: RelayClientEnvironmentRecord) => {
+      const readWakeConfig = window.desktopBridge?.getCloudboxWakeConfig;
+      const wakeConfig =
+        readWakeConfig === undefined
+          ? null
+          : await readWakeConfig().catch(() => {
+              console.warn(
+                "[cloudbox-wake] Could not read the desktop wake configuration; continuing without it.",
+              );
+              return null;
+            });
+      const wakePolicy =
+        wakeConfig !== null &&
+        (wakeConfig.environmentId !== null
+          ? wakeConfig.environmentId === environment.environmentId
+          : wakeConfig.name === environment.label)
+          ? {
+              endpoint: wakeConfig.endpoint,
+              name: wakeConfig.name,
+              secret: wakeConfig.secret,
+              mode: "explicit-intent" as const,
+            }
+          : undefined;
+      const result = await registerEnvironment(
         new RelayConnectionRegistration({
           target: new RelayConnectionTarget({
             environmentId: environment.environmentId,
             label: environment.label,
+            ...(wakePolicy === undefined ? {} : { wakePolicy }),
           }),
         }),
-      ),
-    [registerEnvironment],
+      );
+      if (wakePolicy !== undefined) {
+        await armWakeEnvironment(environment.environmentId);
+      }
+      return result;
+    },
+    [armWakeEnvironment, registerEnvironment],
   );
   const [connectingEnvironmentId, setConnectingEnvironmentId] = useState<EnvironmentId | null>(
     null,
