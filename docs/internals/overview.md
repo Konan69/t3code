@@ -127,6 +127,34 @@ scoped adapter; `ProviderInstanceRegistry` owns live instances and `ProviderAdap
 an instance to its adapter, so `ProviderService` routes session and turn operations without knowing
 which agent is behind them. See [providers.md](./providers.md).
 
+## Thread machines
+
+Native Linux servers can run a project's threads in Incus machines. Machine mode requires
+`T3_MACHINE_IDENTITY_MANIFEST` to contain the absolute path of a JSON manifest with this exact schema
+(no additional properties):
+
+```json
+{
+  "version": 1,
+  "mounts": [
+    {
+      "hostPath": "/absolute/host/directory",
+      "guestPath": "/absolute/guest/directory",
+      "readOnly": false
+    }
+  ]
+}
+```
+
+Every `hostPath` must be an existing directory. A missing environment variable, unreadable or invalid
+manifest, relative path, or non-directory host path fails machine creation before any identity device
+is mounted. Incus disk devices use `shift=true`; read-only entries also use `readonly=true`. The idmap
+makes host-user-owned directories appear owned by guest uid/gid 1000 without changing ownership on
+the host.
+
+Identity devices are reconciled at creation and before each machine process execution. Desired
+mounts are added or updated by index and guest-path slug; stale `identity-*` devices are removed.
+
 ## Checkpointing
 
 Each turn is bracketed by workspace checkpoints so diffs and reverts are exact. `CheckpointStore`

@@ -504,6 +504,7 @@ const buildAppUnderTest = (options?: {
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,
+      machineIdentityManifest: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
