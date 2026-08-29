@@ -31,6 +31,8 @@ const ATTACHMENTS_DEVICE_NAME = "attachments";
 const T3_MCP_PROXY_DEVICE_NAME = "t3-mcp";
 const IDENTITY_DEVICE_PREFIX = "identity-";
 const MACHINE_AGENT_WAIT_LIMIT = "180 seconds";
+const ThreadDatasetName = Schema.String.check(Schema.isPattern(/^tank\/threads\/[^/]+$/));
+const isThreadDatasetName = Schema.is(ThreadDatasetName);
 const MACHINE_GUEST_PATH = [
   `/home/${MACHINE_GUEST_USER}/.local/bin`,
   `/home/${MACHINE_GUEST_USER}/.local/share/pnpm`,
@@ -356,8 +358,22 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       } satisfies ThreadMachineBinding;
     };
 
-    const datasetForBinding = (binding: ThreadMachineBinding) =>
-      binding.hostWorkspaceRoot.replace(/^\/+/, "");
+    const parentDatasetForBinding = Effect.fn("IncusMachineService.parentDatasetForBinding")(
+      function* (binding: ThreadMachineBinding) {
+        const workspaceDataset = binding.hostWorkspaceRoot.replace(/^\/+/, "");
+        const workspaceSuffix = "/ws";
+        const dataset = workspaceDataset.endsWith(workspaceSuffix)
+          ? workspaceDataset.slice(0, -workspaceSuffix.length)
+          : workspaceDataset;
+        if (`${dataset}${workspaceSuffix}` !== workspaceDataset || !isThreadDatasetName(dataset)) {
+          return yield* commandError(
+            "dataset.destroy",
+            `Refusing to destroy dataset '${dataset}'; expected exactly 'tank/threads/<thread id>'.`,
+          );
+        }
+        return dataset;
+      },
+    );
 
     const ensureDataset = Effect.fn("IncusMachineService.ensureDataset")(function* (
       threadId: ThreadId,
@@ -816,7 +832,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         if (Option.isSome(current)) {
           yield* runChecked("destroy", INCUS_BINARY, ["delete", binding.machineName, "--force"]);
         }
-        const dataset = datasetForBinding(binding);
+        const dataset = yield* parentDatasetForBinding(binding);
         if (yield* datasetExists(dataset)) {
           yield* runZfsChecked("dataset.destroy", ["destroy", "-r", dataset]);
         }
