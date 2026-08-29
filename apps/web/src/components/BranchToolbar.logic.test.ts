@@ -502,6 +502,11 @@ describe("resolveLockedWorkspaceLabel", () => {
   it("uses a shorter label for an attached worktree", () => {
     expect(resolveLockedWorkspaceLabel("/repo/.t3/worktrees/feature-a")).toBe("Worktree");
   });
+
+  it("names the thread machine regardless of the worktree path", () => {
+    expect(resolveLockedWorkspaceLabel(null, true)).toBe("Thread machine");
+    expect(resolveLockedWorkspaceLabel("/tank/threads/abc/ws", true)).toBe("Thread machine");
+  });
 });
 
 describe("deriveLocalBranchNameFromRemoteRef", () => {
