@@ -24,7 +24,7 @@ import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as MachineServiceLive from "./machine/MachineServiceLive.ts";
 import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
-import * as ProcessLauncher from "./process/ProcessLauncher.ts";
+import * as MachineProcessLauncher from "./process/MachineProcessLauncher.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
@@ -60,6 +60,9 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "./orchestration/ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "./orchestration/ThreadPlanProgress.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
@@ -277,13 +280,20 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
   Layer.provide(ProviderSessionRuntime.layer),
 );
 
-const HostProcessLauncherLayerLive = ProcessLauncher.HostProcessLauncherLive;
+const MachineProcessLauncherSnapshotLayerLive = OrchestrationProjectionSnapshotQueryLive.pipe(
+  Layer.provideMerge(ThreadBackgroundLiveness.layer),
+  Layer.provideMerge(ThreadPlanProgress.layer),
+);
+const MachineProcessLauncherLayerLive = MachineProcessLauncher.layer.pipe(
+  Layer.provide(MachineServiceLayerLive),
+  Layer.provide(MachineProcessLauncherSnapshotLayerLive),
+);
 const OpenCodeRuntimeLayerLive = OpenCodeRuntime.OpenCodeRuntimeProcessLauncher.pipe(
-  Layer.provide(HostProcessLauncherLayerLive),
+  Layer.provide(MachineProcessLauncherLayerLive),
 );
 const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationProcessLauncherLive.pipe(
   Layer.provide(OpenCodeRuntimeLayerLive),
-  Layer.provide(HostProcessLauncherLayerLive),
+  Layer.provide(MachineProcessLauncherLayerLive),
 );
 const ProviderProcessRuntimeLayerLive = ProviderInstanceRegistryLayerLive.pipe(
   Layer.provideMerge(OpenCodeRuntimeLayerLive),
