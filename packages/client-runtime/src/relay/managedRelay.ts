@@ -4,22 +4,28 @@ import {
   type RelayClientEnvironmentRecord,
   type RelayClientDeviceRecord,
   RelayConnectEnvironmentEndpoint,
+  RelayConfigureEnvironmentHostLifecycleEndpoint,
   type RelayDeviceRegistrationRequest,
   RelayDpopAccessTokenScope,
   RelayDpopTokenExchangeGrantType,
   type RelayEnvironmentConnectRequest,
   type RelayEnvironmentConnectResponse,
+  type RelayEnvironmentHostLifecycleConfigRequest,
+  type RelayEnvironmentHostStatusResponse,
   type RelayEnvironmentLinkChallengeRequest,
   type RelayEnvironmentLinkChallengeResponse,
   type RelayEnvironmentLinkRequest,
   type RelayEnvironmentLinkResponse,
   type RelayEnvironmentStatusResponse,
+  type RelayEnvironmentWakeResponse,
   RelayExchangeDpopAccessTokenEndpoint,
   RelayGetEnvironmentStatusEndpoint,
+  RelayGetEnvironmentHostStatusEndpoint,
   RelayJwtSubjectTokenType,
   type RelayAgentActivitySnapshotResponse,
   type RelayLiveActivityRegistrationRequest,
   RelayMobileRegistrationScope,
+  RelayRemoveEnvironmentHostLifecycleEndpoint,
   type RelayOkResponse,
   type RelayPublicClientId,
   RelayRegisterDeviceEndpoint,
@@ -28,6 +34,7 @@ import {
   RelayProtectedError,
   type RelayProtectedError as RelayProtectedErrorType,
   RelayUnregisterDeviceEndpoint,
+  RelayWakeEnvironmentHostEndpoint,
 } from "@t3tools/contracts/relay";
 import { encodeOAuthScope, oauthScopeSetEquals } from "@t3tools/shared/oauthScope";
 import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
@@ -90,6 +97,10 @@ export const ManagedRelayRequestAction = Schema.Literals([
   "link relay environment",
   "unlink relay environment",
   "get relay environment status",
+  "configure relay environment host lifecycle",
+  "remove relay environment host lifecycle",
+  "get relay environment host status",
+  "wake relay environment host",
   "connect relay environment",
   "register relay mobile device",
   "unregister relay mobile device",
@@ -106,6 +117,10 @@ export const ManagedRelayRequestActivity = Schema.Literals([
   "Relay environment linking",
   "Relay environment unlinking",
   "Relay environment status request",
+  "Relay environment host lifecycle configuration",
+  "Relay environment host lifecycle removal",
+  "Relay environment host status request",
+  "Relay environment host wake request",
   "Relay environment connection",
   "Relay mobile device registration",
   "Relay mobile device unregistration",
@@ -282,6 +297,27 @@ export class ManagedRelayClient extends Context.Service<
       readonly environmentId: RelayClientEnvironmentRecord["environmentId"];
       readonly deviceId?: string;
     }) => Effect.Effect<RelayEnvironmentConnectResponse, ManagedRelayClientError>;
+    readonly configureEnvironmentHostLifecycle: (input: {
+      readonly clerkToken: string;
+      readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
+      readonly environmentId: RelayClientEnvironmentRecord["environmentId"];
+      readonly config: RelayEnvironmentHostLifecycleConfigRequest;
+    }) => Effect.Effect<RelayOkResponse, ManagedRelayClientError>;
+    readonly removeEnvironmentHostLifecycle: (input: {
+      readonly clerkToken: string;
+      readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
+      readonly environmentId: RelayClientEnvironmentRecord["environmentId"];
+    }) => Effect.Effect<RelayOkResponse, ManagedRelayClientError>;
+    readonly getEnvironmentHostStatus: (input: {
+      readonly clerkToken: string;
+      readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
+      readonly environmentId: RelayClientEnvironmentRecord["environmentId"];
+    }) => Effect.Effect<RelayEnvironmentHostStatusResponse, ManagedRelayClientError>;
+    readonly wakeEnvironmentHost: (input: {
+      readonly clerkToken: string;
+      readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
+      readonly environmentId: RelayClientEnvironmentRecord["environmentId"];
+    }) => Effect.Effect<RelayEnvironmentWakeResponse, ManagedRelayClientError>;
     readonly registerDevice: (input: {
       readonly clerkToken: string;
       readonly payload: RelayDeviceRegistrationRequest;
@@ -414,6 +450,14 @@ function disabledManagedRelayClient(relayUrl: string): ManagedRelayClient["Servi
     unlinkEnvironment: unavailable("clientRuntime.managedRelay.unlinkEnvironment"),
     getEnvironmentStatus: unavailable("clientRuntime.managedRelay.getEnvironmentStatus"),
     connectEnvironment: unavailable("clientRuntime.managedRelay.connectEnvironment"),
+    configureEnvironmentHostLifecycle: unavailable(
+      "clientRuntime.managedRelay.configureEnvironmentHostLifecycle",
+    ),
+    removeEnvironmentHostLifecycle: unavailable(
+      "clientRuntime.managedRelay.removeEnvironmentHostLifecycle",
+    ),
+    getEnvironmentHostStatus: unavailable("clientRuntime.managedRelay.getEnvironmentHostStatus"),
+    wakeEnvironmentHost: unavailable("clientRuntime.managedRelay.wakeEnvironmentHost"),
     registerDevice: unavailable("clientRuntime.managedRelay.registerDevice"),
     unregisterDevice: unavailable("clientRuntime.managedRelay.unregisterDevice"),
     registerLiveActivity: unavailable("clientRuntime.managedRelay.registerLiveActivity"),
@@ -456,6 +500,30 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
     ): DpopProofTarget => ({
       method: RelayConnectEnvironmentEndpoint.method,
       url: urlBuilder.dpopClient.connectEnvironment({ params: { environmentId } }),
+    }),
+    configureEnvironmentHostLifecycle: (
+      environmentId: RelayClientEnvironmentRecord["environmentId"],
+    ): DpopProofTarget => ({
+      method: RelayConfigureEnvironmentHostLifecycleEndpoint.method,
+      url: urlBuilder.dpopClient.configureEnvironmentHostLifecycle({ params: { environmentId } }),
+    }),
+    removeEnvironmentHostLifecycle: (
+      environmentId: RelayClientEnvironmentRecord["environmentId"],
+    ): DpopProofTarget => ({
+      method: RelayRemoveEnvironmentHostLifecycleEndpoint.method,
+      url: urlBuilder.dpopClient.removeEnvironmentHostLifecycle({ params: { environmentId } }),
+    }),
+    getEnvironmentHostStatus: (
+      environmentId: RelayClientEnvironmentRecord["environmentId"],
+    ): DpopProofTarget => ({
+      method: RelayGetEnvironmentHostStatusEndpoint.method,
+      url: urlBuilder.dpopClient.getEnvironmentHostStatus({ params: { environmentId } }),
+    }),
+    wakeEnvironmentHost: (
+      environmentId: RelayClientEnvironmentRecord["environmentId"],
+    ): DpopProofTarget => ({
+      method: RelayWakeEnvironmentHostEndpoint.method,
+      url: urlBuilder.dpopClient.wakeEnvironmentHost({ params: { environmentId } }),
     }),
     registerDevice: (): DpopProofTarget => ({
       method: RelayRegisterDeviceEndpoint.method,
@@ -822,6 +890,99 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
         );
       },
       Effect.withSpan("clientRuntime.managedRelay.connectEnvironment"),
+      withRelayClientTracing,
+    ),
+    configureEnvironmentHostLifecycle: Effect.fnUntraced(
+      function* (input) {
+        return yield* runDpopRequest(
+          {
+            clerkToken: input.clerkToken,
+            scopes: input.scopes,
+            target: dpopProofTargets.configureEnvironmentHostLifecycle(input.environmentId),
+          },
+          (authorization) =>
+            client.dpopClient
+              .configureEnvironmentHostLifecycle({
+                headers: dpopHeaders(authorization),
+                params: { environmentId: input.environmentId },
+                payload: input.config,
+              })
+              .pipe(
+                Effect.mapError(relayRequestError("configure relay environment host lifecycle")),
+                timeoutRelayRequest("Relay environment host lifecycle configuration"),
+              ),
+        );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.configureEnvironmentHostLifecycle"),
+      withRelayClientTracing,
+    ),
+    removeEnvironmentHostLifecycle: Effect.fnUntraced(
+      function* (input) {
+        return yield* runDpopRequest(
+          {
+            clerkToken: input.clerkToken,
+            scopes: input.scopes,
+            target: dpopProofTargets.removeEnvironmentHostLifecycle(input.environmentId),
+          },
+          (authorization) =>
+            client.dpopClient
+              .removeEnvironmentHostLifecycle({
+                headers: dpopHeaders(authorization),
+                params: { environmentId: input.environmentId },
+              })
+              .pipe(
+                Effect.mapError(relayRequestError("remove relay environment host lifecycle")),
+                timeoutRelayRequest("Relay environment host lifecycle removal"),
+              ),
+        );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.removeEnvironmentHostLifecycle"),
+      withRelayClientTracing,
+    ),
+    getEnvironmentHostStatus: Effect.fnUntraced(
+      function* (input) {
+        return yield* runDpopRequest(
+          {
+            clerkToken: input.clerkToken,
+            scopes: input.scopes,
+            target: dpopProofTargets.getEnvironmentHostStatus(input.environmentId),
+          },
+          (authorization) =>
+            client.dpopClient
+              .getEnvironmentHostStatus({
+                headers: dpopHeaders(authorization),
+                params: { environmentId: input.environmentId },
+              })
+              .pipe(
+                Effect.mapError(relayRequestError("get relay environment host status")),
+                timeoutRelayRequest("Relay environment host status request"),
+              ),
+        );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.getEnvironmentHostStatus"),
+      withRelayClientTracing,
+    ),
+    wakeEnvironmentHost: Effect.fnUntraced(
+      function* (input) {
+        return yield* runDpopRequest(
+          {
+            clerkToken: input.clerkToken,
+            scopes: input.scopes,
+            target: dpopProofTargets.wakeEnvironmentHost(input.environmentId),
+          },
+          (authorization) =>
+            client.dpopClient
+              .wakeEnvironmentHost({
+                headers: dpopHeaders(authorization),
+                params: { environmentId: input.environmentId },
+              })
+              .pipe(
+                Effect.mapError(relayRequestError("wake relay environment host")),
+                timeoutRelayRequest("Relay environment host wake request"),
+              ),
+        );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.wakeEnvironmentHost"),
       withRelayClientTracing,
     ),
     registerDevice: Effect.fnUntraced(

@@ -1,5 +1,9 @@
 import { EnvironmentId, type DesktopSshEnvironmentTarget } from "@t3tools/contracts";
-import { RelayEnvironmentConnectScope } from "@t3tools/contracts/relay";
+import {
+  RelayEnvironmentConnectNotAuthorizedError,
+  RelayEnvironmentConnectScope,
+  RelayEnvironmentWakeScope,
+} from "@t3tools/contracts/relay";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -77,6 +81,8 @@ function collectingTracer(spans: Array<string>): Tracer.Tracer {
 
 function relayClient(
   connectEnvironment: ManagedRelay.ManagedRelayClient["Service"]["connectEnvironment"],
+  wakeEnvironmentHost: ManagedRelay.ManagedRelayClient["Service"]["wakeEnvironmentHost"] = () =>
+    unsupported("wakeEnvironmentHost"),
 ) {
   return ManagedRelay.ManagedRelayClient.of({
     relayUrl: "https://relay.example.test",
@@ -87,6 +93,10 @@ function relayClient(
     unlinkEnvironment: () => unsupported("unlinkEnvironment"),
     getEnvironmentStatus: () => unsupported("getEnvironmentStatus"),
     connectEnvironment,
+    configureEnvironmentHostLifecycle: () => unsupported("configureEnvironmentHostLifecycle"),
+    removeEnvironmentHostLifecycle: () => unsupported("removeEnvironmentHostLifecycle"),
+    getEnvironmentHostStatus: () => unsupported("getEnvironmentHostStatus"),
+    wakeEnvironmentHost,
     registerDevice: () => unsupported("registerDevice"),
     unregisterDevice: () => unsupported("unregisterDevice"),
     registerLiveActivity: () => unsupported("registerLiveActivity"),
@@ -99,6 +109,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly profiles?: ReadonlyArray<ConnectionProfile>;
   readonly credentials?: ReadonlyArray<readonly [string, ConnectionCredential]>;
   readonly connectEnvironment?: ManagedRelay.ManagedRelayClient["Service"]["connectEnvironment"];
+  readonly wakeEnvironmentHost?: ManagedRelay.ManagedRelayClient["Service"]["wakeEnvironmentHost"];
   readonly authorizeBearer?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeBearer"];
   readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
   readonly primaryBearerToken?: string;
@@ -206,6 +217,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
               credential: "relay-bootstrap",
               expiresAt: "2026-06-06T00:00:00.000Z",
             })),
+        options?.wakeEnvironmentHost,
       ),
     ),
   );
@@ -430,6 +442,77 @@ describe("ConnectionResolver", () => {
           }),
         );
         expect(yield* Ref.get(relayInputs)).toBe(2);
+      }).pipe(Effect.provide(brokerLayer));
+    }),
+  );
+
+  it.effect("uses the account relay wake once for an armed relay without a local secret", () =>
+    Effect.gen(function* () {
+      const wakeInputs = yield* Ref.make<ReadonlyArray<Record<string, unknown>>>([]);
+      const target = new RelayConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Cloud",
+      });
+      const brokerLayer = yield* makeDependencies({
+        wakeEnvironmentHost: (input) =>
+          Ref.update(wakeInputs, (values) => [...values, input]).pipe(
+            Effect.as({
+              environmentId: input.environmentId,
+              provider: "gcp" as const,
+              state: "resuming" as const,
+              requestedAt: "2026-06-06T00:00:00.000Z",
+            }),
+          ),
+      });
+
+      yield* Effect.gen(function* () {
+        const broker = yield* ConnectionResolver.ConnectionResolver;
+        const wakeIntent = yield* WakeIntent.WakeIntent;
+        yield* wakeIntent.arm(ENVIRONMENT_ID);
+
+        yield* broker.prepare(catalogEntry(target));
+        yield* broker.prepare(catalogEntry(target));
+
+        expect(yield* Ref.get(wakeInputs)).toEqual([
+          {
+            clerkToken: "clerk-session",
+            scopes: [RelayEnvironmentWakeScope],
+            environmentId: ENVIRONMENT_ID,
+          },
+        ]);
+      }).pipe(Effect.provide(brokerLayer));
+    }),
+  );
+
+  it.effect("still connects when an armed relay has no account wake configuration", () =>
+    Effect.gen(function* () {
+      const relayError = new RelayEnvironmentConnectNotAuthorizedError({
+        code: "environment_connect_not_authorized",
+        reason: "host_lifecycle_not_configured",
+        traceId: "trace-no-host-lifecycle",
+      });
+      const target = new RelayConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Cloud",
+      });
+      const brokerLayer = yield* makeDependencies({
+        wakeEnvironmentHost: () =>
+          Effect.fail(
+            new ManagedRelay.ManagedRelayRequestFailedError({
+              action: "wake relay environment host",
+              cause: relayError,
+              relayError,
+              traceId: relayError.traceId,
+            }),
+          ),
+      });
+
+      yield* Effect.gen(function* () {
+        const broker = yield* ConnectionResolver.ConnectionResolver;
+        const wakeIntent = yield* WakeIntent.WakeIntent;
+        yield* wakeIntent.arm(ENVIRONMENT_ID);
+
+        expect((yield* broker.prepare(catalogEntry(target))).environmentId).toBe(ENVIRONMENT_ID);
       }).pipe(Effect.provide(brokerLayer));
     }),
   );

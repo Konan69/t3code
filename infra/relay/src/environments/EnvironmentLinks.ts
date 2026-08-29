@@ -16,6 +16,12 @@ import { relayEnvironmentLinks } from "../persistence/schema.ts";
 
 export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
   readonly environmentPublicKey: string;
+  readonly hostLifecycleTarget?: {
+    readonly provider: "gcp";
+    readonly endpoint: string;
+    readonly name: string;
+    readonly encryptedSecret: string;
+  };
 }
 
 export interface AgentAwarenessDeliveryUserRecord {
@@ -101,6 +107,20 @@ export class EnvironmentLinkRevokePersistenceError extends Schema.TaggedErrorCla
   }
 }
 
+export class EnvironmentHostLifecyclePersistenceError extends Schema.TaggedErrorClass<EnvironmentHostLifecyclePersistenceError>()(
+  "EnvironmentHostLifecyclePersistenceError",
+  {
+    operation: Schema.Literals(["configure", "remove"]),
+    userId: Schema.String,
+    environmentId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to ${this.operation} host lifecycle access for environment '${this.environmentId}'`;
+  }
+}
+
 export class EnvironmentLinks extends Context.Service<
   EnvironmentLinks,
   {
@@ -137,6 +157,18 @@ export class EnvironmentLinks extends Context.Service<
       readonly userId: string;
       readonly environmentId: string;
     }) => Effect.Effect<boolean, EnvironmentLinkRevokePersistenceError>;
+    readonly configureHostLifecycleForUser: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+      readonly provider: "gcp";
+      readonly endpoint: string;
+      readonly name: string;
+      readonly encryptedSecret: string;
+    }) => Effect.Effect<boolean, EnvironmentHostLifecyclePersistenceError>;
+    readonly removeHostLifecycleForUser: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    }) => Effect.Effect<boolean, EnvironmentHostLifecyclePersistenceError>;
   }
 >()("t3code-relay/environments/EnvironmentLinks") {}
 
@@ -307,6 +339,10 @@ const make = Effect.gen(function* () {
           endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
           endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
           endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
+          hostLifecycleProvider: relayEnvironmentLinks.hostLifecycleProvider,
+          hostLifecycleEndpoint: relayEnvironmentLinks.hostLifecycleEndpoint,
+          hostLifecycleName: relayEnvironmentLinks.hostLifecycleName,
+          hostLifecycleSecret: relayEnvironmentLinks.hostLifecycleSecret,
           createdAt: relayEnvironmentLinks.createdAt,
         })
         .from(relayEnvironmentLinks)
@@ -329,6 +365,12 @@ const make = Effect.gen(function* () {
                   row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
               },
               linkedAt: row.createdAt,
+              ...(row.hostLifecycleProvider === "gcp" &&
+              row.hostLifecycleEndpoint !== null &&
+              row.hostLifecycleName !== null &&
+              row.hostLifecycleSecret !== null
+                ? { hostLifecycle: { provider: "gcp" as const, canWake: true as const } }
+                : {}),
             })),
           ),
           Effect.mapError(
@@ -353,6 +395,10 @@ const make = Effect.gen(function* () {
           endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
           endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
           endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
+          hostLifecycleProvider: relayEnvironmentLinks.hostLifecycleProvider,
+          hostLifecycleEndpoint: relayEnvironmentLinks.hostLifecycleEndpoint,
+          hostLifecycleName: relayEnvironmentLinks.hostLifecycleName,
+          hostLifecycleSecret: relayEnvironmentLinks.hostLifecycleSecret,
           createdAt: relayEnvironmentLinks.createdAt,
         })
         .from(relayEnvironmentLinks)
@@ -382,6 +428,20 @@ const make = Effect.gen(function* () {
                   },
                   environmentPublicKey: row.environmentPublicKey,
                   linkedAt: row.createdAt,
+                  ...(row.hostLifecycleProvider === "gcp" &&
+                  row.hostLifecycleEndpoint !== null &&
+                  row.hostLifecycleName !== null &&
+                  row.hostLifecycleSecret !== null
+                    ? {
+                        hostLifecycle: { provider: "gcp" as const, canWake: true as const },
+                        hostLifecycleTarget: {
+                          provider: "gcp" as const,
+                          endpoint: row.hostLifecycleEndpoint,
+                          name: row.hostLifecycleName,
+                          encryptedSecret: row.hostLifecycleSecret,
+                        },
+                      }
+                    : {}),
                 }
               : null;
           }),
@@ -427,6 +487,76 @@ const make = Effect.gen(function* () {
         );
       return rows.length > 0;
     }),
+
+    configureHostLifecycleForUser: Effect.fn(
+      "relay.environment_links.configure_host_lifecycle_for_user",
+    )(function* (input) {
+      const now = DateTime.formatIso(yield* DateTime.now);
+      return yield* db
+        .update(relayEnvironmentLinks)
+        .set({
+          hostLifecycleProvider: input.provider,
+          hostLifecycleEndpoint: input.endpoint,
+          hostLifecycleName: input.name,
+          hostLifecycleSecret: input.encryptedSecret,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayEnvironmentLinks.environmentId, input.environmentId),
+            isNull(relayEnvironmentLinks.revokedAt),
+          ),
+        )
+        .returning({ environmentId: relayEnvironmentLinks.environmentId })
+        .pipe(
+          Effect.map((rows) => rows.length > 0),
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentHostLifecyclePersistenceError({
+                operation: "configure",
+                userId: input.userId,
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
+    }),
+
+    removeHostLifecycleForUser: Effect.fn("relay.environment_links.remove_host_lifecycle_for_user")(
+      function* (input) {
+        const now = DateTime.formatIso(yield* DateTime.now);
+        return yield* db
+          .update(relayEnvironmentLinks)
+          .set({
+            hostLifecycleProvider: null,
+            hostLifecycleEndpoint: null,
+            hostLifecycleName: null,
+            hostLifecycleSecret: null,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(relayEnvironmentLinks.userId, input.userId),
+              eq(relayEnvironmentLinks.environmentId, input.environmentId),
+              isNull(relayEnvironmentLinks.revokedAt),
+            ),
+          )
+          .returning({ environmentId: relayEnvironmentLinks.environmentId })
+          .pipe(
+            Effect.map((rows) => rows.length > 0),
+            Effect.mapError(
+              (cause) =>
+                new EnvironmentHostLifecyclePersistenceError({
+                  operation: "remove",
+                  userId: input.userId,
+                  environmentId: input.environmentId,
+                  cause,
+                }),
+            ),
+          );
+      },
+    ),
   });
 });
 

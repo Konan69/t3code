@@ -1,5 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { RelayEnvironmentStatusScope } from "@t3tools/contracts/relay";
+import { RelayEnvironmentStatusScope, RelayEnvironmentWakeScope } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -39,6 +39,81 @@ function clerkToken(subject: string, nonce: string): string {
 }
 
 describe("ManagedRelayClient", () => {
+  it.effect(
+    "configures and wakes a host through DPoP without exposing the secret in wake calls",
+    () => {
+      const requests: Array<{
+        readonly url: string;
+        readonly method: string;
+        readonly body: string | null;
+      }> = [];
+      const fetchFn = (async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/v1/client/dpop-token")) {
+          return Response.json({
+            access_token: "relay-wake-token",
+            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+            token_type: "DPoP",
+            expires_in: 1_800,
+            scope: RelayEnvironmentWakeScope,
+          });
+        }
+        requests.push({
+          url,
+          method: init?.method ?? "GET",
+          body:
+            typeof init?.body === "string"
+              ? init.body
+              : init?.body instanceof Uint8Array
+                ? new TextDecoder().decode(init.body)
+                : init?.body instanceof ArrayBuffer
+                  ? new TextDecoder().decode(init.body)
+                  : null,
+        });
+        return url.endsWith("/wake")
+          ? Response.json({
+              environmentId: "env-1",
+              provider: "gcp",
+              state: "resuming",
+              requestedAt: "2026-08-29T00:00:00.000Z",
+            })
+          : Response.json({ ok: true });
+      }) satisfies typeof globalThis.fetch;
+
+      return Effect.gen(function* () {
+        const relayClient = yield* ManagedRelay.ManagedRelayClient;
+        const common = {
+          clerkToken: clerkToken("user-1", "session-1"),
+          scopes: [RelayEnvironmentWakeScope],
+          environmentId: EnvironmentId.make("env-1"),
+        } as const;
+        yield* relayClient.configureEnvironmentHostLifecycle({
+          ...common,
+          config: {
+            provider: "gcp",
+            endpoint: "https://wake.example.test",
+            name: "konan",
+            secret: "wake-secret",
+          },
+        });
+        const wake = yield* relayClient.wakeEnvironmentHost(common);
+
+        expect(wake.state).toBe("resuming");
+        expect(requests).toHaveLength(2);
+        expect(requests[0]).toMatchObject({
+          url: "https://relay.example.test/v1/environments/env-1/host-lifecycle",
+          method: "PUT",
+        });
+        expect(requests[0]?.body).toContain("wake-secret");
+        expect(requests[1]).toMatchObject({
+          url: "https://relay.example.test/v1/environments/env-1/wake",
+          method: "POST",
+        });
+        expect(requests[1]?.body ?? "").not.toContain("wake-secret");
+      }).pipe(Effect.provide(managedRelayTestLayer(fetchFn)));
+    },
+  );
+
   it.effect("owns tracing at service and implementation boundaries", () => {
     const spanNames: Array<string> = [];
     const tracer = Tracer.make({
