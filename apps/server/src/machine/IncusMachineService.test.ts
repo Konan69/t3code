@@ -38,7 +38,7 @@ function makeHandle(input: {
 }
 
 const EMPTY_IDENTITY_MANIFEST = JSON.stringify({ version: 1, mounts: [] });
-const PROJECT_ROOT = process.cwd();
+const PROJECT_ROOT = `${process.cwd()}/apps/server/src/machine`;
 
 interface TestIdentityManifestOptions {
   readonly contents?: string;
@@ -85,13 +85,14 @@ const provideIncus = (
 
 function makeMachineSpawner(
   initialDevices: Readonly<Record<string, Readonly<Record<string, string>>>> = {},
+  initialState: { readonly machineExists?: boolean; readonly running?: boolean } = {},
 ) {
   const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
   const devices = new Map(
     Object.entries(initialDevices).map(([name, config]) => [name, new Map(Object.entries(config))]),
   );
-  let machineExists = false;
-  let running = false;
+  let machineExists = initialState.machineExists ?? false;
+  let running = initialState.running ?? false;
   const spawner = ChildProcessSpawner.make((input) => {
     const command = input as unknown as { command: string; args: ReadonlyArray<string> };
     commands.push({ command: command.command, args: command.args });
@@ -428,6 +429,232 @@ describe("IncusMachineService", () => {
       Effect.provide(provideIncus(spawner, { contents: JSON.stringify(manifest) })),
       TestClock.withLive,
     );
+  });
+
+  it.effect(
+    "discovers and reconciles root and workspace dependency devices without traversing excluded trees",
+    () => {
+      const { commands, devices, spawner } = makeMachineSpawner({
+        "deps-0-root": {
+          source: "/old/node_modules",
+          path: "/old/workspace/node_modules",
+          shift: "false",
+          readonly: "true",
+        },
+        "deps-9-stale": {
+          source: "/old/stale/node_modules",
+          path: "/home/kixey/ws/stale/node_modules",
+          shift: "true",
+          readonly: "false",
+        },
+      });
+
+      return Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const projectRoot = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-machine-dependencies-",
+        });
+        yield* Effect.forEach(
+          [
+            "node_modules",
+            "apps/web/node_modules",
+            "node_modules/dependency/node_modules",
+            ".git/hidden/node_modules",
+            "a/b/c/d/e/f/node_modules",
+          ],
+          (relative) =>
+            fileSystem.makeDirectory(path.join(projectRoot, relative), { recursive: true }),
+          { concurrency: 1, discard: true },
+        );
+
+        const machines = yield* MachineService;
+        const binding = Option.getOrThrow(
+          yield* machines.createFromGolden(ThreadId.make("thread-1"), projectRoot),
+        );
+
+        expect(Object.fromEntries(devices.get("deps-0-root") ?? [])).toEqual({
+          source: path.join(projectRoot, "node_modules"),
+          path: "/home/kixey/ws/node_modules",
+          shift: "true",
+          readonly: "false",
+        });
+        expect(Object.fromEntries(devices.get("deps-1-apps-web") ?? [])).toEqual({
+          source: path.join(projectRoot, "apps/web/node_modules"),
+          path: "/home/kixey/ws/apps/web/node_modules",
+          shift: "true",
+          readonly: "false",
+        });
+        expect([...devices.keys()].filter((name) => name.startsWith("deps-"))).toEqual([
+          "deps-0-root",
+          "deps-1-apps-web",
+        ]);
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: ["config", "device", "remove", "thread-thread-1", "deps-9-stale"],
+        });
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: [
+            "config",
+            "device",
+            "set",
+            "thread-thread-1",
+            "deps-0-root",
+            `source=${path.join(projectRoot, "node_modules")}`,
+            "path=/home/kixey/ws/node_modules",
+            "shift=true",
+            "readonly=false",
+          ],
+        });
+        expect(commands).toContainEqual({
+          command: "mkdir",
+          args: ["-p", "/tank/threads/thread-1/ws/apps/web/node_modules"],
+        });
+
+        yield* fileSystem.remove(path.join(projectRoot, "node_modules"), { recursive: true });
+        yield* fileSystem.remove(path.join(projectRoot, "apps/web/node_modules"), {
+          recursive: true,
+        });
+        yield* fileSystem.makeDirectory(path.join(projectRoot, "packages/shared/node_modules"), {
+          recursive: true,
+        });
+        commands.splice(0);
+        yield* machines.exec({ binding, command: "true", args: [] });
+
+        expect([...devices.keys()].filter((name) => name.startsWith("deps-"))).toEqual([
+          "deps-0-packages-shared",
+        ]);
+        expect(Object.fromEntries(devices.get("deps-0-packages-shared") ?? [])).toEqual({
+          source: path.join(projectRoot, "packages/shared/node_modules"),
+          path: "/home/kixey/ws/packages/shared/node_modules",
+          shift: "true",
+          readonly: "false",
+        });
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: ["config", "device", "remove", "thread-thread-1", "deps-0-root"],
+        });
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: ["config", "device", "remove", "thread-thread-1", "deps-1-apps-web"],
+        });
+      }).pipe(
+        Effect.provide(Layer.merge(provideIncus(spawner), NodeServices.layer)),
+        Effect.scoped,
+      );
+    },
+  );
+
+  it.effect("removes stale dependency devices when the project has no node_modules", () => {
+    const { commands, devices, spawner } = makeMachineSpawner({
+      "deps-0-root": {
+        source: "/old/node_modules",
+        path: "/home/kixey/ws/node_modules",
+        shift: "true",
+        readonly: "false",
+      },
+    });
+
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const projectRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-machine-no-dependencies-",
+      });
+      const machines = yield* MachineService;
+      yield* machines.createFromGolden(ThreadId.make("thread-1"), projectRoot);
+
+      expect([...devices.keys()].some((name) => name.startsWith("deps-"))).toBe(false);
+      expect(commands).toContainEqual({
+        command: "incus",
+        args: ["config", "device", "remove", "thread-thread-1", "deps-0-root"],
+      });
+      expect(
+        commands.some(
+          (entry) =>
+            entry.args.slice(0, 3).join(" ") === "config device add" &&
+            entry.args[4]?.startsWith("deps-") === true,
+        ),
+      ).toBe(false);
+    }).pipe(Effect.provide(Layer.merge(provideIncus(spawner), NodeServices.layer)), Effect.scoped);
+  });
+
+  it.effect("does not seed dependencies when the project checkout is the machine workspace", () => {
+    const { commands, devices, spawner } = makeMachineSpawner(
+      {
+        "deps-0-root": {
+          source: "/old/node_modules",
+          path: "/home/kixey/ws/node_modules",
+          shift: "true",
+          readonly: "false",
+        },
+      },
+      { machineExists: true, running: true },
+    );
+
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-machine-workspace-project-",
+      });
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "node_modules"));
+      const binding = {
+        machineId: "thread-thread-1",
+        machineName: "thread-thread-1",
+        state: "running",
+        projectWorkspaceRoot: workspaceRoot,
+        hostWorkspaceRoot: workspaceRoot,
+        guestWorkspaceRoot: "/home/kixey/ws",
+      } satisfies ThreadMachineBinding;
+
+      const machines = yield* MachineService;
+      yield* machines.exec({ binding, command: "true", args: [] });
+
+      expect([...devices.keys()].some((name) => name.startsWith("deps-"))).toBe(false);
+      expect(
+        commands.some(
+          (entry) =>
+            entry.command === "mkdir" ||
+            (["add", "set"].includes(entry.args[2] ?? "") &&
+              entry.args[4]?.startsWith("deps-") === true),
+        ),
+      ).toBe(false);
+    }).pipe(Effect.provide(Layer.merge(provideIncus(spawner), NodeServices.layer)), Effect.scoped);
+  });
+
+  it.effect("fails when dependency discovery exceeds the device cap", () => {
+    const { commands, spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-machine-dependency-cap-",
+      });
+      yield* Effect.forEach(
+        Array.from({ length: 65 }, (_, index) => `packages/pkg-${index}/node_modules`),
+        (relative) =>
+          fileSystem.makeDirectory(path.join(projectRoot, relative), { recursive: true }),
+        { concurrency: 1, discard: true },
+      );
+
+      const machines = yield* MachineService;
+      const error = yield* machines
+        .createFromGolden(ThreadId.make("thread-1"), projectRoot)
+        .pipe(Effect.flip);
+
+      expect(error.operation).toBe("dependencies.discover");
+      expect(error.detail).toContain("more than 64");
+      expect(error.detail).toContain("at most 64");
+      expect(
+        commands.some(
+          (entry) =>
+            ["add", "set", "remove"].includes(entry.args[2] ?? "") &&
+            entry.args[4]?.startsWith("deps-") === true,
+        ),
+      ).toBe(false);
+    }).pipe(Effect.provide(Layer.merge(provideIncus(spawner), NodeServices.layer)), Effect.scoped);
   });
 
   it.effect("reconciles a moved project checkout device before machine exec", () => {
