@@ -147,6 +147,7 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
+import { CloudboxHostControls } from "./CloudboxHostControls";
 import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
@@ -1500,6 +1501,7 @@ function SavedBackendListRow({
               />
             </div>
           ) : null}
+          {environment.relayManaged ? <CloudboxHostControls environment={environment} /> : null}
           {serverUpdateState.status !== "idle" ? (
             <div className="max-w-md">
               <ServerUpdateProgress state={serverUpdateState} />
