@@ -189,6 +189,7 @@ describe("IncusMachineService", () => {
       "codex",
     );
     expect(IncusMachineService.guestProviderBinary("C:\\tools\\pi.cmd")).toBe("pi");
+    expect(IncusMachineService.guestProviderBinary("/host/bin/claude")).toBe("claude");
     expect(
       IncusMachineService.guestProviderArgs("/host/bin/opencode", [
         "serve",
