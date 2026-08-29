@@ -729,15 +729,75 @@ describe("IncusMachineService", () => {
       const deleteIndex = commands.findIndex((entry) => entry.args[0] === "delete");
       const datasetDestroyIndex = commands.findIndex(
         (entry) =>
-          entry.command === "sudo" && entry.args.slice(0, 3).join(" ") === "-n zfs destroy",
+          entry.command === "sudo" &&
+          entry.args.join(" ") === "-n zfs destroy -r tank/threads/thread-1",
       );
       expect(deleteIndex).toBeGreaterThanOrEqual(0);
       expect(datasetDestroyIndex).toBeGreaterThan(deleteIndex);
+      expect(commands[datasetDestroyIndex]).toEqual({
+        command: "sudo",
+        args: ["-n", "zfs", "destroy", "-r", "tank/threads/thread-1"],
+        stdin: "ignore",
+      });
       expect(
         commands
           .filter((entry) => entry.command === "incus")
           .every((entry) => entry.stdin === "ignore"),
       ).toBe(true);
+    }).pipe(Effect.provide(provideIncus(spawner)));
+  });
+
+  it.effect("destroys the thread parent dataset instead of only its workspace child", () => {
+    const { commands, spawner } = makeMachineSpawner();
+    const binding = {
+      machineId: "thread-thread-1",
+      machineName: "thread-thread-1",
+      state: "running",
+      hostWorkspaceRoot: "/tank/threads/thread-1/ws",
+      guestWorkspaceRoot: "/home/kixey/ws",
+    } satisfies ThreadMachineBinding;
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      yield* machines.destroy(binding);
+
+      expect(commands).toContainEqual({
+        command: "sudo",
+        args: ["-n", "zfs", "list", "-H", "-o", "name", "tank/threads/thread-1"],
+      });
+      expect(commands).toContainEqual({
+        command: "sudo",
+        args: ["-n", "zfs", "destroy", "-r", "tank/threads/thread-1"],
+      });
+      expect(commands).not.toContainEqual({
+        command: "sudo",
+        args: ["-n", "zfs", "destroy", "-r", "tank/threads/thread-1/ws"],
+      });
+    }).pipe(Effect.provide(provideIncus(spawner)));
+  });
+
+  it.effect("refuses to destroy a dataset outside the per-thread parent shape", () => {
+    const { commands, spawner } = makeMachineSpawner();
+    const binding = {
+      machineId: "thread-thread-1",
+      machineName: "thread-thread-1",
+      state: "running",
+      hostWorkspaceRoot: "/tank/threads/ws",
+      guestWorkspaceRoot: "/home/kixey/ws",
+    } satisfies ThreadMachineBinding;
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.destroy(binding).pipe(Effect.flip);
+
+      expect(error.operation).toBe("dataset.destroy");
+      expect(error.detail).toContain("expected exactly 'tank/threads/<thread id>'");
+      expect(
+        commands.some(
+          (entry) =>
+            entry.command === "sudo" && entry.args.slice(0, 3).join(" ") === "-n zfs destroy",
+        ),
+      ).toBe(false);
     }).pipe(Effect.provide(provideIncus(spawner)));
   });
 
