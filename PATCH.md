@@ -1,4 +1,39 @@
-# T3 Code local Windows/WSL patch overlay
+# T3 Code local patch overlays
+
+## Thread-machine cloud build — 2026-08-29
+
+- Branch: `local/machines`
+- Windows/WSL overlay base: `local/main-20260828-nightly-1210-patched` at
+  `7a3a3207`
+- Current machine branch head: `72e878db` (merge of
+  [PR #1](https://github.com/Konan69/t3code/pull/1))
+- Project bootstrap fix: `04497fc1`
+- Projection regression coverage: `c882b198`
+
+### Project bootstrap host-escape fix
+
+Projects created against an environment that advertises configured
+thread-machine support now persist `machineMode: thread` in the atomic
+`project.create` event. Web and mobile pass that intent when creating the
+project, while legacy events continue to project as `machineMode: off`.
+
+The server only advertises Incus machine support on native Linux when
+`T3_MACHINE_IDENTITY_MANIFEST` is configured. This prevents a machine-capable
+cloud build from creating a project in host mode and silently launching its
+first thread with the cloud box's hostname and home-directory cwd.
+
+These commits depend on the existing thread-machine stack on `local/machines`;
+do not apply them directly to the Windows/WSL overlay. Reapply this correction
+after that stack, in this order:
+
+```text
+04497fc1 fix(projects): keep new machine projects off the host
+c882b198 test(server): cover project machine mode projection
+```
+
+Validation for the implementation change: 82 focused server, contracts, and
+client-runtime tests; targeted server/contracts/client-runtime/web/mobile
+typechecks; targeted lint and formatting; and `git diff --check`.
 
 ## Current build — 2026-08-28
 
