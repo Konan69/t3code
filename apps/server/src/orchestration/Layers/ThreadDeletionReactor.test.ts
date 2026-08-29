@@ -49,7 +49,7 @@ describe("logCleanupCauseUnlessInterrupted", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
   });
 
-  it("removes the registered worktree before destroying its machine dataset", async () => {
+  it("force-removes the registered worktree before destroying its machine dataset", async () => {
     const order: string[] = [];
     const machine = {
       machineId: "thread-cleanup",
@@ -83,10 +83,15 @@ describe("logCleanupCauseUnlessInterrupted", () => {
         projectWorkspaceRoot: event.payload.projectWorkspaceRoot,
         gitWorkflow: {
           removeWorktree: (input) => {
-            expect(input).toEqual({ cwd: "/repo", path: "/tank/threads/cleanup/ws" });
+            expect(input).toEqual({
+              cwd: "/repo",
+              path: "/tank/threads/cleanup/ws",
+              force: true,
+            });
             order.push("worktree.remove");
             return Effect.void;
           },
+          pruneWorktrees: () => Effect.void,
         },
         machines: {
           destroy: (binding) => {
@@ -101,7 +106,7 @@ describe("logCleanupCauseUnlessInterrupted", () => {
     expect(order).toEqual(["worktree.remove", "dataset.destroy"]);
   });
 
-  it("destroys machine resources when Git worktree removal fails", async () => {
+  it("destroys machine resources before pruning when Git worktree removal fails", async () => {
     const machine = {
       machineId: "thread-failed-create",
       machineName: "thread-failed-create",
@@ -109,33 +114,41 @@ describe("logCleanupCauseUnlessInterrupted", () => {
       hostWorkspaceRoot: "/tank/threads/failed-create/ws",
       guestWorkspaceRoot: "/home/kixey/ws",
     } satisfies ThreadMachineBinding;
-    let destroyed = false;
+    const order: string[] = [];
 
     await Effect.runPromise(
       cleanupMachineWorktree({
         machine,
         projectWorkspaceRoot: "/repo",
         gitWorkflow: {
-          removeWorktree: () =>
-            Effect.fail(
+          removeWorktree: (input) => {
+            expect(input.force).toBe(true);
+            order.push("worktree.remove");
+            return Effect.fail(
               new GitCommandError({
                 operation: "GitVcsDriver.removeWorktree",
                 command: "git worktree remove",
                 cwd: "/repo",
                 detail: "worktree was never created",
               }),
-            ),
+            );
+          },
+          pruneWorktrees: (input) => {
+            expect(input).toEqual({ cwd: "/repo" });
+            order.push("worktree.prune");
+            return Effect.void;
+          },
         },
         machines: {
           destroy: () =>
             Effect.sync(() => {
-              destroyed = true;
+              order.push("dataset.destroy");
             }),
         },
       }),
     );
 
-    expect(destroyed).toBe(true);
+    expect(order).toEqual(["worktree.remove", "dataset.destroy", "worktree.prune"]);
   });
 
   it("preserves interrupt causes", async () => {
