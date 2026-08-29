@@ -3132,11 +3132,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* pruneWorktrees({ cwd: input.cwd });
       return;
     }
-    // Raw stderr stays out of both the wire error and the log (it can carry
-    // secrets); log bounded diagnostics so a genuine failure is visible
-    // server-side.
+    const stderr = result.stderr.trim();
     yield* Effect.logWarning(
-      `GitVcsDriver.removeWorktree: git worktree remove exited with code ${result.exitCode} for ${input.path} (stderr length ${result.stderr.length}).`,
+      `GitVcsDriver.removeWorktree: git worktree remove exited with code ${result.exitCode} for ${input.path} (stderr length ${result.stderr.length}): ${stderr || "<empty>"}`,
     );
     return yield* new GitCommandError({
       ...gitCommandContext({ operation: "GitVcsDriver.removeWorktree", cwd: input.cwd, args }),
