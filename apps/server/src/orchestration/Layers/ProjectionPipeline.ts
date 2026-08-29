@@ -530,7 +530,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             workspaceRoot: event.payload.workspaceRoot,
             defaultModelSelection: event.payload.defaultModelSelection,
             defaultThreadEnvMode: null,
-            machineMode: "off",
+            machineMode: event.payload.machineMode ?? "off",
             faviconPath: event.payload.faviconPath ?? null,
             scripts: event.payload.scripts,
             createdAt: event.payload.createdAt,

@@ -250,6 +250,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
+          ...(command.machineMode !== undefined ? { machineMode: command.machineMode } : {}),
           faviconPath: null,
           scripts: [],
           createdAt: command.createdAt,
