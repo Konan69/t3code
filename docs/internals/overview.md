@@ -175,6 +175,12 @@ worktree's `.git` file points back into the checkout's `.git/worktrees` director
 path lets Git resolve the worktree metadata, shared object store, and refs inside the machine. The
 `project` disk device uses `shift=true` and is reconciled before each machine process execution.
 
+Dependency seeding for machine workspaces bind-mounts the project checkout's root and workspace
+`node_modules` directories into the same relative paths in the thread worktree. This avoids a slow,
+network-bound install for every fresh machine worktree and shares the checkout's already-installed
+dependencies across threads. The mounts are read-write to preserve package-manager behavior, so
+concurrent dependency installs from the checkout or machine workspaces are discouraged.
+
 Each thread machine receives its own host Git worktree. An unset thread branch creates
 `t3/<machineName>` from the project checkout's current branch. An existing branch is checked out
 directly only when no project worktree already uses it; otherwise the machine gets a new
