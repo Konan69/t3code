@@ -655,7 +655,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("rejects Claude Agent SDK sessions when machine mode binds the thread", async () => {
+  it("starts Claude Agent SDK sessions when machine mode binds the thread", async () => {
     const harness = await createHarness({
       threadModelSelection: {
         instanceId: ProviderInstanceId.make("claudeAgent"),
@@ -688,25 +688,17 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      return (
-        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
-        false
-      );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      provider: ProviderDriverKind.make("claudeAgent"),
+      cwd: "/tank/threads/thread-1/ws",
     });
-
-    expect(harness.startSession).not.toHaveBeenCalled();
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(
       thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
-    ).toMatchObject({
-      payload: {
-        detail: expect.stringContaining("Claude Agent SDK sessions cannot run in thread machines"),
-      },
-    });
+    ).toBeUndefined();
   });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
