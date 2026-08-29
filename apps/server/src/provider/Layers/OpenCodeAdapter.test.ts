@@ -58,6 +58,7 @@ const runtimeMock = {
   state: {
     startCalls: [] as string[],
     sessionCreateUrls: [] as string[],
+    sdkDirectories: [] as string[],
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     authHeaders: [] as Array<string | null>,
     abortCalls: [] as string[],
@@ -78,6 +79,7 @@ const runtimeMock = {
   reset() {
     this.state.startCalls.length = 0;
     this.state.sessionCreateUrls.length = 0;
+    this.state.sdkDirectories.length = 0;
     this.state.sessionCreateInputs.length = 0;
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
@@ -135,8 +137,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       };
     }),
   runOpenCodeCommand: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
-  createOpenCodeSdkClient: ({ baseUrl, serverPassword }) =>
-    ({
+  createOpenCodeSdkClient: ({ baseUrl, directory, serverPassword }) => {
+    runtimeMock.state.sdkDirectories.push(directory);
+    return {
       session: {
         create: async (input: Record<string, unknown>) => {
           runtimeMock.state.sessionCreateUrls.push(baseUrl);
@@ -212,7 +215,8 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           })(),
         }),
       },
-    }) as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>,
+    } as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>;
+  },
   loadOpenCodeInventory: () =>
     Effect.fail(
       new OpenCodeRuntimeError({
@@ -288,11 +292,14 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const session = yield* adapter.startSession({
         provider: ProviderDriverKind.make("opencode"),
         threadId: asThreadId("thread-opencode"),
+        cwd: "/home/kixey/ws/packages/app",
         runtimeMode: "full-access",
       });
 
       NodeAssert.equal(session.provider, "opencode");
       NodeAssert.equal(session.threadId, "thread-opencode");
+      NodeAssert.equal(session.cwd, "/home/kixey/ws/packages/app");
+      NodeAssert.deepEqual(runtimeMock.state.sdkDirectories, ["/home/kixey/ws/packages/app"]);
       NodeAssert.deepEqual(runtimeMock.state.startCalls, []);
       NodeAssert.deepEqual(runtimeMock.state.sessionCreateUrls, ["http://127.0.0.1:9999"]);
       NodeAssert.deepEqual(runtimeMock.state.authHeaders, [
