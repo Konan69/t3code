@@ -153,6 +153,36 @@ relay Worker only brokers credentials and a managed endpoint; application traffi
 the provisioned Cloudflare tunnel hostname for the life of the connection, not through the relay
 Worker itself. See [t3-connect.md](./t3-connect.md).
 
+### Cloudbox wake-on-connect
+
+The desktop client can attach a local wake policy to one T3 Connect relay target without adding a
+settings UI. Start the desktop process with all three required variables:
+
+```sh
+export CLOUDBOX_WAKE_URL="https://wake.example.com"
+export CLOUDBOX_WAKE_NAME="konan-dev"
+export CLOUDBOX_WAKE_SECRET="replace-with-the-bearer-secret"
+# Then launch the desktop app from this environment (for example, `vp run dev:desktop`).
+```
+
+`CLOUDBOX_WAKE_URL` is the service base URL; the client posts to
+`<CLOUDBOX_WAKE_URL>/wake/<CLOUDBOX_WAKE_NAME>`. The target must be matched before the policy is
+attached. Set `CLOUDBOX_WAKE_ENVIRONMENT_ID` to the stable T3 Connect environment ID for an exact
+match. When it is omitted, the T3 Connect environment label must exactly equal
+`CLOUDBOX_WAKE_NAME`.
+
+Set the variables before adding the environment from the T3 Connect list. If the environment was
+already saved, remove it and add it again. The resulting `wakePolicy` is device-local catalog data;
+it is encrypted by desktop secure storage, is not synced through the relay, and is never included in
+connection logs. Mobile does not inherit this desktop policy.
+
+Only the explicit Connect action arms the one-shot intent. The resolver consumes that intent before
+relay bootstrap, sends one wake request with a five-second timeout and no retries, and then continues
+the ordinary connection attempt regardless of the wake result. Automatic supervisor retries,
+background reconnects, and application-resume probes do not arm another wake. A `202 resuming`
+response relies on the normal retry ladder: follow-up attempts happen after about 3, 7, 15, and 31
+seconds cumulatively, then continue every 16 seconds until the tunnel returns.
+
 ### Tailscale access
 
 A T3-managed `tailscale serve` mapping exposes the server on the tailnet over HTTPS, and the

@@ -44,6 +44,10 @@ export const DesktopConfig = Config.all({
   commitHashOverride: trimmedString("T3CODE_COMMIT_HASH"),
   desktopLanHostOverride: trimmedString("T3CODE_DESKTOP_LAN_HOST"),
   desktopHttpsEndpointUrls: commaSeparatedStrings("T3CODE_DESKTOP_HTTPS_ENDPOINTS"),
+  cloudboxWakeEndpoint: trimmedString("CLOUDBOX_WAKE_URL"),
+  cloudboxWakeName: trimmedString("CLOUDBOX_WAKE_NAME"),
+  cloudboxWakeSecret: trimmedString("CLOUDBOX_WAKE_SECRET"),
+  cloudboxWakeEnvironmentId: trimmedString("CLOUDBOX_WAKE_ENVIRONMENT_ID"),
   otlpTracesUrl: trimmedString("T3CODE_OTLP_TRACES_URL"),
   otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
     Config.withDefault(10_000),
