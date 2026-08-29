@@ -105,6 +105,7 @@ function sameMachineIdentity(
   return (
     left?.machineId === right.machineId &&
     left.machineName === right.machineName &&
+    left.projectWorkspaceRoot === right.projectWorkspaceRoot &&
     left.hostWorkspaceRoot === right.hostWorkspaceRoot &&
     left.guestWorkspaceRoot === right.guestWorkspaceRoot
   );
@@ -220,7 +221,7 @@ export const make = Effect.gen(function* () {
       return Option.none();
     }
 
-    const workspace = yield* machines.ensureWorkspace(threadId);
+    const workspace = yield* machines.ensureWorkspace(threadId, project.workspaceRoot);
     if (Option.isNone(workspace)) {
       return Option.none();
     }
@@ -235,7 +236,7 @@ export const make = Effect.gen(function* () {
     }
     yield* ensureWorktree(thread, project, workspace.value, preparation);
 
-    const created = yield* machines.createFromGolden(threadId);
+    const created = yield* machines.createFromGolden(threadId, project.workspaceRoot);
     if (Option.isNone(created)) {
       return Option.none();
     }

@@ -27,6 +27,7 @@ const INCUS_BINARY = "incus";
 const ZFS_BINARY = "zfs";
 const INCUS_STORAGE_POOL = "tank";
 const WORKSPACE_DEVICE_NAME = "workspace";
+const PROJECT_DEVICE_NAME = "project";
 const ATTACHMENTS_DEVICE_NAME = "attachments";
 const T3_MCP_PROXY_DEVICE_NAME = "t3-mcp";
 const IDENTITY_DEVICE_PREFIX = "identity-";
@@ -315,6 +316,61 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       },
     );
 
+    const containsPath = (parent: string, candidate: string): boolean => {
+      const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+      return (
+        relative === "" ||
+        (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+      );
+    };
+    const pathsOverlap = (left: string, right: string): boolean =>
+      containsPath(left, right) || containsPath(right, left);
+
+    const validateProjectDevice = Effect.fn("IncusMachineService.validateProjectDevice")(function* (
+      binding: ThreadMachineBinding,
+      manifest: MachineIdentityManifest,
+    ) {
+      const projectWorkspaceRoot = binding.projectWorkspaceRoot;
+      if (projectWorkspaceRoot === undefined) {
+        return;
+      }
+      if (!path.isAbsolute(projectWorkspaceRoot)) {
+        return yield* commandError(
+          "project.validate",
+          `Project workspace root '${projectWorkspaceRoot}' must be absolute.`,
+        );
+      }
+
+      const conflictingMount = [
+        { kind: "workspace", guestPath: binding.guestWorkspaceRoot },
+        ...manifest.mounts.map((mount) => ({ kind: "identity", guestPath: mount.guestPath })),
+      ].find((mount) => pathsOverlap(projectWorkspaceRoot, mount.guestPath));
+      if (conflictingMount) {
+        return yield* commandError(
+          "project.validate",
+          `Project checkout '${projectWorkspaceRoot}' overlaps ${conflictingMount.kind} mount '${conflictingMount.guestPath}'.`,
+        );
+      }
+
+      const info = yield* fileSystem
+        .stat(projectWorkspaceRoot)
+        .pipe(
+          Effect.mapError((cause) =>
+            commandError(
+              "project.validate",
+              `Project workspace root '${projectWorkspaceRoot}' is not an existing directory.`,
+              cause,
+            ),
+          ),
+        );
+      if (info.type !== "Directory") {
+        return yield* commandError(
+          "project.validate",
+          `Project workspace root '${projectWorkspaceRoot}' is not an existing directory.`,
+        );
+      }
+    });
+
     const runZfsChecked = (operation: string, args: ReadonlyArray<string>) => {
       const input = zfsCommand(args, uid);
       return runChecked(operation, input.command, input.args);
@@ -347,12 +403,13 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       );
     });
 
-    const bindingForThread = (threadId: ThreadId) => {
+    const bindingForThread = (threadId: ThreadId, projectWorkspaceRoot?: string) => {
       const machineName = machineNameForThread(threadId);
       return {
         machineId: machineName,
         machineName,
         state: "running",
+        ...(projectWorkspaceRoot === undefined ? {} : { projectWorkspaceRoot }),
         hostWorkspaceRoot: hostWorkspaceRootForThread(threadId),
         guestWorkspaceRoot: MACHINE_GUEST_WORKSPACE_ROOT,
       } satisfies ThreadMachineBinding;
@@ -454,6 +511,71 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       ]);
     });
 
+    const ensureProjectDevice = Effect.fn("IncusMachineService.ensureProjectDevice")(function* (
+      binding: ThreadMachineBinding,
+    ) {
+      const projectWorkspaceRoot = binding.projectWorkspaceRoot;
+      if (projectWorkspaceRoot === undefined) {
+        return;
+      }
+      const desired = {
+        source: projectWorkspaceRoot,
+        path: projectWorkspaceRoot,
+        shift: "true",
+        readonly: "false",
+      } as const;
+      const inspectProperty = (property: keyof typeof desired) =>
+        runCommand("project.inspect", INCUS_BINARY, [
+          "config",
+          "device",
+          "get",
+          binding.machineName,
+          PROJECT_DEVICE_NAME,
+          property,
+        ]);
+      const source = yield* inspectProperty("source");
+      if (source.code !== 0) {
+        yield* runChecked("project.add", INCUS_BINARY, [
+          "config",
+          "device",
+          "add",
+          binding.machineName,
+          PROJECT_DEVICE_NAME,
+          "disk",
+          `source=${desired.source}`,
+          `path=${desired.path}`,
+          `shift=${desired.shift}`,
+          `readonly=${desired.readonly}`,
+        ]);
+        return;
+      }
+
+      const [guestPath, shift, readonly] = yield* Effect.all(
+        [inspectProperty("path"), inspectProperty("shift"), inspectProperty("readonly")],
+        { concurrency: "unbounded" },
+      );
+      const actualReadonly = readonly.stdout.trim() === "true" ? "true" : "false";
+      if (
+        source.stdout.trim() === desired.source &&
+        guestPath.stdout.trim() === desired.path &&
+        shift.stdout.trim() === desired.shift &&
+        actualReadonly === desired.readonly
+      ) {
+        return;
+      }
+      yield* runChecked("project.update", INCUS_BINARY, [
+        "config",
+        "device",
+        "set",
+        binding.machineName,
+        PROJECT_DEVICE_NAME,
+        `source=${desired.source}`,
+        `path=${desired.path}`,
+        `shift=${desired.shift}`,
+        `readonly=${desired.readonly}`,
+      ]);
+    });
+
     const ensureAttachmentsDevice = Effect.fn("IncusMachineService.ensureAttachmentsDevice")(
       function* (binding: ThreadMachineBinding) {
         const result = yield* runCommand("attachments.inspect", INCUS_BINARY, [
@@ -484,8 +606,8 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
 
     const ensureIdentityDevices = Effect.fn("IncusMachineService.ensureIdentityDevices")(function* (
       binding: ThreadMachineBinding,
+      manifest: MachineIdentityManifest,
     ) {
-      const manifest = yield* loadIdentityManifest();
       const listed = yield* runChecked("identity.list", INCUS_BINARY, [
         "config",
         "device",
@@ -668,16 +790,18 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
 
     const ensureWorkspace: MachineServiceShape["ensureWorkspace"] = Effect.fn(
       "IncusMachineService.ensureWorkspace",
-    )(function* (threadId) {
+    )(function* (threadId, projectWorkspaceRoot) {
       yield* ensureDataset(threadId);
-      return Option.some(bindingForThread(threadId));
+      return Option.some(bindingForThread(threadId, projectWorkspaceRoot));
     });
 
     const createFromGolden: MachineServiceShape["createFromGolden"] = Effect.fn(
       "IncusMachineService.createFromGolden",
-    )(function* (threadId) {
-      const binding = bindingForThread(threadId);
+    )(function* (threadId, projectWorkspaceRoot) {
+      const binding = bindingForThread(threadId, projectWorkspaceRoot);
       yield* ensureDataset(threadId);
+      const manifest = yield* loadIdentityManifest();
+      yield* validateProjectDevice(binding, manifest);
       const current = yield* inspect(binding.machineName);
       if (Option.isNone(current)) {
         const type = yield* imageType();
@@ -690,7 +814,8 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         );
       }
       yield* ensureWorkspaceDevice(binding);
-      yield* ensureIdentityDevices(binding);
+      yield* ensureProjectDevice(binding);
+      yield* ensureIdentityDevices(binding, manifest);
       yield* ensureAttachmentsDevice(binding);
       yield* ensureT3McpProxyDevice(binding);
       yield* start(binding);
@@ -741,7 +866,10 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
 
       return Effect.gen(function* () {
         const binding = input.binding!;
-        yield* ensureIdentityDevices(binding);
+        const manifest = yield* loadIdentityManifest();
+        yield* validateProjectDevice(binding, manifest);
+        yield* ensureProjectDevice(binding);
+        yield* ensureIdentityDevices(binding, manifest);
         yield* start(binding);
         yield* ensureAttachmentsDevice(binding);
         yield* ensureT3McpProxyDevice(binding);

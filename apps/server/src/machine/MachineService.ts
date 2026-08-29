@@ -80,9 +80,11 @@ export interface MachineExecInput {
 export interface MachineServiceShape {
   readonly ensureWorkspace: (
     threadId: ThreadId,
+    projectWorkspaceRoot?: string,
   ) => Effect.Effect<Option.Option<ThreadMachineBinding>, MachineServiceError>;
   readonly createFromGolden: (
     threadId: ThreadId,
+    projectWorkspaceRoot?: string,
   ) => Effect.Effect<Option.Option<ThreadMachineBinding>, MachineServiceError>;
   readonly start: (binding: ThreadMachineBinding) => Effect.Effect<void, MachineServiceError>;
   readonly stop: (binding: ThreadMachineBinding) => Effect.Effect<void, MachineServiceError>;

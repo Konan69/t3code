@@ -584,13 +584,33 @@ it.effect("keeps machine lifecycle commands internal and decodes bindings", () =
         machineId: "thread-1",
         machineName: "thread-thread-1",
         state: "running",
+        projectWorkspaceRoot: "/home/kixey/project",
         hostWorkspaceRoot: "/tank/threads/thread-1/ws",
         guestWorkspaceRoot: "/home/kixey/ws",
       },
     };
 
     const internal = yield* decodeOrchestrationCommand(command);
-    assert.strictEqual(internal.type, "thread.machine.bind");
+    if (internal.type !== "thread.machine.bind") {
+      return yield* Effect.die("Expected thread.machine.bind command.");
+    }
+    assert.strictEqual(internal.binding.projectWorkspaceRoot, "/home/kixey/project");
+
+    const legacy = yield* decodeOrchestrationCommand({
+      ...command,
+      commandId: "cmd-machine-bind-legacy",
+      binding: {
+        machineId: "thread-legacy",
+        machineName: "thread-thread-legacy",
+        state: "running",
+        hostWorkspaceRoot: "/tank/threads/thread-legacy/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+      },
+    });
+    if (legacy.type !== "thread.machine.bind") {
+      return yield* Effect.die("Expected legacy thread.machine.bind command.");
+    }
+    assert.strictEqual(legacy.binding.projectWorkspaceRoot, undefined);
     assert.ok(Exit.isFailure(yield* Effect.exit(decodeClientOrchestrationCommand(command))));
   }),
 );
