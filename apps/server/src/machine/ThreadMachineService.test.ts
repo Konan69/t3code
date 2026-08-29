@@ -364,6 +364,16 @@ describe("ThreadMachineService", () => {
     );
   });
 
+  it.effect("includes the root cause detail in ThreadMachineServiceError messages", () => {
+    return Effect.gen(function* () {
+      const service = yield* ThreadMachineService;
+      const error = yield* service.ensureForThread(threadId).pipe(Effect.flip);
+
+      expect(error.detail).toContain("workspace is not writable");
+      expect(error.message).toContain("workspace is not writable");
+    }).pipe(Effect.provide(makeLayer({ machineMode: "thread", failWorktreeCreate: true })));
+  });
+
   it.effect("reuses an existing branch after an archived machine is recreated", () => {
     let worktreeInput: unknown;
     return Effect.gen(function* () {
