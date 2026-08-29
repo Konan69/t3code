@@ -28,6 +28,9 @@ describe("presentHostStatus", () => {
       presentHostStatus({ _tag: "Status", state: "stopped", gceStatus: "TERMINATED" }, false),
     ).toMatchObject({ tone: "stopped", label: "Stopped" });
     expect(
+      presentHostStatus({ _tag: "Status", state: "stopped", gceStatus: "TERMINATED" }, true),
+    ).toMatchObject({ tone: "waking", label: "Starting…" });
+    expect(
       presentHostStatus({ _tag: "Status", state: "other", gceStatus: "SUSPENDING" }, false),
     ).toMatchObject({ tone: "unknown", label: "Host: suspending" });
   });
