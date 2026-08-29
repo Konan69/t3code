@@ -34,6 +34,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 
 const isSshConnectionProfile = Schema.is(SshConnectionProfile);
 
@@ -90,6 +91,7 @@ export class EnvironmentRegistry extends Context.Service<
       | PlatformEnvironmentRemovalError
     >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    readonly armWake: (environmentId: EnvironmentId) => Effect.Effect<void>;
     readonly state: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<SupervisorConnectionState, EnvironmentNotRegisteredError>;
@@ -135,6 +137,7 @@ export const make = Effect.gen(function* () {
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
+  const wakeIntent = yield* WakeIntent.WakeIntent;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const persistedTargets = yield* storage.list;
   const initialEntries = new Map(
@@ -628,6 +631,17 @@ export const make = Effect.gen(function* () {
       Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
       Effect.withSpan("EnvironmentRegistry.retryNow"),
     );
+  const armWake = (environmentId: EnvironmentId) =>
+    getEntry(environmentId).pipe(
+      Effect.flatMap((entry) =>
+        entry.target._tag === "RelayConnectionTarget" && entry.target.wakePolicy !== undefined
+          ? wakeIntent.arm(environmentId)
+          : Effect.void,
+      ),
+      Effect.andThen(retryNow(environmentId)),
+      Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
+      Effect.withSpan("EnvironmentRegistry.armWake"),
+    );
   const state = Effect.fn("EnvironmentRegistry.state")(function* (environmentId: EnvironmentId) {
     const supervisor = yield* acquireSupervisor(environmentId);
     return yield* SubscriptionRef.get(supervisor.state);
@@ -667,6 +681,7 @@ export const make = Effect.gen(function* () {
     remove,
     removeRelayEnvironments,
     retryNow,
+    armWake,
     state,
     stateChanges,
     run,

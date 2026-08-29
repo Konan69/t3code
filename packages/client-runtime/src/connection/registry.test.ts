@@ -46,6 +46,7 @@ import * as EnvironmentRegistry from "./registry.ts";
 import * as RpcSession from "../rpc/session.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -380,6 +381,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
           ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.never }),
         ),
         Layer.succeed(ConnectionDriver.ConnectionDriver, driver),
+        WakeIntent.layer,
         cacheLayer,
         Layer.succeed(Persistence.EnvironmentOwnedDataCleanup, ownedDataCleanup),
       ),

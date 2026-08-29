@@ -115,6 +115,15 @@ export function createEnvironmentCatalogAtoms<R, E>(
         Effect.flatMap((registry) => registry.retryNow(environmentId)),
       ),
   });
+  const armWake = createRuntimeCommand(runtime, {
+    label: "environment-catalog:arm-wake",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (environmentId: EnvironmentIdType) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.armWake(environmentId)),
+      ),
+  });
 
   return {
     catalogAtom,
@@ -126,5 +135,6 @@ export function createEnvironmentCatalogAtoms<R, E>(
     remove,
     removeRelayEnvironments,
     retryNow,
+    armWake,
   };
 }
