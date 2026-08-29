@@ -34,6 +34,8 @@ import type {
 } from "./model.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
+import { wakeEndpoint } from "./wakeEndpoint.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 
 export class ConnectionResolver extends Context.Service<
   ConnectionResolver,
@@ -152,9 +154,13 @@ const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(f
   const session = yield* ClientCapabilities.CloudSession;
   const identity = yield* ClientCapabilities.RelayDeviceIdentity;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+  const wakeIntent = yield* WakeIntent.WakeIntent;
 
   return Effect.fnUntraced(
     function* (target: RelayConnectionTarget) {
+      if (target.wakePolicy !== undefined && (yield* wakeIntent.consume(target.environmentId))) {
+        yield* wakeEndpoint(target.wakePolicy);
+      }
       const authorized = yield* remote.authorizeDpop({
         expectedEnvironmentId: target.environmentId,
         obtainBootstrap: Effect.gen(function* () {
