@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  GitCommandError,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -65,7 +66,10 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
-import { ThreadMachineService } from "../../machine/ThreadMachineService.ts";
+import {
+  ThreadMachineService,
+  ThreadMachineServiceError,
+} from "../../machine/ThreadMachineService.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -160,6 +164,10 @@ describe("ProviderCommandReactor", () => {
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
     readonly onEnsureMachine?: () => void;
     readonly onStartSession?: () => void;
+    readonly ensureMachineEffect?: () => Effect.Effect<
+      Option.Option<ThreadMachineBinding>,
+      ThreadMachineServiceError
+    >;
     readonly ensuredMachine?: ThreadMachineBinding;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -441,8 +449,11 @@ describe("ProviderCommandReactor", () => {
           ThreadMachineService.of({
             ensureForThread: () => {
               input?.onEnsureMachine?.();
-              return Effect.succeed(
-                input?.ensuredMachine ? Option.some(input.ensuredMachine) : Option.none(),
+              return (
+                input?.ensureMachineEffect?.() ??
+                Effect.succeed(
+                  input?.ensuredMachine ? Option.some(input.ensuredMachine) : Option.none(),
+                )
               );
             },
             runSetupForThread: () => Effect.succeed({ status: "no-script" }),
@@ -579,6 +590,69 @@ describe("ProviderCommandReactor", () => {
     expect(order.at(-1)).toBe("start-session");
     expect(order.slice(0, -1).every((entry) => entry === "ensure-machine")).toBe(true);
     expect(order.length).toBeGreaterThan(1);
+  });
+
+  it("surfaces thread machine binding failures as failed turn starts", async () => {
+    const gitDetail = "fatal: could not create work tree dir: Permission denied";
+    const gitError = new GitCommandError({
+      operation: "GitVcsDriver.createWorktree",
+      command: "git worktree add",
+      cwd: "/tmp/provider-project",
+      detail: gitDetail,
+    });
+    const harness = await createHarness({
+      ensureMachineEffect: () =>
+        Effect.fail(
+          new ThreadMachineServiceError({
+            operation: "ensure",
+            threadId: ThreadId.make("thread-1"),
+            detail: gitError.message,
+            cause: gitError,
+          }),
+        ),
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-machine-failure"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-machine-failure"),
+          role: "user",
+          text: "hello machine",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "error";
+    });
+
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session).toMatchObject({
+      status: "error",
+      activeTurnId: null,
+      lastError: expect.stringContaining(gitDetail),
+    });
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      summary: "Provider turn start failed",
+      payload: {
+        detail: expect.stringContaining(`Could not start the thread machine: ${gitError.message}`),
+      },
+    });
   });
 
   it("rejects Claude Agent SDK sessions when machine mode binds the thread", async () => {

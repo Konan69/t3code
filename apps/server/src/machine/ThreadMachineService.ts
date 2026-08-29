@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
@@ -29,9 +30,41 @@ export class ThreadMachineServiceError extends Schema.TaggedErrorClass<ThreadMac
     detail: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return `Thread machine service failed for thread '${this.threadId}' in ${this.operation}: ${this.detail}`;
+  }
+}
 
 const isThreadMachineServiceError = Schema.is(ThreadMachineServiceError);
+
+function innermostCauseMessage(cause: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  let current = cause;
+  let resolved: string | undefined;
+
+  while (Predicate.isObject(current) && !seen.has(current)) {
+    seen.add(current);
+    const message =
+      Predicate.hasProperty(current, "message") && Predicate.isString(current.message)
+        ? current.message.trim()
+        : "";
+    const detail =
+      Predicate.hasProperty(current, "detail") && Predicate.isString(current.detail)
+        ? current.detail.trim()
+        : "";
+    resolved = message || detail || resolved;
+    if (!Predicate.hasProperty(current, "cause") || current.cause === undefined) {
+      break;
+    }
+    current = current.cause;
+  }
+
+  if (Predicate.isString(current) && current.trim().length > 0) {
+    return current.trim();
+  }
+  return resolved;
+}
 
 export type ThreadMachineSetupResult =
   | { readonly status: "no-script" }
@@ -218,7 +251,7 @@ export const make = Effect.gen(function* () {
             : new ThreadMachineServiceError({
                 operation: "ensure",
                 threadId,
-                detail: "Failed to ensure thread machine.",
+                detail: innermostCauseMessage(cause) ?? "Failed to ensure thread machine.",
                 cause,
               }),
         ),
@@ -280,7 +313,7 @@ export const make = Effect.gen(function* () {
           : new ThreadMachineServiceError({
               operation: "setup",
               threadId: input.threadId,
-              detail: "Failed to run setup in thread machine.",
+              detail: innermostCauseMessage(cause) ?? "Failed to run setup in thread machine.",
               cause,
             }),
       ),
