@@ -1,4 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+import * as NodePath from "node:path";
 
 import {
   ThreadMachineBinding as ContractThreadMachineBinding,
@@ -8,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -60,6 +62,26 @@ export class MachineServiceError extends Schema.TaggedErrorClass<MachineServiceE
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+export const hostToGuestPath = Effect.fn("hostToGuestPath")(function* (
+  binding: ThreadMachineBinding,
+  hostPath: string,
+) {
+  const normalizedRoot = NodePath.resolve(binding.hostWorkspaceRoot);
+  const normalizedPath = NodePath.resolve(hostPath);
+  const relative = NodePath.relative(normalizedRoot, normalizedPath);
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${NodePath.sep}`) ||
+    NodePath.isAbsolute(relative)
+  ) {
+    return yield* new MachineServiceError({
+      operation: "hostToGuestPath",
+      detail: `Path '${hostPath}' is outside machine workspace '${binding.hostWorkspaceRoot}'.`,
+    });
+  }
+  return NodePath.join(binding.guestWorkspaceRoot, relative);
+});
 
 export interface MachineExecInput {
   readonly binding?: ThreadMachineBinding | undefined;
