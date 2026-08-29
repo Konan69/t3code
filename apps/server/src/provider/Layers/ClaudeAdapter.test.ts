@@ -163,6 +163,7 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly processLauncher?: ClaudeAdapterLiveOptions["processLauncher"];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -175,6 +176,7 @@ function makeHarness(config?: {
   const adapterOptions: ClaudeAdapterLiveOptions = {
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
     modelCatalog: Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
+    ...(config?.processLauncher ? { processLauncher: config.processLauncher } : {}),
     createQuery: (input) => {
       createInput = input;
       return query;
@@ -342,6 +344,41 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
+    );
+  });
+
+  it.effect("uses the machine shim executable while leaving the SDK cwd on the host", () => {
+    const shimPath = "/t3/machine-shims/thread-thread-claude-1/claude";
+    let resolvedInput:
+      | { readonly threadId?: ThreadId | undefined; readonly command: string }
+      | undefined;
+    const harness = makeHarness({
+      processLauncher: {
+        resolveSdkExecutable: (input) => {
+          resolvedInput = input;
+          return Effect.succeed(shimPath);
+        },
+      },
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        cwd: "/tank/threads/thread-claude-1/ws/packages/server",
+      });
+
+      assert.deepEqual(resolvedInput, { threadId: THREAD_ID, command: "claude" });
+      assert.equal(harness.getLastCreateQueryInput()?.options.pathToClaudeCodeExecutable, shimPath);
+      assert.equal(
+        harness.getLastCreateQueryInput()?.options.cwd,
+        "/tank/threads/thread-claude-1/ws/packages/server",
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
     );
   });
 
