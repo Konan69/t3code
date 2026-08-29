@@ -1,6 +1,7 @@
 import * as Path from "effect/Path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -28,6 +29,7 @@ const INCUS_STORAGE_POOL = "tank";
 const WORKSPACE_DEVICE_NAME = "workspace";
 const ATTACHMENTS_DEVICE_NAME = "attachments";
 const T3_MCP_PROXY_DEVICE_NAME = "t3-mcp";
+const IDENTITY_DEVICE_PREFIX = "identity-";
 const MACHINE_AGENT_WAIT_LIMIT = "180 seconds";
 const MACHINE_GUEST_PATH = [
   `/home/${MACHINE_GUEST_USER}/.local/bin`,
@@ -40,6 +42,19 @@ const MACHINE_GUEST_PATH = [
   "/sbin",
   "/bin",
 ].join(":");
+
+export const MachineIdentityMount = Schema.Struct({
+  hostPath: Schema.String,
+  guestPath: Schema.String,
+  readOnly: Schema.Boolean,
+});
+export type MachineIdentityMount = typeof MachineIdentityMount.Type;
+
+export const MachineIdentityManifest = Schema.Struct({
+  version: Schema.Literal(1),
+  mounts: Schema.Array(MachineIdentityMount),
+});
+export type MachineIdentityManifest = typeof MachineIdentityManifest.Type;
 
 export interface EffectiveIds {
   readonly uid: number;
@@ -98,6 +113,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
     const effectiveIds = yield* EffectiveIdsService;
     const serverConfig = yield* ServerConfig;
     const uid = effectiveIds.uid;
+    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -222,6 +238,80 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         ? Option.some({ status: row.status?.toLowerCase() ?? "unknown" })
         : Option.none<{ readonly status: string }>();
     });
+
+    const loadIdentityManifest = Effect.fn("IncusMachineService.loadIdentityManifest")(
+      function* () {
+        const manifestPath = serverConfig.machineIdentityManifest?.trim();
+        if (!manifestPath) {
+          return yield* commandError(
+            "identity.manifest",
+            "T3_MACHINE_IDENTITY_MANIFEST must name an absolute JSON file when thread machine mode is enabled.",
+          );
+        }
+        if (!path.isAbsolute(manifestPath)) {
+          return yield* commandError(
+            "identity.manifest",
+            `T3_MACHINE_IDENTITY_MANIFEST must be absolute, received '${manifestPath}'.`,
+          );
+        }
+
+        const raw = yield* fileSystem
+          .readFileString(manifestPath)
+          .pipe(
+            Effect.mapError((cause) =>
+              commandError(
+                "identity.manifest.read",
+                `Could not read identity manifest '${manifestPath}'.`,
+                cause,
+              ),
+            ),
+          );
+        const manifest = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(MachineIdentityManifest),
+          { onExcessProperty: "error" },
+        )(raw).pipe(
+          Effect.mapError((cause) =>
+            commandError(
+              "identity.manifest.parse",
+              `Identity manifest '${manifestPath}' is invalid: ${String(cause)}`,
+              cause,
+            ),
+          ),
+        );
+
+        yield* Effect.forEach(
+          manifest.mounts,
+          (mount, index) =>
+            Effect.gen(function* () {
+              if (!path.isAbsolute(mount.hostPath) || !path.isAbsolute(mount.guestPath)) {
+                return yield* commandError(
+                  "identity.manifest.validate",
+                  `Identity mount ${index} must use absolute hostPath and guestPath values.`,
+                );
+              }
+              const info = yield* fileSystem
+                .stat(mount.hostPath)
+                .pipe(
+                  Effect.mapError((cause) =>
+                    commandError(
+                      "identity.manifest.validate",
+                      `Identity hostPath '${mount.hostPath}' at mount ${index} is not an existing directory.`,
+                      cause,
+                    ),
+                  ),
+                );
+              if (info.type !== "Directory") {
+                return yield* commandError(
+                  "identity.manifest.validate",
+                  `Identity hostPath '${mount.hostPath}' at mount ${index} is not an existing directory.`,
+                );
+              }
+            }),
+          { concurrency: 1, discard: true },
+        );
+        return manifest;
+      },
+    );
 
     const runZfsChecked = (operation: string, args: ReadonlyArray<string>) => {
       const input = zfsCommand(args, uid);
@@ -376,6 +466,115 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       },
     );
 
+    const ensureIdentityDevices = Effect.fn("IncusMachineService.ensureIdentityDevices")(function* (
+      binding: ThreadMachineBinding,
+    ) {
+      const manifest = yield* loadIdentityManifest();
+      const listed = yield* runChecked("identity.list", INCUS_BINARY, [
+        "config",
+        "device",
+        "list",
+        binding.machineName,
+      ]);
+      const existingNames = new Set(
+        listed.stdout
+          .split(/\r?\n/)
+          .map((name) => name.trim())
+          .filter((name) => name.length > 0),
+      );
+      const desiredNames = new Set<string>();
+
+      yield* Effect.forEach(
+        manifest.mounts,
+        (mount, index) => {
+          const rawSlug = path.basename(mount.guestPath).toLowerCase();
+          const slug = rawSlug.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "root";
+          const deviceName = `${IDENTITY_DEVICE_PREFIX}${index}-${slug}`;
+          desiredNames.add(deviceName);
+
+          const desired = {
+            source: mount.hostPath,
+            path: mount.guestPath,
+            shift: "true",
+            readonly: mount.readOnly ? "true" : "false",
+          } as const;
+          if (!existingNames.has(deviceName)) {
+            return runChecked("identity.add", INCUS_BINARY, [
+              "config",
+              "device",
+              "add",
+              binding.machineName,
+              deviceName,
+              "disk",
+              `source=${desired.source}`,
+              `path=${desired.path}`,
+              // Keep host ownership unchanged (for example 1001:1002). Incus's
+              // effective-id mapping shifts it to the guest user's uid/gid 1000.
+              "shift=true",
+              ...(mount.readOnly ? ["readonly=true"] : []),
+            ]).pipe(Effect.asVoid);
+          }
+
+          return Effect.gen(function* () {
+            const inspectProperty = (property: keyof typeof desired) =>
+              runChecked("identity.inspect", INCUS_BINARY, [
+                "config",
+                "device",
+                "get",
+                binding.machineName,
+                deviceName,
+                property,
+              ]);
+            const [source, guestPath, shift, readonly] = yield* Effect.all(
+              [
+                inspectProperty("source"),
+                inspectProperty("path"),
+                inspectProperty("shift"),
+                inspectProperty("readonly"),
+              ],
+              { concurrency: "unbounded" },
+            );
+            const actualReadonly = readonly.stdout.trim() === "true" ? "true" : "false";
+            if (
+              source.stdout.trim() === desired.source &&
+              guestPath.stdout.trim() === desired.path &&
+              shift.stdout.trim() === desired.shift &&
+              actualReadonly === desired.readonly
+            ) {
+              return;
+            }
+            yield* runChecked("identity.update", INCUS_BINARY, [
+              "config",
+              "device",
+              "set",
+              binding.machineName,
+              deviceName,
+              `source=${desired.source}`,
+              `path=${desired.path}`,
+              `shift=${desired.shift}`,
+              `readonly=${desired.readonly}`,
+            ]);
+          });
+        },
+        { concurrency: 1, discard: true },
+      );
+
+      yield* Effect.forEach(
+        [...existingNames].filter(
+          (name) => name.startsWith(IDENTITY_DEVICE_PREFIX) && !desiredNames.has(name),
+        ),
+        (name) =>
+          runChecked("identity.remove", INCUS_BINARY, [
+            "config",
+            "device",
+            "remove",
+            binding.machineName,
+            name,
+          ]),
+        { concurrency: 1, discard: true },
+      );
+    });
+
     const ensureT3McpProxyDevice = Effect.fn("IncusMachineService.ensureT3McpProxyDevice")(
       function* (binding: ThreadMachineBinding) {
         const port = options.mcpPort ?? serverConfig.port;
@@ -475,6 +674,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         );
       }
       yield* ensureWorkspaceDevice(binding);
+      yield* ensureIdentityDevices(binding);
       yield* ensureAttachmentsDevice(binding);
       yield* ensureT3McpProxyDevice(binding);
       yield* start(binding);
@@ -525,6 +725,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
 
       return Effect.gen(function* () {
         const binding = input.binding!;
+        yield* ensureIdentityDevices(binding);
         yield* start(binding);
         yield* ensureAttachmentsDevice(binding);
         yield* ensureT3McpProxyDevice(binding);

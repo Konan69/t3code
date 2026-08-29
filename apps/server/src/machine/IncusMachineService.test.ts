@@ -2,8 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@t3tools/contracts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -35,15 +37,136 @@ function makeHandle(input: {
   });
 }
 
-const provideIncus = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
-  Layer.effect(
+const EMPTY_IDENTITY_MANIFEST = JSON.stringify({ version: 1, mounts: [] });
+
+interface TestIdentityManifestOptions {
+  readonly contents?: string;
+  readonly state?: "present" | "missing-file" | "relative-path" | "unset";
+}
+
+const provideIncus = (
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  manifestOptions: TestIdentityManifestOptions = {},
+) => {
+  const serverConfigLayer = Layer.effect(
+    ServerConfig.ServerConfig,
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      if (manifestOptions.state === "unset") {
+        return ServerConfig.make({ ...config, machineIdentityManifest: undefined });
+      }
+      if (manifestOptions.state === "relative-path") {
+        return ServerConfig.make({ ...config, machineIdentityManifest: "identity.json" });
+      }
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const manifestPath = path.join(config.baseDir, "machine-identity.json");
+      if (manifestOptions.state !== "missing-file") {
+        yield* fileSystem.writeFileString(
+          manifestPath,
+          manifestOptions.contents ?? EMPTY_IDENTITY_MANIFEST,
+        );
+      }
+      return ServerConfig.make({ ...config, machineIdentityManifest: manifestPath });
+    }),
+  ).pipe(Layer.provide(ServerConfig.layerTest("/repo", { prefix: "incus-machine-test" })));
+
+  return Layer.effect(
     MachineService,
     IncusMachineService.make({ uid: 1001, gid: 1002 }, { mcpPort: 3773 }),
   ).pipe(
     Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
-    Layer.provide(ServerConfig.layerTest("/repo", { prefix: "incus-machine-test" })),
+    Layer.provide(serverConfigLayer),
     Layer.provide(NodeServices.layer),
   );
+};
+
+function makeMachineSpawner(
+  initialDevices: Readonly<Record<string, Readonly<Record<string, string>>>> = {},
+) {
+  const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+  const devices = new Map(
+    Object.entries(initialDevices).map(([name, config]) => [name, new Map(Object.entries(config))]),
+  );
+  let machineExists = false;
+  let running = false;
+  const spawner = ChildProcessSpawner.make((input) => {
+    const command = input as unknown as { command: string; args: ReadonlyArray<string> };
+    commands.push({ command: command.command, args: command.args });
+    const args = command.args;
+    const zfsArgs =
+      command.command === "sudo" && args[0] === "-n" && args[1] === "zfs"
+        ? args.slice(2)
+        : undefined;
+    if (zfsArgs?.[0] === "list") {
+      return Effect.succeed(makeHandle({}));
+    }
+    if (zfsArgs?.[0] === "get") {
+      return Effect.succeed(makeHandle({ stdout: "/tank/threads/thread-1/ws\n" }));
+    }
+    if (args.slice(0, 2).join(" ") === "image list") {
+      return Effect.succeed(makeHandle({ stdout: '[{"type":"container"}]' }));
+    }
+    if (args[0] === "list") {
+      return Effect.succeed(
+        makeHandle({
+          stdout: machineExists
+            ? `[{"name":"thread-thread-1","status":"${running ? "Running" : "Stopped"}"}]`
+            : "[]",
+        }),
+      );
+    }
+    if (args[0] === "init") {
+      machineExists = true;
+      return Effect.succeed(makeHandle({}));
+    }
+    if (args.slice(0, 3).join(" ") === "config device list") {
+      return Effect.succeed(makeHandle({ stdout: `${[...devices.keys()].join("\n")}\n` }));
+    }
+    if (args.slice(0, 3).join(" ") === "config device get") {
+      const config = devices.get(args[4] ?? "");
+      return Effect.succeed(
+        makeHandle({
+          code: config ? 0 : 1,
+          stdout: config ? `${config.get(args[5] ?? "") ?? ""}\n` : "",
+        }),
+      );
+    }
+    if (args.slice(0, 3).join(" ") === "config device add") {
+      const config = new Map<string, string>();
+      for (const option of args.slice(6)) {
+        const separator = option.indexOf("=");
+        if (separator >= 0) {
+          config.set(option.slice(0, separator), option.slice(separator + 1));
+        }
+      }
+      devices.set(args[4] ?? "", config);
+      return Effect.succeed(makeHandle({}));
+    }
+    if (args.slice(0, 3).join(" ") === "config device set") {
+      const config = devices.get(args[4] ?? "") ?? new Map<string, string>();
+      for (const option of args.slice(5)) {
+        const separator = option.indexOf("=");
+        if (separator >= 0) {
+          config.set(option.slice(0, separator), option.slice(separator + 1));
+        }
+      }
+      devices.set(args[4] ?? "", config);
+      return Effect.succeed(makeHandle({}));
+    }
+    if (args.slice(0, 3).join(" ") === "config device remove") {
+      devices.delete(args[4] ?? "");
+      return Effect.succeed(makeHandle({}));
+    }
+    if (args[0] === "start") {
+      running = true;
+    }
+    return Effect.succeed(makeHandle({}));
+  });
+
+  return { commands, devices, spawner };
+}
 
 describe("IncusMachineService", () => {
   it("builds explicit root and non-root ZFS command specifications", () => {
@@ -68,6 +191,238 @@ describe("IncusMachineService", () => {
         "--hostname=127.0.0.1",
       ]),
     ).toEqual(["serve", "--hostname=0.0.0.0"]);
+  });
+
+  it.effect("fails machine creation when the identity manifest is not configured", () => {
+    const { commands, spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.createFromGolden(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("identity.manifest");
+      expect(error.detail).toContain("T3_MACHINE_IDENTITY_MANIFEST");
+      expect(
+        commands.some(
+          (entry) =>
+            entry.args.slice(0, 3).join(" ") === "config device add" &&
+            entry.args[4]?.startsWith("identity-") === true,
+        ),
+      ).toBe(false);
+    }).pipe(Effect.provide(provideIncus(spawner, { state: "unset" })));
+  });
+
+  it.effect("fails machine creation when the identity manifest file is missing", () => {
+    const { spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.createFromGolden(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("identity.manifest.read");
+      expect(error.detail).toContain("Could not read identity manifest");
+    }).pipe(Effect.provide(provideIncus(spawner, { state: "missing-file" })));
+  });
+
+  it.effect("requires an absolute identity manifest path", () => {
+    const { spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.createFromGolden(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("identity.manifest");
+      expect(error.detail).toContain("must be absolute");
+    }).pipe(Effect.provide(provideIncus(spawner, { state: "relative-path" })));
+  });
+
+  it.effect("strictly rejects invalid identity manifests", () => {
+    const { spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.createFromGolden(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("identity.manifest.parse");
+      expect(error.detail).toContain("is invalid");
+    }).pipe(
+      Effect.provide(
+        provideIncus(spawner, {
+          contents: JSON.stringify({
+            version: 1,
+            mounts: [
+              {
+                hostPath: process.cwd(),
+                guestPath: "/home/kixey/.codex",
+                readOnly: false,
+                unexpected: true,
+              },
+            ],
+          }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("requires absolute host and guest identity paths", () => {
+    const { spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.createFromGolden(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("identity.manifest.validate");
+      expect(error.detail).toContain("absolute hostPath and guestPath");
+    }).pipe(
+      Effect.provide(
+        provideIncus(spawner, {
+          contents: JSON.stringify({
+            version: 1,
+            mounts: [
+              {
+                hostPath: process.cwd(),
+                guestPath: "home/kixey/.codex",
+                readOnly: false,
+              },
+            ],
+          }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("rejects identity host paths that are not directories", () => {
+    const { spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.createFromGolden(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("identity.manifest.validate");
+      expect(error.detail).toContain("is not an existing directory");
+    }).pipe(
+      Effect.provide(
+        provideIncus(spawner, {
+          contents: JSON.stringify({
+            version: 1,
+            mounts: [
+              {
+                hostPath: `${process.cwd()}/apps/server/package.json`,
+                guestPath: "/home/kixey/.codex",
+                readOnly: false,
+              },
+            ],
+          }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("validates every identity host directory before mounting any of them", () => {
+    const { commands, spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines.createFromGolden(ThreadId.make("thread-1")).pipe(Effect.flip);
+
+      expect(error.operation).toBe("identity.manifest.validate");
+      expect(error.detail).toContain("is not an existing directory");
+      expect(
+        commands.some((entry) => entry.args.slice(0, 3).join(" ") === "config device list"),
+      ).toBe(false);
+    }).pipe(
+      Effect.provide(
+        provideIncus(spawner, {
+          contents: JSON.stringify({
+            version: 1,
+            mounts: [
+              {
+                hostPath: process.cwd(),
+                guestPath: "/home/kixey/.codex",
+                readOnly: false,
+              },
+              {
+                hostPath: "/definitely/missing/t3-machine-identity",
+                guestPath: "/home/kixey/.pi",
+                readOnly: false,
+              },
+            ],
+          }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("adds, updates, and removes identity devices from a valid manifest", () => {
+    const { commands, devices, spawner } = makeMachineSpawner({
+      "identity-0-codex": {
+        source: "/old/codex",
+        path: "/old/guest-codex",
+        shift: "false",
+        readonly: "true",
+      },
+      "identity-9-old": {
+        source: "/old/removed",
+        path: "/home/kixey/.removed",
+        shift: "true",
+        readonly: "false",
+      },
+    });
+    const manifest = {
+      version: 1,
+      mounts: [
+        {
+          hostPath: process.cwd(),
+          guestPath: "/home/kixey/.codex",
+          readOnly: false,
+        },
+        {
+          hostPath: `${process.cwd()}/apps/server`,
+          guestPath: "/home/kixey/.pi",
+          readOnly: true,
+        },
+      ],
+    };
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      yield* machines.createFromGolden(ThreadId.make("thread-1"));
+
+      expect(Object.fromEntries(devices.get("identity-0-codex") ?? [])).toEqual({
+        source: process.cwd(),
+        path: "/home/kixey/.codex",
+        shift: "true",
+        readonly: "false",
+      });
+      expect(Object.fromEntries(devices.get("identity-1-pi") ?? [])).toEqual({
+        source: `${process.cwd()}/apps/server`,
+        path: "/home/kixey/.pi",
+        shift: "true",
+        readonly: "true",
+      });
+      expect(devices.has("identity-9-old")).toBe(false);
+      expect(commands).toContainEqual({
+        command: "incus",
+        args: ["config", "device", "remove", "thread-thread-1", "identity-9-old"],
+      });
+
+      const mutationCount = commands.filter(
+        (entry) =>
+          ["add", "set", "remove"].includes(entry.args[2] ?? "") &&
+          entry.args[4]?.startsWith("identity-") === true,
+      ).length;
+      yield* machines.createFromGolden(ThreadId.make("thread-1"));
+      expect(
+        commands.filter(
+          (entry) =>
+            ["add", "set", "remove"].includes(entry.args[2] ?? "") &&
+            entry.args[4]?.startsWith("identity-") === true,
+        ),
+      ).toHaveLength(mutationCount);
+    }).pipe(
+      Effect.provide(provideIncus(spawner, { contents: JSON.stringify(manifest) })),
+      TestClock.withLive,
+    );
   });
 
   it.effect("surfaces sudo failures without retrying plain zfs", () => {
@@ -479,6 +834,9 @@ describe("IncusMachineService", () => {
       expect(second?.args).toContain("WORKSPACE=/home/kixey/ws");
       expect(second?.args.at(second.args.lastIndexOf("--") + 1)).toBe("codex");
       expect(second?.args).not.toContain("/host/bin/codex");
+      expect(
+        commands.filter((entry) => entry.args.slice(0, 3).join(" ") === "config device list"),
+      ).toHaveLength(2);
       expect(commands).toContainEqual({
         command: "incus",
         args: [
