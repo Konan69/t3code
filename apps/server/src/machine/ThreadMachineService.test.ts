@@ -124,6 +124,7 @@ const makeLayer = (input: {
         input.onExec?.(execInput);
         return Effect.succeed(makeHandle());
       },
+      ensureExecutableShim: (shimInput) => Effect.succeed(shimInput.command),
       archive: () => Effect.void,
       destroy: () => Effect.void,
       hostToGuestPath: (_binding, value) => Effect.succeed(value),
