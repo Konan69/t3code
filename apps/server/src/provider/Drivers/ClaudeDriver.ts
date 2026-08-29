@@ -26,7 +26,6 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
-import { ProcessLauncher } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
@@ -94,7 +93,6 @@ export type ClaudeDriverEnv =
   | HttpClient.HttpClient
   | ModelManifest.ModelManifest
   | Path.Path
-  | ProcessLauncher
   | ProviderEventLoggers
   | ServerConfig
   | ServerSettingsService;
@@ -112,7 +110,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const processLauncher = yield* ProcessLauncher;
       const { cwd } = yield* ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
@@ -146,7 +143,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         environment: processEnv,
         modelCatalog,
         scopedLimitNames,
-        processLauncher,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       };
       const adapter = yield* makeClaudeAdapter(effectiveConfig, adapterOptions);
