@@ -80,11 +80,18 @@ export function presentHostStatus(
                 detail: "The host is suspended. Connect wakes it; it sleeps again when idle.",
               };
         case "stopped":
-          return {
-            tone: "stopped",
-            label: "Stopped",
-            detail: `The host is stopped (${status.gceStatus}); it cannot be woken from here.`,
-          };
+          return wakePending
+            ? {
+                tone: "waking",
+                label: "Starting…",
+                detail: "Start requested; a stopped host takes about a minute.",
+              }
+            : {
+                tone: "stopped",
+                label: "Stopped",
+                detail:
+                  "The host is powered off. Wake starts it; that takes about a minute instead of seconds.",
+              };
         case "other":
           return {
             tone: "unknown",
@@ -271,7 +278,8 @@ function HostStatusLine({
     !isRequestingWake &&
     !wakePending &&
     (status === null ||
-      (status._tag === "Status" && (status.state === "suspended" || status.state === "other")) ||
+      (status._tag === "Status" &&
+        (status.state === "suspended" || status.state === "stopped" || status.state === "other")) ||
       status._tag === "TimedOut" ||
       status._tag === "RequestFailed");
 
