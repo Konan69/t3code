@@ -129,9 +129,22 @@ which agent is behind them. See [providers.md](./providers.md).
 
 ## Thread machines
 
-Native Linux servers can run a project's threads in Incus machines. Machine mode requires
-`T3_MACHINE_IDENTITY_MANIFEST` to contain the absolute path of a JSON manifest with this exact schema
-(no additional properties):
+Native Linux servers can run a project's threads in Incus machines.
+
+| Provider | Thread-machine transport                                                       |
+| -------- | ------------------------------------------------------------------------------ |
+| Codex    | Direct process launch through `MachineProcessLauncher`                         |
+| Claude   | Claude Agent SDK launches a host-side exec shim that enters the thread machine |
+| Cursor   | Direct process launch through `MachineProcessLauncher`                         |
+| Grok     | Direct process launch through `MachineProcessLauncher`                         |
+| OpenCode | Direct process launch through `MachineProcessLauncher`                         |
+
+The Claude shim lives at `<T3 home>/machine-shims/<machineName>/claude`. It maps the SDK's host
+workspace cwd to the guest workspace, forwards the SDK environment with guest `PATH` and `HOME`, and
+replaces itself with `incus exec` so signals reach the machine process without an extra wrapper.
+
+Machine mode requires `T3_MACHINE_IDENTITY_MANIFEST` to contain the absolute path of a JSON manifest
+with this exact schema (no additional properties):
 
 ```json
 {
