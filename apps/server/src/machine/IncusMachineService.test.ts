@@ -38,6 +38,7 @@ function makeHandle(input: {
 }
 
 const EMPTY_IDENTITY_MANIFEST = JSON.stringify({ version: 1, mounts: [] });
+const PROJECT_ROOT = process.cwd();
 
 interface TestIdentityManifestOptions {
   readonly contents?: string;
@@ -158,6 +159,9 @@ function makeMachineSpawner(
     if (args.slice(0, 3).join(" ") === "config device remove") {
       devices.delete(args[4] ?? "");
       return Effect.succeed(makeHandle({}));
+    }
+    if (args.includes("getent")) {
+      return Effect.succeed(makeHandle({ stdout: "kixey:x:1000:1000::/home/kixey:/bin/bash\n" }));
     }
     if (args[0] === "start") {
       running = true;
@@ -425,6 +429,115 @@ describe("IncusMachineService", () => {
     );
   });
 
+  it.effect("reconciles a moved project checkout device before machine exec", () => {
+    const { commands, devices, spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const binding = Option.getOrThrow(
+        yield* machines.createFromGolden(ThreadId.make("thread-1"), PROJECT_ROOT),
+      );
+      devices.set(
+        "project",
+        new Map([
+          ["source", "/old/project"],
+          ["path", "/old/project"],
+          ["shift", "false"],
+          ["readonly", "true"],
+        ]),
+      );
+      commands.splice(0);
+
+      yield* machines.exec({ binding, command: "true", args: [] });
+
+      expect(Object.fromEntries(devices.get("project") ?? [])).toEqual({
+        source: PROJECT_ROOT,
+        path: PROJECT_ROOT,
+        shift: "true",
+        readonly: "false",
+      });
+      expect(commands).toContainEqual({
+        command: "incus",
+        args: [
+          "config",
+          "device",
+          "set",
+          "thread-thread-1",
+          "project",
+          `source=${PROJECT_ROOT}`,
+          `path=${PROJECT_ROOT}`,
+          "shift=true",
+          "readonly=false",
+        ],
+      });
+    }).pipe(Effect.provide(provideIncus(spawner)), Effect.scoped, TestClock.withLive);
+  });
+
+  it.effect("rejects project checkout mounts that overlap the machine workspace", () => {
+    const { commands, spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines
+        .createFromGolden(ThreadId.make("thread-1"), "/home/kixey/ws/project")
+        .pipe(Effect.flip);
+
+      expect(error.operation).toBe("project.validate");
+      expect(error.detail).toContain("overlaps workspace mount '/home/kixey/ws'");
+      expect(
+        commands.some(
+          (entry) =>
+            entry.args.slice(0, 3).join(" ") === "config device add" && entry.args[4] === "project",
+        ),
+      ).toBe(false);
+    }).pipe(Effect.provide(provideIncus(spawner)));
+  });
+
+  it.effect("rejects project checkout mounts that overlap an identity directory", () => {
+    const { commands, spawner } = makeMachineSpawner();
+    const manifest = {
+      version: 1,
+      mounts: [
+        {
+          hostPath: PROJECT_ROOT,
+          guestPath: `${PROJECT_ROOT}/.identity`,
+          readOnly: false,
+        },
+      ],
+    };
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines
+        .createFromGolden(ThreadId.make("thread-1"), PROJECT_ROOT)
+        .pipe(Effect.flip);
+
+      expect(error.operation).toBe("project.validate");
+      expect(error.detail).toContain(`overlaps identity mount '${PROJECT_ROOT}/.identity'`);
+      expect(
+        commands.some(
+          (entry) =>
+            entry.args.slice(0, 3).join(" ") === "config device add" &&
+            ["project", "identity-0-identity"].includes(entry.args[4] ?? ""),
+        ),
+      ).toBe(false);
+    }).pipe(Effect.provide(provideIncus(spawner, { contents: JSON.stringify(manifest) })));
+  });
+
+  it.effect("requires the project checkout root to exist on the host", () => {
+    const { spawner } = makeMachineSpawner();
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      const error = yield* machines
+        .createFromGolden(ThreadId.make("thread-1"), "/definitely/missing/t3-project-root")
+        .pipe(Effect.flip);
+
+      expect(error.operation).toBe("project.validate");
+      expect(error.detail).toContain("is not an existing directory");
+    }).pipe(Effect.provide(provideIncus(spawner)));
+  });
+
   it.effect("surfaces sudo failures without retrying plain zfs", () => {
     const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
     const spawner = ChildProcessSpawner.make((input) => {
@@ -566,14 +679,15 @@ describe("IncusMachineService", () => {
 
       return Effect.gen(function* () {
         const machines = yield* MachineService;
-        yield* machines.ensureWorkspace(ThreadId.make("thread-1"));
-        const first = yield* machines.createFromGolden(ThreadId.make("thread-1"));
-        const second = yield* machines.createFromGolden(ThreadId.make("thread-1"));
+        yield* machines.ensureWorkspace(ThreadId.make("thread-1"), PROJECT_ROOT);
+        const first = yield* machines.createFromGolden(ThreadId.make("thread-1"), PROJECT_ROOT);
+        const second = yield* machines.createFromGolden(ThreadId.make("thread-1"), PROJECT_ROOT);
 
         expect(Option.getOrThrow(first)).toEqual({
           machineId: "thread-thread-1",
           machineName: "thread-thread-1",
           state: "running",
+          projectWorkspaceRoot: PROJECT_ROOT,
           hostWorkspaceRoot: "/tank/threads/thread-1/ws",
           guestWorkspaceRoot: "/home/kixey/ws",
         });
@@ -612,7 +726,7 @@ describe("IncusMachineService", () => {
         expect(commands.some((entry) => entry.command === "zfs")).toBe(false);
         expect(
           commands.filter((entry) => entry.args.slice(0, 3).join(" ") === "config device add"),
-        ).toHaveLength(3);
+        ).toHaveLength(4);
         expect(commands).toContainEqual({
           command: "incus",
           args: [
@@ -625,6 +739,22 @@ describe("IncusMachineService", () => {
             "source=/tank/threads/thread-1/ws",
             "path=/home/kixey/ws",
             "shift=true",
+          ],
+          stdin: "ignore",
+        });
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: [
+            "config",
+            "device",
+            "add",
+            "thread-thread-1",
+            "project",
+            "disk",
+            `source=${PROJECT_ROOT}`,
+            `path=${PROJECT_ROOT}`,
+            "shift=true",
+            "readonly=false",
           ],
           stdin: "ignore",
         });
