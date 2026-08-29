@@ -657,7 +657,7 @@ describe("IncusMachineService", () => {
     }).pipe(Effect.provide(Layer.merge(provideIncus(spawner), NodeServices.layer)), Effect.scoped);
   });
 
-  it.effect("reconciles a moved project checkout device before machine exec", () => {
+  it.effect("reconciles the read-only project and writable Git devices before machine exec", () => {
     const { commands, devices, spawner } = makeMachineSpawner();
 
     return Effect.gen(function* () {
@@ -671,6 +671,15 @@ describe("IncusMachineService", () => {
           ["source", "/old/project"],
           ["path", "/old/project"],
           ["shift", "false"],
+          ["readonly", "false"],
+        ]),
+      );
+      devices.set(
+        "project-git",
+        new Map([
+          ["source", "/old/project/.git"],
+          ["path", "/old/project/.git"],
+          ["shift", "false"],
           ["readonly", "true"],
         ]),
       );
@@ -681,6 +690,12 @@ describe("IncusMachineService", () => {
       expect(Object.fromEntries(devices.get("project") ?? [])).toEqual({
         source: PROJECT_ROOT,
         path: PROJECT_ROOT,
+        shift: "true",
+        readonly: "true",
+      });
+      expect(Object.fromEntries(devices.get("project-git") ?? [])).toEqual({
+        source: `${PROJECT_ROOT}/.git`,
+        path: `${PROJECT_ROOT}/.git`,
         shift: "true",
         readonly: "false",
       });
@@ -694,6 +709,20 @@ describe("IncusMachineService", () => {
           "project",
           `source=${PROJECT_ROOT}`,
           `path=${PROJECT_ROOT}`,
+          "shift=true",
+          "readonly=true",
+        ],
+      });
+      expect(commands).toContainEqual({
+        command: "incus",
+        args: [
+          "config",
+          "device",
+          "set",
+          "thread-thread-1",
+          "project-git",
+          `source=${PROJECT_ROOT}/.git`,
+          `path=${PROJECT_ROOT}/.git`,
           "shift=true",
           "readonly=false",
         ],
@@ -954,7 +983,7 @@ describe("IncusMachineService", () => {
         expect(commands.some((entry) => entry.command === "zfs")).toBe(false);
         expect(
           commands.filter((entry) => entry.args.slice(0, 3).join(" ") === "config device add"),
-        ).toHaveLength(4);
+        ).toHaveLength(5);
         expect(commands).toContainEqual({
           command: "incus",
           args: [
@@ -981,6 +1010,22 @@ describe("IncusMachineService", () => {
             "disk",
             `source=${PROJECT_ROOT}`,
             `path=${PROJECT_ROOT}`,
+            "shift=true",
+            "readonly=true",
+          ],
+          stdin: "ignore",
+        });
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: [
+            "config",
+            "device",
+            "add",
+            "thread-thread-1",
+            "project-git",
+            "disk",
+            `source=${PROJECT_ROOT}/.git`,
+            `path=${PROJECT_ROOT}/.git`,
             "shift=true",
             "readonly=false",
           ],
@@ -1159,7 +1204,7 @@ describe("IncusMachineService", () => {
     }).pipe(Effect.provide(provideIncus(spawner)));
   });
 
-  it.effect("maps cwd and launches with cached guest ids and piped stdio", () => {
+  it.effect("accepts guest cwd and launches with cached guest ids and piped stdio", () => {
     let captured: unknown;
     let guestIdLookups = 0;
     const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
@@ -1200,7 +1245,7 @@ describe("IncusMachineService", () => {
         binding,
         command: "codex",
         args: ["app-server", "--flag=value"],
-        cwd: "/tank/threads/thread-1/ws/packages/app",
+        cwd: "/home/kixey/ws/packages/app",
         env: { TOKEN: "secret" },
       });
       expect(captured).toMatchObject({
