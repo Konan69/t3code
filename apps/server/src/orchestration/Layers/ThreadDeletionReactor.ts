@@ -43,7 +43,7 @@ export const logCleanupCauseUnlessInterrupted = <R, E>({
 export const cleanupMachineWorktree = (input: {
   readonly machine: ThreadDeletedEvent["payload"]["machine"];
   readonly projectWorkspaceRoot: ThreadDeletedEvent["payload"]["projectWorkspaceRoot"];
-  readonly gitWorkflow: Pick<GitWorkflowService["Service"], "removeWorktree">;
+  readonly gitWorkflow: Pick<GitWorkflowService["Service"], "removeWorktree" | "pruneWorktrees">;
   readonly machines: Pick<MachineService["Service"], "destroy">;
 }) => {
   const machine = input.machine;
@@ -55,8 +55,10 @@ export const cleanupMachineWorktree = (input: {
     .removeWorktree({
       cwd: projectWorkspaceRoot,
       path: machine.hostWorkspaceRoot,
+      force: true,
     })
     .pipe(
+      Effect.as(false),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
@@ -68,10 +70,16 @@ export const cleanupMachineWorktree = (input: {
             worktreePath: machine.hostWorkspaceRoot,
             cause: Cause.pretty(cause),
           },
-        );
+        ).pipe(Effect.as(true));
       }),
     );
-  return removeWorktree.pipe(Effect.andThen(input.machines.destroy(machine)));
+  return Effect.gen(function* () {
+    const worktreeRemovalFailed = yield* removeWorktree;
+    yield* input.machines.destroy(machine);
+    if (worktreeRemovalFailed) {
+      yield* input.gitWorkflow.pruneWorktrees({ cwd: projectWorkspaceRoot });
+    }
+  });
 };
 
 const make = Effect.gen(function* () {

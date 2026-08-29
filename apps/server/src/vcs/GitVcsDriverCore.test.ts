@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
@@ -757,6 +758,31 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.notProperty(error, "cause");
         assert.notProperty(error, "stderr");
         assert.notInclude(error.detail, "Git command failed in");
+      }),
+    );
+
+    it.effect("logs stderr when remove-worktree fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const notAWorktree = pathService.join(cwd, "not-a-worktree");
+        yield* fileSystem.makeDirectory(notAWorktree);
+        const spawner = ChildProcessSpawner.make(() => Effect.succeed(makeNonRepositoryHandle()));
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        const messages: string[] = [];
+        const logger = Logger.make<unknown, void>(({ message }) => {
+          messages.push(String(message));
+        });
+
+        yield* driver
+          .removeWorktree({ cwd, path: notAWorktree })
+          .pipe(Effect.flip, Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+
+        assert.include(messages.join("\n"), "fatal: not a git repository");
       }),
     );
   });
