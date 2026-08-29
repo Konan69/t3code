@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Tracer from "effect/Tracer";
+import { afterEach, vi } from "vite-plus/test";
 
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import * as ConnectionResolver from "./resolver.ts";
@@ -30,6 +31,7 @@ import {
   type ConnectionTarget,
 } from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const ENDPOINT = {
@@ -37,6 +39,10 @@ const ENDPOINT = {
   wsBaseUrl: "wss://environment.example.test",
   providerKind: "cloudflare_tunnel" as const,
 };
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 const SSH_TARGET: DesktopSshEnvironmentTarget = {
   alias: "development",
   hostname: "development.example.test",
@@ -204,7 +210,12 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     ),
   );
 
-  return Effect.succeed(ConnectionResolver.layer.pipe(Layer.provide(dependencies)));
+  return Effect.succeed(
+    ConnectionResolver.layer.pipe(
+      Layer.provideMerge(WakeIntent.layer),
+      Layer.provide(dependencies),
+    ),
+  );
 });
 
 describe("ConnectionResolver", () => {
@@ -372,6 +383,54 @@ describe("ConnectionResolver", () => {
         },
       ]);
       expect(yield* Ref.get(bootstrapCredentials)).toEqual(["relay-bootstrap"]);
+    }),
+  );
+
+  it.effect("wakes once for an armed relay connect and never for a plain retry", () =>
+    Effect.gen(function* () {
+      const request = vi.fn().mockResolvedValue({ status: 202 });
+      vi.stubGlobal("fetch", request);
+      const relayInputs = yield* Ref.make(0);
+      const target = new RelayConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Cloud",
+        wakePolicy: {
+          endpoint: "https://wake.example.test",
+          name: "cloudbox",
+          secret: "wake-secret",
+          mode: "explicit-intent",
+        },
+      });
+      const brokerLayer = yield* makeDependencies({
+        connectEnvironment: (input) =>
+          Ref.update(relayInputs, (count) => count + 1).pipe(
+            Effect.as({
+              environmentId: input.environmentId,
+              endpoint: ENDPOINT,
+              credential: "relay-bootstrap",
+              expiresAt: "2026-06-06T00:00:00.000Z",
+            }),
+          ),
+      });
+
+      yield* Effect.gen(function* () {
+        const broker = yield* ConnectionResolver.ConnectionResolver;
+        const wakeIntent = yield* WakeIntent.WakeIntent;
+        yield* wakeIntent.arm(ENVIRONMENT_ID);
+
+        yield* broker.prepare(catalogEntry(target));
+        yield* broker.prepare(catalogEntry(target));
+
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(request).toHaveBeenCalledWith(
+          "https://wake.example.test/wake/cloudbox",
+          expect.objectContaining({
+            method: "POST",
+            headers: { Authorization: "Bearer wake-secret" },
+          }),
+        );
+        expect(yield* Ref.get(relayInputs)).toBe(2);
+      }).pipe(Effect.provide(brokerLayer));
     }),
   );
 
