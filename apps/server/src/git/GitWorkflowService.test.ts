@@ -11,6 +11,7 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
 function makeLayer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
+  readonly git?: Partial<GitVcsDriver.GitVcsDriver["Service"]>;
 }) {
   return GitWorkflowService.layer.pipe(
     Layer.provide(
@@ -18,7 +19,7 @@ function makeLayer(input: {
         detect: input.detect,
       }),
     ),
-    Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+    Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)(input.git ?? {})),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
   );
 }
@@ -126,6 +127,45 @@ describe("GitWorkflowService", () => {
         nextCursor: null,
         totalCount: 0,
       });
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          detect: () => Effect.succeed(null),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("lists all Git worktree registrations through the VCS driver", () => {
+    const worktrees = [
+      { path: "/repo", refName: "main", locked: false, prunable: false },
+      { path: "/locked", refName: "feature/locked", locked: true, prunable: false },
+      { path: "/stale", refName: "feature/stale", locked: false, prunable: true },
+    ] as const;
+    const listWorktrees = vi.fn(() => Effect.succeed(worktrees));
+
+    return Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const result = yield* workflow.listWorktrees({ cwd: "/repo" });
+
+      assert.deepStrictEqual(result, worktrees);
+      expect(listWorktrees).toHaveBeenCalledWith({ cwd: "/repo" });
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          detect: () => Effect.succeed({ kind: "git" } as VcsDriverRegistry.VcsDriverHandle),
+          git: { listWorktrees },
+        }),
+      ),
+    );
+  });
+
+  it.effect("returns no worktrees when no VCS repository is detected", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const worktrees = yield* workflow.listWorktrees({ cwd: "/not-a-repo" });
+
+      assert.deepStrictEqual(worktrees, []);
     }).pipe(
       Effect.provide(
         makeLayer({
