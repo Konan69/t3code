@@ -21,7 +21,6 @@ import {
   type ThreadMachineBinding,
 } from "./MachineService.ts";
 import type { ThreadId } from "@t3tools/contracts";
-import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 
 const INCUS_BINARY = "incus";
@@ -96,88 +95,6 @@ export const guestProviderArgs = (
   guestProviderBinary(hostCommand) === "opencode"
     ? args.map((arg) => (arg === "--hostname=127.0.0.1" ? "--hostname=0.0.0.0" : arg))
     : args;
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-export interface MachineExecutableShimSpec {
-  readonly machineName: string;
-  readonly hostWorkspaceRoot: string;
-  readonly guestWorkspaceRoot: string;
-  readonly guestUid: string;
-  readonly guestGid: string;
-  readonly guestCommand: string;
-  readonly proxyPort: number;
-}
-
-export function buildMachineExecutableShim(spec: MachineExecutableShimSpec): string {
-  return `#!/usr/bin/env bash
-set -euo pipefail
-
-machine_name=${shellSingleQuote(spec.machineName)}
-host_workspace_root=${shellSingleQuote(spec.hostWorkspaceRoot)}
-guest_workspace_root=${shellSingleQuote(spec.guestWorkspaceRoot)}
-guest_home=${shellSingleQuote(`/home/${MACHINE_GUEST_USER}`)}
-guest_path=${shellSingleQuote(MACHINE_GUEST_PATH)}
-guest_uid=${shellSingleQuote(spec.guestUid)}
-guest_gid=${shellSingleQuote(spec.guestGid)}
-guest_command=${shellSingleQuote(spec.guestCommand)}
-t3_proxy_port=${shellSingleQuote(String(spec.proxyPort))}
-
-case "$PWD" in
-  "$host_workspace_root")
-    guest_cwd="$guest_workspace_root"
-    ;;
-  "$host_workspace_root"/*)
-    guest_cwd="$guest_workspace_root/\${PWD#"$host_workspace_root"/}"
-    ;;
-  *)
-    guest_cwd="$guest_workspace_root"
-    ;;
-esac
-
-rewrite_t3_proxy_url() {
-  local value="$1"
-  local scheme host prefix
-  for scheme in http https ws wss; do
-    for host in localhost 0.0.0.0; do
-      prefix="$scheme://$host:$t3_proxy_port"
-      if [[ "$value" == "$prefix" || "$value" == "$prefix/"* ]]; then
-        printf '%s' "$scheme://127.0.0.1:$t3_proxy_port\${value#"$prefix"}"
-        return
-      fi
-    done
-  done
-  printf '%s' "$value"
-}
-
-incus_args=(
-  exec "$machine_name"
-  --user "$guest_uid"
-  --group "$guest_gid"
-  --cwd "$guest_cwd"
-)
-while IFS= read -r -d '' entry; do
-  key="\${entry%%=*}"
-  value="\${entry#*=}"
-  case "$key" in
-    PATH|HOME)
-      continue
-      ;;
-  esac
-  case "$key" in
-    T3_MCP_URL|T3_MCP_*_URL|T3CODE_MCP_URL|T3CODE_MCP_*_URL|T3_SERVER_URL|T3_SERVER_*_URL|T3CODE_SERVER_URL|T3CODE_SERVER_*_URL|T3CODE_*_SERVER_URL)
-      value="$(rewrite_t3_proxy_url "$value")"
-      ;;
-  esac
-  incus_args+=(--env "$key=$value")
-done < <(env -0)
-incus_args+=(--env "PATH=$guest_path" --env "HOME=$guest_home")
-
-exec incus "\${incus_args[@]}" -- "$guest_command" "$@"
-`;
-}
 
 interface CommandResult {
   readonly code: number;
@@ -789,54 +706,6 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       },
     );
 
-    const ensureExecutableShim: MachineServiceShape["ensureExecutableShim"] = Effect.fn(
-      "IncusMachineService.ensureExecutableShim",
-    )(function* (input) {
-      const command = guestProviderBinary(input.command);
-      const shimDirectory = path.join(
-        serverConfig.baseDir,
-        "machine-shims",
-        input.binding.machineName,
-      );
-      const shimPath = path.join(shimDirectory, command);
-      const guestIds = yield* resolveGuestIds(input.binding.machineName);
-      const contents = buildMachineExecutableShim({
-        machineName: input.binding.machineName,
-        hostWorkspaceRoot: input.binding.hostWorkspaceRoot,
-        guestWorkspaceRoot: input.binding.guestWorkspaceRoot,
-        guestUid: guestIds.uid,
-        guestGid: guestIds.gid,
-        guestCommand: command,
-        proxyPort: options.mcpPort ?? serverConfig.port,
-      });
-      const existing = yield* fileSystem.readFileString(shimPath).pipe(Effect.option);
-      if (Option.isNone(existing) || existing.value !== contents) {
-        yield* writeFileStringAtomically({ filePath: shimPath, contents }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-          Effect.mapError((cause) =>
-            commandError(
-              "shim.write",
-              `Could not write machine executable shim '${shimPath}'.`,
-              cause,
-            ),
-          ),
-        );
-      }
-      yield* fileSystem
-        .chmod(shimPath, 0o755)
-        .pipe(
-          Effect.mapError((cause) =>
-            commandError(
-              "shim.permissions",
-              `Could not make machine executable shim '${shimPath}' executable.`,
-              cause,
-            ),
-          ),
-        );
-      return shimPath;
-    });
-
     const exec: MachineServiceShape["exec"] = (input) => {
       if (input.binding === undefined) {
         return spawner
@@ -1020,7 +889,6 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       start,
       stop,
       exec,
-      ensureExecutableShim,
       archive,
       destroy,
       hostToGuestPath: (binding, hostPath) =>
