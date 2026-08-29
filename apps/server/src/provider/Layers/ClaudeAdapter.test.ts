@@ -29,11 +29,14 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
+import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import type { ProcessLaunchInput, ProcessLauncherShape } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   SYNTHETIC_CLAUDE_CAPABLE_MODEL,
@@ -44,6 +47,7 @@ import {
 } from "../ClaudeModelCatalog.testFixtures.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { CLAUDE_PROCESS_FORCE_KILL_AFTER } from "../claudeSpawn.ts";
 import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -52,6 +56,22 @@ const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.U
 class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()(
   "t3/provider/Layers/ClaudeAdapter.test/ClaudeAdapter",
 ) {}
+
+function makeSpawnHandle() {
+  return ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(42),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.drain,
+    stdout: Stream.empty,
+    stderr: Stream.empty,
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+}
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -163,6 +183,7 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly processLauncher?: ProcessLauncherShape;
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -175,6 +196,7 @@ function makeHarness(config?: {
   const adapterOptions: ClaudeAdapterLiveOptions = {
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
     modelCatalog: Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
+    ...(config?.processLauncher ? { processLauncher: config.processLauncher } : {}),
     createQuery: (input) => {
       createInput = input;
       return query;
@@ -342,6 +364,72 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
+    );
+  });
+
+  it.effect("routes Claude SDK process spawning through the injected launcher", () => {
+    const workspaceRoot = "/tank/threads/thread-claude-1/ws";
+    let captured: ProcessLaunchInput | undefined;
+    const harness = makeHarness({
+      cwd: workspaceRoot,
+      processLauncher: {
+        launch: (input) =>
+          Effect.sync(() => {
+            captured = input;
+            return makeSpawnHandle();
+          }),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        cwd: workspaceRoot,
+      });
+
+      const spawnClaudeCodeProcess =
+        harness.getLastCreateQueryInput()?.options.spawnClaudeCodeProcess;
+      assert.equal(typeof spawnClaudeCodeProcess, "function");
+      if (!spawnClaudeCodeProcess) {
+        return;
+      }
+
+      const environment = {
+        HOME: "/home/host-user",
+        PATH: "/host/bin",
+        T3_MCP_SERVER_URL: "http://127.0.0.1:3773/mcp",
+      };
+      const spawned = spawnClaudeCodeProcess({
+        command: "/host/bin/claude",
+        args: ["--output-format", "stream-json"],
+        cwd: workspaceRoot,
+        env: environment,
+        signal: new AbortController().signal,
+      });
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            spawned.once("exit", () => resolve());
+            spawned.once("error", reject);
+          }),
+      );
+
+      assert.equal(NodePath.basename(captured?.command ?? ""), "claude");
+      assert.deepEqual(captured, {
+        threadId: THREAD_ID,
+        command: "/host/bin/claude",
+        args: ["--output-format", "stream-json"],
+        cwd: workspaceRoot,
+        env: environment,
+        extendEnv: false,
+        forceKillAfter: CLAUDE_PROCESS_FORCE_KILL_AFTER,
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
     );
   });
 
