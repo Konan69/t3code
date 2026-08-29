@@ -1,10 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   createManagedRelayQueryManager,
+  configureManagedRelayHostLifecycle,
   deregisterManagedRelayEnvironment,
   ManagedRelay,
   managedRelaySessionAtom,
   readManagedRelaySnapshotState,
+  removeManagedRelayHostLifecycle,
+  wakeManagedRelayEnvironmentHost,
 } from "@t3tools/client-runtime/relay";
 import {
   createAtomCommandScheduler,
@@ -13,6 +16,8 @@ import {
 import type {
   RelayClientDeviceRecord,
   RelayClientEnvironmentRecord,
+  RelayEnvironmentHostStatusResponse,
+  RelayEnvironmentHostLifecycleConfigRequest,
 } from "@t3tools/contracts/relay";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -51,6 +56,54 @@ export const deregisterManagedRelayEnvironmentCommand = createRuntimeCommand(
   },
 );
 
+type HostLifecycleMutationInput = {
+  readonly accountId: string;
+  readonly environmentId: EnvironmentId;
+};
+
+export const configureManagedRelayHostLifecycleCommand = createRuntimeCommand(
+  managedRelayAtomRuntime,
+  {
+    label: "web:managed-relay:configure-host-lifecycle",
+    scheduler: managedRelayMutationScheduler,
+    concurrency: {
+      mode: "serial",
+      key: (input: HostLifecycleMutationInput) => input.accountId,
+    },
+    execute: (
+      input: HostLifecycleMutationInput & {
+        readonly config: RelayEnvironmentHostLifecycleConfigRequest;
+      },
+      registry,
+    ) => configureManagedRelayHostLifecycle(registry, input),
+  },
+);
+
+export const removeManagedRelayHostLifecycleCommand = createRuntimeCommand(
+  managedRelayAtomRuntime,
+  {
+    label: "web:managed-relay:remove-host-lifecycle",
+    scheduler: managedRelayMutationScheduler,
+    concurrency: { mode: "serial", key: (input: HostLifecycleMutationInput) => input.accountId },
+    execute: (input: HostLifecycleMutationInput, registry) =>
+      removeManagedRelayHostLifecycle(registry, input),
+  },
+);
+
+export const wakeManagedRelayEnvironmentHostCommand = createRuntimeCommand(
+  managedRelayAtomRuntime,
+  {
+    label: "web:managed-relay:wake-host",
+    scheduler: managedRelayMutationScheduler,
+    concurrency: {
+      mode: "serial",
+      key: (input: HostLifecycleMutationInput) => input.environmentId,
+    },
+    execute: (input: HostLifecycleMutationInput, registry) =>
+      wakeManagedRelayEnvironmentHost(registry, input),
+  },
+);
+
 const EMPTY_ENVIRONMENTS_ATOM = Atom.make(
   AsyncResult.success<ReadonlyArray<RelayClientEnvironmentRecord>>([]),
 ).pipe(Atom.keepAlive, Atom.withLabel("managed-relay:web:environments:null"));
@@ -58,6 +111,10 @@ const EMPTY_ENVIRONMENTS_ATOM = Atom.make(
 const EMPTY_DEVICES_ATOM = Atom.make(
   AsyncResult.success<ReadonlyArray<RelayClientDeviceRecord>>([]),
 ).pipe(Atom.keepAlive, Atom.withLabel("managed-relay:web:devices:null"));
+
+const EMPTY_HOST_STATUS_ATOM = Atom.make(
+  AsyncResult.initial<RelayEnvironmentHostStatusResponse, never>(false),
+).pipe(Atom.keepAlive, Atom.withLabel("managed-relay:web:host-status:null"));
 
 export function useManagedRelayEnvironments() {
   const session = useAtomValue(managedRelaySessionAtom);
@@ -113,6 +170,29 @@ export function useManagedRelayDevices() {
     accountId,
     refresh,
   };
+}
+
+export function useManagedRelayEnvironmentHostStatus(
+  environmentId: EnvironmentId,
+  enabled: boolean,
+) {
+  const session = useAtomValue(managedRelaySessionAtom);
+  const accountId = session?.accountId ?? null;
+  const atom =
+    accountId && enabled
+      ? managedRelayQueryManager.environmentHostStatusAtom({ accountId, environmentId })
+      : EMPTY_HOST_STATUS_ATOM;
+  const result = useAtomValue(atom);
+  const snapshot = readManagedRelaySnapshotState(result);
+  const refresh = useCallback(() => {
+    if (accountId && enabled) {
+      managedRelayQueryManager.refreshEnvironmentHostStatus(appAtomRegistry, {
+        accountId,
+        environmentId,
+      });
+    }
+  }, [accountId, enabled, environmentId]);
+  return { ...snapshot, accountId, refresh };
 }
 
 export function refreshManagedRelayEnvironments(): void {

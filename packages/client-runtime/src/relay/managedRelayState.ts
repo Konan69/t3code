@@ -1,11 +1,14 @@
 import type {
   RelayClientEnvironmentRecord,
+  RelayEnvironmentHostLifecycleConfigRequest,
+  RelayEnvironmentHostStatusResponse,
   RelayEnvironmentStatusResponse,
 } from "@t3tools/contracts/relay";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
+  RelayEnvironmentWakeScope,
 } from "@t3tools/contracts/relay";
 import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
 import * as Cause from "effect/Cause";
@@ -50,7 +53,7 @@ export interface ManagedRelaySnapshotState<A> {
 }
 
 export interface ManagedRelayQueryEvent {
-  readonly operation: "environments" | "devices" | "environment-status";
+  readonly operation: "environments" | "devices" | "environment-status" | "environment-host-status";
   readonly stage: "clerk-token" | "relay-request" | "validation";
   readonly phase: "start" | "success" | "failure";
   readonly accountId: string;
@@ -240,6 +243,73 @@ export const deregisterManagedRelayEnvironment = Effect.fn(
   yield* relay.unlinkEnvironment({ clerkToken, environmentId: input.environmentId });
 });
 
+function managedRelayMutationSession(
+  registry: AtomRegistry.AtomRegistry,
+  accountId: string,
+): Effect.Effect<ManagedRelaySession, ManagedRelaySessionError> {
+  const session = registry.get(managedRelaySessionAtom);
+  return !session || session.accountId !== accountId
+    ? Effect.fail(
+        new ManagedRelaySessionError({
+          message: "Sign in to T3 Connect before changing host lifecycle settings.",
+        }),
+      )
+    : Effect.succeed(session);
+}
+
+export const configureManagedRelayHostLifecycle = Effect.fn(
+  "clientRuntime.managedRelaySession.configureHostLifecycle",
+)(function* (
+  registry: AtomRegistry.AtomRegistry,
+  input: {
+    readonly accountId: string;
+    readonly environmentId: EnvironmentId;
+    readonly config: RelayEnvironmentHostLifecycleConfigRequest;
+  },
+) {
+  const session = yield* managedRelayMutationSession(registry, input.accountId);
+  const clerkToken = yield* readSessionClerkToken(session);
+  const relay = yield* ManagedRelay.ManagedRelayClient;
+  return yield* relay.configureEnvironmentHostLifecycle({
+    clerkToken,
+    scopes: [RelayEnvironmentWakeScope],
+    environmentId: input.environmentId,
+    config: input.config,
+  });
+});
+
+export const removeManagedRelayHostLifecycle = Effect.fn(
+  "clientRuntime.managedRelaySession.removeHostLifecycle",
+)(function* (
+  registry: AtomRegistry.AtomRegistry,
+  input: { readonly accountId: string; readonly environmentId: EnvironmentId },
+) {
+  const session = yield* managedRelayMutationSession(registry, input.accountId);
+  const clerkToken = yield* readSessionClerkToken(session);
+  const relay = yield* ManagedRelay.ManagedRelayClient;
+  return yield* relay.removeEnvironmentHostLifecycle({
+    clerkToken,
+    scopes: [RelayEnvironmentWakeScope],
+    environmentId: input.environmentId,
+  });
+});
+
+export const wakeManagedRelayEnvironmentHost = Effect.fn(
+  "clientRuntime.managedRelaySession.wakeEnvironmentHost",
+)(function* (
+  registry: AtomRegistry.AtomRegistry,
+  input: { readonly accountId: string; readonly environmentId: EnvironmentId },
+) {
+  const session = yield* managedRelayMutationSession(registry, input.accountId);
+  const clerkToken = yield* readSessionClerkToken(session);
+  const relay = yield* ManagedRelay.ManagedRelayClient;
+  return yield* relay.wakeEnvironmentHost({
+    clerkToken,
+    scopes: [RelayEnvironmentWakeScope],
+    environmentId: input.environmentId,
+  });
+});
+
 function requireClerkToken(
   get: Atom.AtomContext,
   accountId: string,
@@ -270,6 +340,13 @@ function parseStatusKey(key: string): {
     readonly accountId: string;
     readonly environment: RelayClientEnvironmentRecord;
   };
+}
+
+function hostStatusKey(input: {
+  readonly accountId: string;
+  readonly environmentId: EnvironmentId;
+}): string {
+  return JSON.stringify(input);
 }
 
 function endpointMatches(
@@ -451,6 +528,47 @@ export function createManagedRelayQueryManager(
       );
   });
 
+  const environmentHostStatusAtom = Atom.family((key: string) => {
+    const input = JSON.parse(key) as {
+      readonly accountId: string;
+      readonly environmentId: EnvironmentId;
+    };
+    return runtime
+      .atom((get) =>
+        Effect.gen(function* () {
+          const base = {
+            operation: "environment-host-status" as const,
+            accountId: input.accountId,
+            environmentId: input.environmentId,
+          };
+          const clerkToken = yield* observe(
+            { ...base, stage: "clerk-token" },
+            requireClerkToken(get, input.accountId),
+          );
+          const relay = yield* ManagedRelay.ManagedRelayClient;
+          const status = yield* observe(
+            { ...base, stage: "relay-request" },
+            relay.getEnvironmentHostStatus({
+              clerkToken,
+              scopes: [RelayEnvironmentStatusScope],
+              environmentId: input.environmentId,
+            }),
+          );
+          if (status.environmentId !== input.environmentId) {
+            return yield* new ManagedRelaySnapshotError({
+              message: "Relay returned host status for a different environment.",
+            });
+          }
+          return status satisfies RelayEnvironmentHostStatusResponse;
+        }),
+      )
+      .pipe(
+        Atom.swr({ staleTime, revalidateOnMount: true }),
+        Atom.setIdleTTL(idleTtl),
+        Atom.withLabel(`managed-relay:environment-host-status:${key}`),
+      );
+  });
+
   return {
     environmentsAtom,
     devicesAtom,
@@ -458,6 +576,10 @@ export function createManagedRelayQueryManager(
       readonly accountId: string;
       readonly environment: RelayClientEnvironmentRecord;
     }) => environmentStatusAtom(statusKey(input)),
+    environmentHostStatusAtom: (input: {
+      readonly accountId: string;
+      readonly environmentId: EnvironmentId;
+    }) => environmentHostStatusAtom(hostStatusKey(input)),
     refreshEnvironments(registry: AtomRegistry.AtomRegistry, accountId: string): void {
       registry.refresh(environmentsAtom(accountId));
     },
@@ -472,6 +594,12 @@ export function createManagedRelayQueryManager(
       },
     ): void {
       registry.refresh(environmentStatusAtom(statusKey(input)));
+    },
+    refreshEnvironmentHostStatus(
+      registry: AtomRegistry.AtomRegistry,
+      input: { readonly accountId: string; readonly environmentId: EnvironmentId },
+    ): void {
+      registry.refresh(environmentHostStatusAtom(hostStatusKey(input)));
     },
   };
 }

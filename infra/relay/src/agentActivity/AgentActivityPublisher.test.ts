@@ -87,6 +87,8 @@ function makeEnvironmentLinks(
     listForUser: () => Effect.succeed([]),
     getForUser: () => Effect.succeed(null),
     revokeForUser: () => Effect.succeed(false),
+    configureHostLifecycleForUser: () => Effect.succeed(false),
+    removeHostLifecycleForUser: () => Effect.succeed(false),
     ...overrides,
   };
 }

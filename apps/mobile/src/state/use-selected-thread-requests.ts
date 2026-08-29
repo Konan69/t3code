@@ -9,6 +9,7 @@ import {
 import { Atom } from "effect/unstable/reactivity";
 
 import { threadEnvironment } from "../state/threads";
+import { environmentCatalog } from "../connection/catalog";
 import { scopedRequestKey } from "../lib/scopedEntities";
 import {
   buildPendingUserInputAnswers,
@@ -75,7 +76,8 @@ export function useSelectedThreadRequests() {
     threadEnvironment.respondToUserInput,
     "thread user input response",
   );
-  const { selectedThread: selectedThreadShell } = useThreadSelection();
+  const armEnvironmentWake = useAtomCommand(environmentCatalog.armWake, "environment wake");
+  const { selectedThread: selectedThreadShell, selectedEnvironmentRuntime } = useThreadSelection();
   const selectedThread = useSelectedThreadDetail();
   const userInputDraftsByRequestKey = useAtomValue(userInputDraftsByRequestKeyAtom);
   const [respondingApprovalId, setRespondingApprovalId] = useState<ApprovalRequestId | null>(null);
@@ -113,7 +115,6 @@ export function useSelectedThreadRequests() {
       if (!selectedThreadShell) {
         return;
       }
-
       const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
       setUserInputDraftOption(requestKey, question, value);
     },
@@ -140,6 +141,10 @@ export function useSelectedThreadRequests() {
       if (!selectedThreadShell) {
         return;
       }
+      if (selectedEnvironmentRuntime?.connectionState !== "connected") {
+        await armEnvironmentWake(selectedThreadShell.environmentId);
+        return;
+      }
 
       setRespondingApprovalId(requestId);
       const result = await respondToApproval({
@@ -153,11 +158,15 @@ export function useSelectedThreadRequests() {
       setRespondingApprovalId((current) => (current === requestId ? null : current));
       return result;
     },
-    [respondToApproval, selectedThreadShell],
+    [armEnvironmentWake, respondToApproval, selectedEnvironmentRuntime, selectedThreadShell],
   );
 
   const onSubmitUserInput = useCallback(async () => {
     if (!selectedThreadShell || !activePendingUserInput || !activePendingUserInputAnswers) {
+      return;
+    }
+    if (selectedEnvironmentRuntime?.connectionState !== "connected") {
+      await armEnvironmentWake(selectedThreadShell.environmentId);
       return;
     }
 
@@ -177,7 +186,9 @@ export function useSelectedThreadRequests() {
   }, [
     activePendingUserInput,
     activePendingUserInputAnswers,
+    armEnvironmentWake,
     respondToUserInput,
+    selectedEnvironmentRuntime,
     selectedThreadShell,
   ]);
 

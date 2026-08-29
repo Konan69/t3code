@@ -1,4 +1,6 @@
 import type { RelayWakePolicy, WakeStatusResult } from "@t3tools/client-runtime/connection";
+import { useAtomValue } from "@effect/atom-react";
+import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -7,6 +9,13 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { environmentCatalog } from "~/connection/catalog";
+import {
+  configureManagedRelayHostLifecycleCommand,
+  removeManagedRelayHostLifecycleCommand,
+  useManagedRelayEnvironmentHostStatus,
+  useManagedRelayEnvironments,
+  wakeManagedRelayEnvironmentHostCommand,
+} from "~/cloud/managedRelayState";
 import type { EnvironmentPresentation } from "~/state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "~/lib/utils";
@@ -154,8 +163,9 @@ function normalizeEndpoint(value: string): string | null {
   const trimmed = value.trim().replace(/\/+$/, "");
   try {
     const url = new URL(trimmed);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (url.protocol !== "https:") return null;
     if (url.pathname !== "/" && url.pathname !== "") return null;
+    if (url.port !== "" || !url.hostname.endsWith(".run.app")) return null;
     return trimmed;
   } catch {
     return null;
@@ -165,9 +175,8 @@ function normalizeEndpoint(value: string): string | null {
 /**
  * Host state + wake controls for a T3 Connect environment whose backend is a
  * Cloudbox host that suspends itself when idle. Reads state through the wake
- * service's read-only status endpoint; never wakes on its own — waking is
- * always an explicit click, which arms the one-shot wake intent and retries
- * the relay connection.
+ * service's read-only status endpoint. Explicit product interactions arm one
+ * wake attempt; passive background reconnects remain cold.
  */
 export function CloudboxHostControls({
   environment,
@@ -176,6 +185,12 @@ export function CloudboxHostControls({
 }) {
   const environmentId = environment.environmentId;
   const policy = relayWakePolicy(environment);
+  const relayEnvironments = useManagedRelayEnvironments();
+  const hasSyncedWake =
+    relayEnvironments.data?.some(
+      (entry) => entry.environmentId === environmentId && entry.hostLifecycle?.canWake === true,
+    ) ?? false;
+  const syncedHostStatus = useManagedRelayEnvironmentHostStatus(environmentId, hasSyncedWake);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   if (!isRelayEnvironment(environment)) {
@@ -189,13 +204,28 @@ export function CloudboxHostControls({
           environmentId={environmentId}
           policyKey={`${policy.endpoint}|${policy.name}`}
         />
+      ) : hasSyncedWake ? (
+        <SyncedHostStatusLine
+          accountId={syncedHostStatus.accountId}
+          environmentId={environmentId}
+          error={syncedHostStatus.error}
+          refresh={syncedHostStatus.refresh}
+          state={syncedHostStatus.data?.state ?? null}
+        />
       ) : null}
+      {(policy !== null || hasSyncedWake) && (
+        <span className="text-xs text-muted-foreground">Wakes when you interact</span>
+      )}
       <button
         type="button"
         className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         onClick={() => setDialogOpen(true)}
       >
-        {policy === null ? "Set up wake-on-connect…" : "Edit wake policy"}
+        {policy === null
+          ? hasSyncedWake
+            ? "Replace synced wake policy…"
+            : "Set up wake-on-connect…"
+          : "Edit wake policy"}
       </button>
       <WakePolicyDialog
         open={dialogOpen}
@@ -205,6 +235,86 @@ export function CloudboxHostControls({
         policy={policy}
       />
     </div>
+  );
+}
+
+function SyncedHostStatusLine(props: {
+  readonly accountId: string | null;
+  readonly environmentId: EnvironmentId;
+  readonly error: string | null;
+  readonly refresh: () => void;
+  readonly state: "suspended" | "running" | "resuming" | "stopped" | "other" | null;
+}) {
+  const wakeHost = useAtomCommand(wakeManagedRelayEnvironmentHostCommand, {
+    reportFailure: false,
+  });
+  const [isWaking, setIsWaking] = useState(false);
+  useEffect(() => {
+    const timer = window.setInterval(props.refresh, props.state === "resuming" ? 5_000 : 30_000);
+    return () => window.clearInterval(timer);
+  }, [props.refresh, props.state]);
+
+  const label = props.error
+    ? "Host status unavailable"
+    : props.state === "running"
+      ? "Awake"
+      : props.state === "suspended"
+        ? "Asleep"
+        : props.state === "stopped"
+          ? "Stopped"
+          : props.state === "resuming"
+            ? "Waking…"
+            : "Checking host…";
+  const canWake =
+    props.accountId !== null &&
+    props.state !== "running" &&
+    props.state !== "resuming" &&
+    !isWaking;
+
+  const requestWake = async () => {
+    if (!canWake || props.accountId === null) return;
+    setIsWaking(true);
+    const result = await wakeHost({
+      accountId: props.accountId,
+      environmentId: props.environmentId,
+    });
+    setIsWaking(false);
+    if (result._tag !== "Success") {
+      if (isAtomCommandInterrupted(result)) return;
+      const cause = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not wake host",
+        description:
+          cause instanceof Error ? cause.message : "T3 Connect rejected the wake request.",
+      });
+      return;
+    }
+    props.refresh();
+  };
+
+  return (
+    <>
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "inline-flex size-1.5 rounded-full",
+            props.state === "running"
+              ? "bg-success"
+              : props.state === "resuming"
+                ? "bg-warning"
+                : "bg-muted-foreground/60",
+          )}
+        />
+        {label}
+      </span>
+      {props.state === "running" ? null : (
+        <Button size="xs" variant="outline" disabled={!canWake} onClick={() => void requestWake()}>
+          {isWaking || props.state === "resuming" ? "Waking…" : "Wake now"}
+        </Button>
+      )}
+    </>
   );
 }
 
@@ -333,7 +443,7 @@ function HostStatusLine({
       </Tooltip>
       {presentation.tone === "awake" ? null : (
         <Button size="xs" variant="outline" disabled={!canWake} onClick={() => void requestWake()}>
-          {isRequestingWake ? "Requesting…" : wakePending ? "Waking…" : "Wake"}
+          {isRequestingWake ? "Requesting…" : wakePending ? "Waking…" : "Wake now"}
         </Button>
       )}
     </>
@@ -356,6 +466,13 @@ function WakePolicyDialog({
   const setWakePolicy = useAtomCommand(environmentCatalog.setWakePolicy, {
     reportFailure: false,
   });
+  const configureHostLifecycle = useAtomCommand(configureManagedRelayHostLifecycleCommand, {
+    reportFailure: false,
+  });
+  const removeHostLifecycle = useAtomCommand(removeManagedRelayHostLifecycleCommand, {
+    reportFailure: false,
+  });
+  const relaySession = useAtomValue(managedRelaySessionAtom);
   const [endpoint, setEndpoint] = useState(policy?.endpoint ?? "");
   const [name, setName] = useState(policy?.name ?? "");
   const [secret, setSecret] = useState(policy?.secret ?? "");
@@ -392,6 +509,30 @@ function WakePolicyDialog({
   const save = async () => {
     if (normalizedEndpoint === null) return;
     setIsSaving(true);
+    if (relaySession !== null) {
+      const synced = await configureHostLifecycle({
+        accountId: relaySession.accountId,
+        environmentId,
+        config: {
+          provider: "gcp",
+          endpoint: normalizedEndpoint,
+          name: name.trim(),
+          secret,
+        },
+      });
+      if (synced._tag !== "Success") {
+        setIsSaving(false);
+        if (isAtomCommandInterrupted(synced)) return;
+        const cause = squashAtomCommandFailure(synced);
+        toastManager.add({
+          type: "error",
+          title: "Could not sync wake access",
+          description:
+            cause instanceof Error ? cause.message : "T3 Connect rejected the wake configuration.",
+        });
+        return;
+      }
+    }
     const result = await setWakePolicy({
       environmentId,
       policy: {
@@ -407,6 +548,23 @@ function WakePolicyDialog({
 
   const remove = async () => {
     setIsSaving(true);
+    if (relaySession !== null) {
+      const synced = await removeHostLifecycle({
+        accountId: relaySession.accountId,
+        environmentId,
+      });
+      if (synced._tag !== "Success") {
+        setIsSaving(false);
+        if (isAtomCommandInterrupted(synced)) return;
+        const cause = squashAtomCommandFailure(synced);
+        toastManager.add({
+          type: "error",
+          title: "Could not remove synced wake access",
+          description: cause instanceof Error ? cause.message : "T3 Connect rejected the change.",
+        });
+        return;
+      }
+    }
     const result = await setWakePolicy({ environmentId, policy: null });
     setIsSaving(false);
     finish(result, "Wake policy removed");
@@ -416,10 +574,10 @@ function WakePolicyDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Wake-on-connect for {environmentLabel}</DialogTitle>
+          <DialogTitle>Automatic wake for {environmentLabel}</DialogTitle>
           <DialogDescription>
-            When this host is asleep, connecting to it sends one wake request to your Cloudbox wake
-            service before the relay connection is retried. Background reconnects never wake it.
+            When this host is asleep, sending a prompt or explicitly connecting sends one wake
+            request before retrying. Background reconnects never wake it.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
@@ -439,7 +597,7 @@ function WakePolicyDialog({
             />
             {endpointInvalid ? (
               <span className="mt-1 block text-xs text-destructive">
-                Enter the service origin only — https, no path.
+                Enter the HTTPS Cloud Run service origin only — no path.
               </span>
             ) : null}
           </label>
@@ -469,7 +627,7 @@ function WakePolicyDialog({
               autoComplete="off"
             />
             <span className="mt-1 block text-xs text-muted-foreground">
-              Stored only on this device.
+              Encrypted by T3 Connect so your signed-in devices can read host state and wake it.
             </span>
           </label>
         </DialogPanel>

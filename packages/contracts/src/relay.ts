@@ -390,6 +390,7 @@ export const RelayEnvironmentConnectNotAuthorizedReason = Schema.Literals([
   "managed_endpoint_allocation_not_ready",
   "managed_endpoint_hostname_invalid",
   "managed_endpoint_mismatch",
+  "host_lifecycle_not_configured",
 ]);
 export type RelayEnvironmentConnectNotAuthorizedReason =
   typeof RelayEnvironmentConnectNotAuthorizedReason.Type;
@@ -633,6 +634,12 @@ export const RelayClientEnvironmentRecord = Schema.Struct({
   label: TrimmedNonEmptyString,
   endpoint: RelayManagedEndpoint,
   linkedAt: TrimmedNonEmptyString,
+  hostLifecycle: Schema.optional(
+    Schema.Struct({
+      provider: Schema.Literal("gcp"),
+      canWake: Schema.Literal(true),
+    }),
+  ),
 });
 export type RelayClientEnvironmentRecord = typeof RelayClientEnvironmentRecord.Type;
 
@@ -662,10 +669,12 @@ export type RelayEnvironmentConnectRequest = typeof RelayEnvironmentConnectReque
 
 export const RelayEnvironmentConnectScope = "environment:connect" as const;
 export const RelayEnvironmentStatusScope = "environment:status" as const;
+export const RelayEnvironmentWakeScope = "environment:wake" as const;
 export const RelayMobileRegistrationScope = "mobile:registration" as const;
 export const RelayDpopAccessTokenScope = Schema.Literals([
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
+  RelayEnvironmentWakeScope,
   RelayMobileRegistrationScope,
 ]);
 export type RelayDpopAccessTokenScope = typeof RelayDpopAccessTokenScope.Type;
@@ -763,6 +772,41 @@ export const RelayEnvironmentStatusResponse = Schema.Struct({
   traceId: Schema.optional(TrimmedNonEmptyString),
 });
 export type RelayEnvironmentStatusResponse = typeof RelayEnvironmentStatusResponse.Type;
+
+export const RelayEnvironmentHostLifecycleConfigRequest = Schema.Struct({
+  provider: Schema.Literal("gcp"),
+  endpoint: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  secret: TrimmedNonEmptyString,
+});
+export type RelayEnvironmentHostLifecycleConfigRequest =
+  typeof RelayEnvironmentHostLifecycleConfigRequest.Type;
+
+export const RelayEnvironmentHostState = Schema.Literals([
+  "suspended",
+  "running",
+  "resuming",
+  "stopped",
+  "other",
+]);
+export type RelayEnvironmentHostState = typeof RelayEnvironmentHostState.Type;
+
+export const RelayEnvironmentHostStatusResponse = Schema.Struct({
+  environmentId: EnvironmentId,
+  provider: Schema.Literal("gcp"),
+  state: RelayEnvironmentHostState,
+  gceStatus: TrimmedNonEmptyString,
+  checkedAt: TrimmedNonEmptyString,
+});
+export type RelayEnvironmentHostStatusResponse = typeof RelayEnvironmentHostStatusResponse.Type;
+
+export const RelayEnvironmentWakeResponse = Schema.Struct({
+  environmentId: EnvironmentId,
+  provider: Schema.Literal("gcp"),
+  state: Schema.Literals(["running", "resuming"]),
+  requestedAt: TrimmedNonEmptyString,
+});
+export type RelayEnvironmentWakeResponse = typeof RelayEnvironmentWakeResponse.Type;
 
 export const RelayCloudMintCredentialProofPayload = Schema.Struct({
   ...RelaySignedJwtRegisteredClaims,
@@ -1056,8 +1100,64 @@ export const RelayGetEnvironmentStatusEndpoint = HttpApiEndpoint.post(
   },
 ).annotate(OpenApi.Summary, "Check environment status");
 
+const RelayEnvironmentHostParams = Schema.Struct({
+  environmentId: EnvironmentId,
+});
+
+export const RelayConfigureEnvironmentHostLifecycleEndpoint = HttpApiEndpoint.put(
+  "configureEnvironmentHostLifecycle",
+  "/v1/environments/:environmentId/host-lifecycle",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    payload: RelayEnvironmentHostLifecycleConfigRequest,
+    success: RelayOkResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Configure account-level host lifecycle access");
+
+export const RelayRemoveEnvironmentHostLifecycleEndpoint = HttpApiEndpoint.delete(
+  "removeEnvironmentHostLifecycle",
+  "/v1/environments/:environmentId/host-lifecycle",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    success: RelayOkResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Remove account-level host lifecycle access");
+
+export const RelayGetEnvironmentHostStatusEndpoint = HttpApiEndpoint.post(
+  "getEnvironmentHostStatus",
+  "/v1/environments/:environmentId/host-status",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    success: RelayEnvironmentHostStatusResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Read the compute host state");
+
+export const RelayWakeEnvironmentHostEndpoint = HttpApiEndpoint.post(
+  "wakeEnvironmentHost",
+  "/v1/environments/:environmentId/wake",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    success: RelayEnvironmentWakeResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Wake the compute host");
+
 export const RelayDpopClientGroup = HttpApiGroup.make("dpopClient")
-  .add(RelayConnectEnvironmentEndpoint, RelayGetEnvironmentStatusEndpoint)
+  .add(
+    RelayConnectEnvironmentEndpoint,
+    RelayGetEnvironmentStatusEndpoint,
+    RelayConfigureEnvironmentHostLifecycleEndpoint,
+    RelayRemoveEnvironmentHostLifecycleEndpoint,
+    RelayGetEnvironmentHostStatusEndpoint,
+    RelayWakeEnvironmentHostEndpoint,
+  )
   .annotate(OpenApi.Description, "DPoP-authenticated client access to linked environments.")
   .middleware(RelayDpopClientAuth);
 

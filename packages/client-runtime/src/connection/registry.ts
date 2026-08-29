@@ -699,9 +699,7 @@ export const make = Effect.gen(function* () {
   const armWake = (environmentId: EnvironmentId) =>
     getEntry(environmentId).pipe(
       Effect.flatMap((entry) =>
-        entry.target._tag === "RelayConnectionTarget" && entry.target.wakePolicy !== undefined
-          ? wakeIntent.arm(environmentId)
-          : Effect.void,
+        entry.target._tag === "RelayConnectionTarget" ? wakeIntent.arm(environmentId) : Effect.void,
       ),
       Effect.andThen(retryNow(environmentId)),
       Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),

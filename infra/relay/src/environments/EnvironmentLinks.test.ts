@@ -8,6 +8,49 @@ import { relayEnvironmentLinks } from "../persistence/schema.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 
 describe("EnvironmentLinks", () => {
+  it.effect("lists wake capability without returning the endpoint or encrypted secret", () => {
+    const fakeDb = {
+      select: () => ({
+        from: () => ({
+          where: () =>
+            Effect.succeed([
+              {
+                environmentId: "env-1",
+                environmentLabel: "Cloudbox",
+                endpointHttpBaseUrl: "https://env.example.test",
+                endpointWsBaseUrl: "wss://env.example.test/ws",
+                endpointProviderKind: "cloudflare_tunnel",
+                hostLifecycleProvider: "gcp",
+                hostLifecycleEndpoint: "https://wake.example.test",
+                hostLifecycleName: "konan",
+                hostLifecycleSecret: "v1.encrypted-secret",
+                createdAt: "2026-08-29T00:00:00.000Z",
+              },
+            ]),
+        }),
+      }),
+    } as unknown as RelayDb.RelayDb["Service"];
+
+    return Effect.gen(function* () {
+      const links = yield* EnvironmentLinks.EnvironmentLinks;
+      const environments = yield* links.listForUser({ userId: "user-1" });
+
+      expect(environments).toEqual([
+        expect.objectContaining({
+          environmentId: "env-1",
+          hostLifecycle: { provider: "gcp", canWake: true },
+        }),
+      ]);
+      expect(environments[0]).not.toHaveProperty("hostLifecycleEndpoint");
+      expect(environments[0]).not.toHaveProperty("hostLifecycleSecret");
+      expect(environments[0]).not.toHaveProperty("hostLifecycleTarget");
+    }).pipe(
+      Effect.provide(
+        EnvironmentLinks.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
+      ),
+    );
+  });
+
   it.effect("retains link lookup failures with user and environment identity", () => {
     const cause = new Error("database unavailable");
     const fakeDb = {

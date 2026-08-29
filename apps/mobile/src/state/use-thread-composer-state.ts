@@ -63,6 +63,7 @@ import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
 } from "./composer-attachment-uploads";
+import { environmentCatalog } from "../connection/catalog";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -112,6 +113,9 @@ export function useThreadComposerState() {
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
+    reportFailure: false,
+  });
+  const armEnvironmentWake = useAtomCommand(environmentCatalog.armWake, {
     reportFailure: false,
   });
 
@@ -280,6 +284,9 @@ export function useThreadComposerState() {
       );
       return null;
     }
+    if (selectedEnvironmentRuntime?.connectionState !== "connected") {
+      await armEnvironmentWake(selectedThreadShell.environmentId);
+    }
     const provider = serverConfig?.providers.find(
       (entry) => entry.instanceId === modelSelection.instanceId,
     );
@@ -388,6 +395,7 @@ export function useThreadComposerState() {
     );
     return messageId;
   }, [
+    armEnvironmentWake,
     selectedEnvironmentRuntime?.connectionState,
     selectedEnvironmentRuntime?.serverConfig,
     selectedThreadDetail,

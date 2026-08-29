@@ -41,6 +41,7 @@ import * as DpopProofs from "./auth/DpopProofs.ts";
 import * as RelayTokens from "./auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "./environments/EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
+import * as HostLifecycle from "./environments/HostLifecycle.ts";
 import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
 import * as LiveActivities from "./agentActivity/LiveActivities.ts";
 import * as RelayDb from "./db.ts";
@@ -215,6 +216,7 @@ export const ApiLive = Api.make(
       Layer.provideMerge(
         Layer.mergeAll(
           EnvironmentLinks.layer,
+          HostLifecycle.layer.pipe(Layer.provide(EnvironmentLinks.layer)),
           ManagedEndpointAllocations.layer,
           ManagedTunnelLimits.layer,
         ),

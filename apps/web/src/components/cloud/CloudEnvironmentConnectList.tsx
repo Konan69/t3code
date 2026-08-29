@@ -1,9 +1,11 @@
 import { findErrorTraceId } from "@t3tools/client-runtime/errors";
+import { useAtomValue } from "@effect/atom-react";
 import {
   type EnvironmentConnectionPresentation,
   RelayConnectionRegistration,
   RelayConnectionTarget,
 } from "@t3tools/client-runtime/connection";
+import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -16,6 +18,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { environmentCatalog } from "~/connection/catalog";
 import { cn } from "~/lib/utils";
 import { relayEnvironmentDiscovery } from "~/state/relay";
+import { configureManagedRelayHostLifecycleCommand } from "~/cloud/managedRelayState";
 import { useRelayEnvironmentDiscovery } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
@@ -69,6 +72,10 @@ export function CloudEnvironmentConnectRows({
   const armWakeEnvironment = useAtomCommand(environmentCatalog.armWake, {
     reportFailure: false,
   });
+  const configureHostLifecycle = useAtomCommand(configureManagedRelayHostLifecycleCommand, {
+    reportFailure: false,
+  });
+  const relaySession = useAtomValue(managedRelaySessionAtom);
   const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
     reportFailure: false,
   });
@@ -96,6 +103,19 @@ export function CloudEnvironmentConnectRows({
               mode: "explicit-intent" as const,
             }
           : undefined;
+      if (wakePolicy !== undefined && relaySession !== null) {
+        const synced = await configureHostLifecycle({
+          accountId: relaySession.accountId,
+          environmentId: environment.environmentId,
+          config: {
+            provider: "gcp",
+            endpoint: wakePolicy.endpoint,
+            name: wakePolicy.name,
+            secret: wakePolicy.secret,
+          },
+        });
+        if (synced._tag !== "Success") return synced;
+      }
       const result = await registerEnvironment(
         new RelayConnectionRegistration({
           target: new RelayConnectionTarget({
@@ -105,12 +125,12 @@ export function CloudEnvironmentConnectRows({
           }),
         }),
       );
-      if (wakePolicy !== undefined) {
+      if (result._tag === "Success") {
         await armWakeEnvironment(environment.environmentId);
       }
       return result;
     },
-    [armWakeEnvironment, registerEnvironment],
+    [armWakeEnvironment, configureHostLifecycle, registerEnvironment, relaySession],
   );
   const [connectingEnvironmentId, setConnectingEnvironmentId] = useState<EnvironmentId | null>(
     null,
