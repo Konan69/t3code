@@ -241,7 +241,7 @@ export function projectEvent(
             defaultModelSelection: payload.defaultModelSelection,
             defaultThreadEnvMode: null,
             autoPull: false,
-            machineMode: "off" as const,
+            machineMode: payload.machineMode ?? ("off" as const),
             faviconPath: payload.faviconPath ?? null,
             projectIcon: payload.projectIcon ?? null,
             scripts: payload.scripts,

@@ -617,6 +617,20 @@ it.effect("keeps machine lifecycle commands internal and decodes bindings", () =
 
 it.effect("decodes project machine mode without widening thread environment mode", () =>
   Effect.gen(function* () {
+    const created = yield* decodeClientOrchestrationCommand({
+      type: "project.create",
+      commandId: "cmd-machine-project-create",
+      projectId: "project-1",
+      title: "Machine project",
+      workspaceRoot: "/workspace/project-1",
+      machineMode: "thread",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    if (created.type !== "project.create") {
+      return yield* Effect.die("Expected project.create command.");
+    }
+    assert.strictEqual(created.machineMode, "thread");
+
     const project = yield* decodeProjectMetaUpdatedPayload({
       projectId: "project-1",
       machineMode: "thread",

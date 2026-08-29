@@ -19,11 +19,18 @@ import {
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
+  resolveNewProjectMachineMode,
   sortAddProjectProviderSources,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
 
 describe("add project shared logic", () => {
+  it("defaults new projects to thread machines only when the environment advertises them", () => {
+    expect(resolveNewProjectMachineMode(true)).toBe("thread");
+    expect(resolveNewProjectMachineMode(false)).toBe("off");
+    expect(resolveNewProjectMachineMode(undefined)).toBe("off");
+  });
+
   it("only allows project creation in connected environments", () => {
     expect(canCreateProjectInEnvironment("connected")).toBe(true);
     expect(canCreateProjectInEnvironment("available")).toBe(false);
@@ -250,12 +257,13 @@ describe("add project shared logic", () => {
     );
   });
 
-  it("builds the existing project.create command shape", () => {
+  it("includes thread-machine intent in the project.create command", () => {
     expect(
       buildProjectCreateCommand({
         commandId: CommandId.make("command"),
         projectId: ProjectId.make("project"),
         workspaceRoot: "/work/repo",
+        machineMode: "thread",
         createdAt: "2026-01-01T00:00:00.000Z",
       }),
     ).toMatchObject({
@@ -266,6 +274,7 @@ describe("add project shared logic", () => {
       workspaceRoot: "/work/repo",
       createWorkspaceRootIfMissing: true,
       defaultModelSelection: null,
+      machineMode: "thread",
     });
   });
 });

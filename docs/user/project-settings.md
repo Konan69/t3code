@@ -30,3 +30,12 @@ untracked files, or local commits.
 
 The pull is skipped if the checkout is on another branch, has no upstream, or contains local work.
 Pull failures do not prevent the server from starting.
+
+## Thread machines
+
+When an environment supports isolated thread machines, projects added to that environment start
+with **Thread machines** enabled. New threads then run inside their own machine instead of falling
+back to the environment host.
+
+To change this for a project, open **Settings**, select **Projects**, choose the project, and change
+**Thread machines**. The setting applies to threads created after the change.
