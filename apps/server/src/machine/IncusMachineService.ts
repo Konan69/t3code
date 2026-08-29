@@ -31,6 +31,9 @@ const PROJECT_DEVICE_NAME = "project";
 const ATTACHMENTS_DEVICE_NAME = "attachments";
 const T3_MCP_PROXY_DEVICE_NAME = "t3-mcp";
 const IDENTITY_DEVICE_PREFIX = "identity-";
+const DEPENDENCY_DEVICE_PREFIX = "deps-";
+const DEPENDENCY_SEARCH_MAX_DEPTH = 6;
+const DEPENDENCY_DEVICE_LIMIT = 64;
 const MACHINE_AGENT_WAIT_LIMIT = "180 seconds";
 const ThreadDatasetName = Schema.String.check(Schema.isPattern(/^tank\/threads\/[^/]+$/));
 const isThreadDatasetName = Schema.is(ThreadDatasetName);
@@ -371,6 +374,65 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       }
     });
 
+    const discoverDependencyDirectories = Effect.fn(
+      "IncusMachineService.discoverDependencyDirectories",
+    )(function* (projectWorkspaceRoot: string) {
+      const patterns = Array.from(
+        { length: DEPENDENCY_SEARCH_MAX_DEPTH },
+        (_, depth) => `${"*/".repeat(depth)}node_modules`,
+      );
+      const matches = yield* fileSystem
+        .glob(`{${patterns.join(",")}}`, {
+          root: projectWorkspaceRoot,
+          exclude: [".git/**", "**/.git/**", "node_modules/**", "**/node_modules/**"],
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            commandError(
+              "dependencies.discover",
+              `Could not scan project checkout '${projectWorkspaceRoot}' for node_modules directories.`,
+              cause,
+            ),
+          ),
+        );
+      const directories: string[] = [];
+      for (const match of matches) {
+        const candidate = path.resolve(projectWorkspaceRoot, match);
+        const info = yield* fileSystem
+          .stat(candidate)
+          .pipe(
+            Effect.mapError((cause) =>
+              commandError(
+                "dependencies.discover",
+                `Could not inspect project checkout path '${candidate}' while scanning for node_modules directories.`,
+                cause,
+              ),
+            ),
+          );
+        if (info.type !== "Directory") {
+          continue;
+        }
+        directories.push(candidate);
+        if (directories.length > DEPENDENCY_DEVICE_LIMIT) {
+          return yield* commandError(
+            "dependencies.discover",
+            `Project checkout '${projectWorkspaceRoot}' contains more than ${DEPENDENCY_DEVICE_LIMIT} top-level node_modules directories; thread machine dependency seeding supports at most ${DEPENDENCY_DEVICE_LIMIT}.`,
+          );
+        }
+      }
+
+      return directories.sort((left, right) => {
+        const leftRelative = path.relative(projectWorkspaceRoot, left);
+        const rightRelative = path.relative(projectWorkspaceRoot, right);
+        const depthDifference =
+          leftRelative.split(path.sep).length - rightRelative.split(path.sep).length;
+        return (
+          depthDifference ||
+          (leftRelative < rightRelative ? -1 : leftRelative === rightRelative ? 0 : 1)
+        );
+      });
+    });
+
     const runZfsChecked = (operation: string, args: ReadonlyArray<string>) => {
       const input = zfsCommand(args, uid);
       return runChecked(operation, input.command, input.args);
@@ -575,6 +637,145 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         `readonly=${desired.readonly}`,
       ]);
     });
+
+    const ensureDependencyDevices = Effect.fn("IncusMachineService.ensureDependencyDevices")(
+      function* (binding: ThreadMachineBinding) {
+        const projectWorkspaceRoot = binding.projectWorkspaceRoot;
+        if (projectWorkspaceRoot === undefined) {
+          return;
+        }
+
+        const workspaceIsProject =
+          path.resolve(projectWorkspaceRoot) === path.resolve(binding.hostWorkspaceRoot);
+        const dependencyDirectories = workspaceIsProject
+          ? []
+          : yield* discoverDependencyDirectories(projectWorkspaceRoot);
+        if (workspaceIsProject) {
+          yield* Effect.logInfo(
+            "thread machine dependency seeding skipped because the project checkout is the machine workspace",
+            { machineName: binding.machineName, projectWorkspaceRoot },
+          );
+        } else if (dependencyDirectories.length === 0) {
+          yield* Effect.logInfo(
+            "thread machine dependency seeding skipped because the project checkout has no node_modules directories",
+            { machineName: binding.machineName, projectWorkspaceRoot },
+          );
+        }
+
+        const listed = yield* runChecked("dependencies.list", INCUS_BINARY, [
+          "config",
+          "device",
+          "list",
+          binding.machineName,
+        ]);
+        const existingNames = new Set(
+          listed.stdout
+            .split(/\r?\n/)
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+        );
+        const desiredDevices = dependencyDirectories.map((source, index) => {
+          const relative = path.relative(path.resolve(projectWorkspaceRoot), source);
+          const parent = path.dirname(relative);
+          const rawSlug = parent === "." ? "root" : parent.toLowerCase();
+          const slug =
+            rawSlug
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-+|-+$/g, "")
+              .slice(0, 48) || "root";
+          return {
+            deviceName: `${DEPENDENCY_DEVICE_PREFIX}${index}-${slug}`,
+            hostTarget: path.join(binding.hostWorkspaceRoot, relative),
+            desired: {
+              source,
+              path: path.join(binding.guestWorkspaceRoot, relative),
+              shift: "true",
+              readonly: "false",
+            },
+          } as const;
+        });
+        const desiredNames = new Set<string>(desiredDevices.map((device) => device.deviceName));
+
+        yield* Effect.forEach(
+          [...existingNames].filter(
+            (name) => name.startsWith(DEPENDENCY_DEVICE_PREFIX) && !desiredNames.has(name),
+          ),
+          (name) =>
+            runChecked("dependencies.remove", INCUS_BINARY, [
+              "config",
+              "device",
+              "remove",
+              binding.machineName,
+              name,
+            ]),
+          { concurrency: 1, discard: true },
+        );
+
+        yield* Effect.forEach(
+          desiredDevices,
+          ({ desired, deviceName, hostTarget }) =>
+            Effect.gen(function* () {
+              yield* runChecked("dependencies.target.create", "mkdir", ["-p", hostTarget]);
+
+              if (!existingNames.has(deviceName)) {
+                yield* runChecked("dependencies.add", INCUS_BINARY, [
+                  "config",
+                  "device",
+                  "add",
+                  binding.machineName,
+                  deviceName,
+                  "disk",
+                  `source=${desired.source}`,
+                  `path=${desired.path}`,
+                  `shift=${desired.shift}`,
+                  `readonly=${desired.readonly}`,
+                ]);
+                return;
+              }
+
+              const inspectProperty = (property: keyof typeof desired) =>
+                runChecked("dependencies.inspect", INCUS_BINARY, [
+                  "config",
+                  "device",
+                  "get",
+                  binding.machineName,
+                  deviceName,
+                  property,
+                ]);
+              const [actualSource, guestPath, shift, readonly] = yield* Effect.all(
+                [
+                  inspectProperty("source"),
+                  inspectProperty("path"),
+                  inspectProperty("shift"),
+                  inspectProperty("readonly"),
+                ],
+                { concurrency: "unbounded" },
+              );
+              const actualReadonly = readonly.stdout.trim() === "true" ? "true" : "false";
+              if (
+                actualSource.stdout.trim() === desired.source &&
+                guestPath.stdout.trim() === desired.path &&
+                shift.stdout.trim() === desired.shift &&
+                actualReadonly === desired.readonly
+              ) {
+                return;
+              }
+              yield* runChecked("dependencies.update", INCUS_BINARY, [
+                "config",
+                "device",
+                "set",
+                binding.machineName,
+                deviceName,
+                `source=${desired.source}`,
+                `path=${desired.path}`,
+                `shift=${desired.shift}`,
+                `readonly=${desired.readonly}`,
+              ]);
+            }),
+          { concurrency: 1, discard: true },
+        );
+      },
+    );
 
     const ensureAttachmentsDevice = Effect.fn("IncusMachineService.ensureAttachmentsDevice")(
       function* (binding: ThreadMachineBinding) {
@@ -815,6 +1016,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       }
       yield* ensureWorkspaceDevice(binding);
       yield* ensureProjectDevice(binding);
+      yield* ensureDependencyDevices(binding);
       yield* ensureIdentityDevices(binding, manifest);
       yield* ensureAttachmentsDevice(binding);
       yield* ensureT3McpProxyDevice(binding);
@@ -869,6 +1071,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         const manifest = yield* loadIdentityManifest();
         yield* validateProjectDevice(binding, manifest);
         yield* ensureProjectDevice(binding);
+        yield* ensureDependencyDevices(binding);
         yield* ensureIdentityDevices(binding, manifest);
         yield* start(binding);
         yield* ensureAttachmentsDevice(binding);
