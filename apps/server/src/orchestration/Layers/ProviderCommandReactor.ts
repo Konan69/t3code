@@ -10,6 +10,7 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
+  type ThreadMachineBinding,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -30,7 +31,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { MachineServiceError } from "../../machine/MachineService.ts";
+import { hostToGuestPath, MachineServiceError } from "../../machine/MachineService.ts";
 import {
   ThreadMachineService,
   ThreadMachineServiceError,
@@ -297,6 +298,16 @@ function stalePendingRequestDetail(
 ): string {
   return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
 }
+
+export const mapProviderCwdForMachine = Effect.fn("mapProviderCwdForMachine")(function* (
+  binding: ThreadMachineBinding | null | undefined,
+  hostCwd: string | undefined,
+) {
+  if (!binding || !hostCwd) {
+    return hostCwd;
+  }
+  return yield* hostToGuestPath(binding, hostCwd);
+});
 
 function buildGeneratedWorktreeBranchName(raw: string): string {
   const normalized = raw
@@ -720,13 +731,17 @@ const make = Effect.gen(function* () {
       ),
     );
     const project = yield* resolveProject(thread.projectId);
-    const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread: {
-        ...thread,
-        machine: Option.getOrUndefined(ensuredMachine) ?? thread.machine,
-      },
-      projects: project ? [project] : [],
-    });
+    const effectiveThread = {
+      ...thread,
+      machine: Option.getOrUndefined(ensuredMachine) ?? thread.machine,
+    };
+    const effectiveCwd = yield* mapProviderCwdForMachine(
+      effectiveThread.machine,
+      resolveThreadWorkspaceCwd({
+        thread: effectiveThread,
+        projects: project ? [project] : [],
+      }),
+    );
     const refreshWorkspaceSnapshot = effectiveCwd
       ? providerRegistry
           .refreshWorkspaceSnapshot({ instanceId: desiredInstanceId, cwd: effectiveCwd })
@@ -918,6 +933,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly branch: string | null;
     readonly worktreePath: string | null;
+    readonly providerCwd: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
   }) {
@@ -942,7 +958,7 @@ const make = Effect.gen(function* () {
             );
 
       const generated = yield* textGeneration.generateBranchName({
-        cwd,
+        cwd: input.providerCwd,
         message: input.messageText,
         ...(attachments.length > 0 ? { attachments } : {}),
         modelSelection,
@@ -1049,10 +1065,13 @@ const make = Effect.gen(function* () {
     }
     const project = yield* resolveProject(thread.projectId);
     const cwd =
-      resolveThreadWorkspaceCwd({
-        thread,
-        projects: project ? [project] : [],
-      }) ?? process.cwd();
+      (yield* mapProviderCwdForMachine(
+        thread.machine,
+        resolveThreadWorkspaceCwd({
+          thread,
+          projects: project ? [project] : [],
+        }),
+      )) ?? process.cwd();
     const { textGenerationModelSelection: modelSelection } =
       yield* serverSettingsService.getSettings;
     const generated = yield* textGeneration.generateThreadTitle({
@@ -1366,10 +1385,13 @@ const make = Effect.gen(function* () {
     if (nonCompactUserMessageCount === 1 && !isCompactCommand) {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =
-        resolveThreadWorkspaceCwd({
-          thread: effectiveThread,
-          projects: project ? [project] : [],
-        }) ?? process.cwd();
+        (yield* mapProviderCwdForMachine(
+          effectiveThread.machine,
+          resolveThreadWorkspaceCwd({
+            thread: effectiveThread,
+            projects: project ? [project] : [],
+          }),
+        )) ?? process.cwd();
       const generationInput = {
         messageText: assistantCitationsToPlainText(message.text),
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
@@ -1380,6 +1402,7 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        providerCwd: generationCwd,
         ...generationInput,
       }).pipe(Effect.forkScoped);
 

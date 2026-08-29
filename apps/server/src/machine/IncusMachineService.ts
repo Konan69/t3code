@@ -15,6 +15,7 @@ import {
   MACHINE_GUEST_WORKSPACE_ROOT,
   MachineService,
   MachineServiceError,
+  hostToGuestPath,
   hostWorkspaceRootForThread,
   machineNameForThread,
   type MachineServiceShape,
@@ -28,6 +29,7 @@ const ZFS_BINARY = "zfs";
 const INCUS_STORAGE_POOL = "tank";
 const WORKSPACE_DEVICE_NAME = "workspace";
 const PROJECT_DEVICE_NAME = "project";
+const PROJECT_GIT_DEVICE_NAME = "project-git";
 const ATTACHMENTS_DEVICE_NAME = "attachments";
 const T3_MCP_PROXY_DEVICE_NAME = "t3-mcp";
 const IDENTITY_DEVICE_PREFIX = "identity-";
@@ -573,69 +575,91 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       ]);
     });
 
-    const ensureProjectDevice = Effect.fn("IncusMachineService.ensureProjectDevice")(function* (
+    const ensureProjectDevices = Effect.fn("IncusMachineService.ensureProjectDevices")(function* (
       binding: ThreadMachineBinding,
     ) {
       const projectWorkspaceRoot = binding.projectWorkspaceRoot;
       if (projectWorkspaceRoot === undefined) {
         return;
       }
-      const desired = {
-        source: projectWorkspaceRoot,
-        path: projectWorkspaceRoot,
-        shift: "true",
-        readonly: "false",
-      } as const;
-      const inspectProperty = (property: keyof typeof desired) =>
-        runCommand("project.inspect", INCUS_BINARY, [
-          "config",
-          "device",
-          "get",
-          binding.machineName,
-          PROJECT_DEVICE_NAME,
-          property,
-        ]);
-      const source = yield* inspectProperty("source");
-      if (source.code !== 0) {
-        yield* runChecked("project.add", INCUS_BINARY, [
-          "config",
-          "device",
-          "add",
-          binding.machineName,
-          PROJECT_DEVICE_NAME,
-          "disk",
-          `source=${desired.source}`,
-          `path=${desired.path}`,
-          `shift=${desired.shift}`,
-          `readonly=${desired.readonly}`,
-        ]);
-        return;
-      }
+      const devices = [
+        {
+          name: PROJECT_DEVICE_NAME,
+          desired: {
+            source: projectWorkspaceRoot,
+            path: projectWorkspaceRoot,
+            shift: "true",
+            readonly: "true",
+          },
+        },
+        {
+          name: PROJECT_GIT_DEVICE_NAME,
+          desired: {
+            source: path.join(projectWorkspaceRoot, ".git"),
+            path: path.join(projectWorkspaceRoot, ".git"),
+            shift: "true",
+            readonly: "false",
+          },
+        },
+      ] as const;
 
-      const [guestPath, shift, readonly] = yield* Effect.all(
-        [inspectProperty("path"), inspectProperty("shift"), inspectProperty("readonly")],
-        { concurrency: "unbounded" },
+      yield* Effect.forEach(
+        devices,
+        ({ name, desired }) =>
+          Effect.gen(function* () {
+            const inspectProperty = (property: keyof typeof desired) =>
+              runCommand("project.inspect", INCUS_BINARY, [
+                "config",
+                "device",
+                "get",
+                binding.machineName,
+                name,
+                property,
+              ]);
+            const source = yield* inspectProperty("source");
+            if (source.code !== 0) {
+              yield* runChecked("project.add", INCUS_BINARY, [
+                "config",
+                "device",
+                "add",
+                binding.machineName,
+                name,
+                "disk",
+                `source=${desired.source}`,
+                `path=${desired.path}`,
+                `shift=${desired.shift}`,
+                `readonly=${desired.readonly}`,
+              ]);
+              return;
+            }
+
+            const [guestPath, shift, readonly] = yield* Effect.all(
+              [inspectProperty("path"), inspectProperty("shift"), inspectProperty("readonly")],
+              { concurrency: "unbounded" },
+            );
+            const actualReadonly = readonly.stdout.trim() === "true" ? "true" : "false";
+            if (
+              source.stdout.trim() === desired.source &&
+              guestPath.stdout.trim() === desired.path &&
+              shift.stdout.trim() === desired.shift &&
+              actualReadonly === desired.readonly
+            ) {
+              return;
+            }
+            yield* runChecked("project.update", INCUS_BINARY, [
+              "config",
+              "device",
+              "set",
+              binding.machineName,
+              name,
+              `source=${desired.source}`,
+              `path=${desired.path}`,
+              `shift=${desired.shift}`,
+              `readonly=${desired.readonly}`,
+            ]);
+          }),
+        { concurrency: 1, discard: true },
       );
-      const actualReadonly = readonly.stdout.trim() === "true" ? "true" : "false";
-      if (
-        source.stdout.trim() === desired.source &&
-        guestPath.stdout.trim() === desired.path &&
-        shift.stdout.trim() === desired.shift &&
-        actualReadonly === desired.readonly
-      ) {
-        return;
-      }
-      yield* runChecked("project.update", INCUS_BINARY, [
-        "config",
-        "device",
-        "set",
-        binding.machineName,
-        PROJECT_DEVICE_NAME,
-        `source=${desired.source}`,
-        `path=${desired.path}`,
-        `shift=${desired.shift}`,
-        `readonly=${desired.readonly}`,
-      ]);
     });
 
     const ensureDependencyDevices = Effect.fn("IncusMachineService.ensureDependencyDevices")(
@@ -1015,7 +1039,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         );
       }
       yield* ensureWorkspaceDevice(binding);
-      yield* ensureProjectDevice(binding);
+      yield* ensureProjectDevices(binding);
       yield* ensureDependencyDevices(binding);
       yield* ensureIdentityDevices(binding, manifest);
       yield* ensureAttachmentsDevice(binding);
@@ -1070,19 +1094,16 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         const binding = input.binding!;
         const manifest = yield* loadIdentityManifest();
         yield* validateProjectDevice(binding, manifest);
-        yield* ensureProjectDevice(binding);
+        yield* ensureProjectDevices(binding);
         yield* ensureDependencyDevices(binding);
         yield* ensureIdentityDevices(binding, manifest);
         yield* start(binding);
         yield* ensureAttachmentsDevice(binding);
         yield* ensureT3McpProxyDevice(binding);
         const cwd = input.cwd
-          ? yield* mappedPath(
-              "hostToGuestPath",
-              binding.hostWorkspaceRoot,
-              binding.guestWorkspaceRoot,
-              input.cwd,
-            )
+          ? containsPath(binding.guestWorkspaceRoot, input.cwd)
+            ? path.resolve(input.cwd)
+            : yield* hostToGuestPath(binding, input.cwd)
           : binding.guestWorkspaceRoot;
         const guestIds = yield* resolveGuestIds(binding.machineName);
         const effectiveEnv = input.extendEnv ? { ...process.env, ...input.env } : input.env;
@@ -1102,12 +1123,9 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
               value === binding.hostWorkspaceRoot ||
               value.startsWith(`${binding.hostWorkspaceRoot}${path.sep}`)
             ) {
-              return mappedPath(
-                "hostToGuestPath",
-                binding.hostWorkspaceRoot,
-                binding.guestWorkspaceRoot,
-                value,
-              ).pipe(Effect.map((mapped) => [key, mapped] as const));
+              return hostToGuestPath(binding, value).pipe(
+                Effect.map((mapped) => [key, mapped] as const),
+              );
             }
             return Effect.succeed([key, value] as const);
           },
@@ -1222,13 +1240,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       exec,
       archive,
       destroy,
-      hostToGuestPath: (binding, hostPath) =>
-        mappedPath(
-          "hostToGuestPath",
-          binding.hostWorkspaceRoot,
-          binding.guestWorkspaceRoot,
-          hostPath,
-        ),
+      hostToGuestPath,
       guestToHostPath: (binding, guestPath) =>
         mappedPath(
           "guestToHostPath",
