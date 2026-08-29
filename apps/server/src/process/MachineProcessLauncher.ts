@@ -14,7 +14,7 @@ import {
 
 export const makeMachineProcessLauncher = (
   host: ProcessLauncherShape,
-  machines: Pick<MachineService["Service"], "exec" | "hostReachableUrl">,
+  machines: Pick<MachineService["Service"], "exec" | "ensureExecutableShim" | "hostReachableUrl">,
   snapshots: Pick<ProjectionSnapshotQuery["Service"], "getThreadDetailById">,
 ): ProcessLauncherShape => {
   const resolveBinding = (threadId: Parameters<ProcessLauncherShape["launch"]>[0]["threadId"]) =>
@@ -33,6 +33,14 @@ export const makeMachineProcessLauncher = (
         );
 
   return ProcessLauncher.of({
+    resolveSdkExecutable: ({ threadId, command }) =>
+      resolveBinding(threadId).pipe(
+        Effect.flatMap((binding) =>
+          binding === undefined
+            ? Effect.succeed(command)
+            : machines.ensureExecutableShim({ binding, command }),
+        ),
+      ),
     hostReachableUrl: ({ threadId, url }) =>
       resolveBinding(threadId).pipe(
         Effect.flatMap((binding) =>

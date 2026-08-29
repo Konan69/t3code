@@ -61,6 +61,11 @@ export class MachineServiceError extends Schema.TaggedErrorClass<MachineServiceE
   },
 ) {}
 
+export interface MachineExecutableShimInput {
+  readonly binding: ThreadMachineBinding;
+  readonly command: string;
+}
+
 export interface MachineExecInput {
   readonly binding?: ThreadMachineBinding | undefined;
   readonly command: string;
@@ -89,6 +94,9 @@ export interface MachineServiceShape {
   readonly exec: (
     input: MachineExecInput,
   ) => Effect.Effect<ChildProcessSpawner.ChildProcessHandle, MachineServiceError, Scope.Scope>;
+  readonly ensureExecutableShim: (
+    input: MachineExecutableShimInput,
+  ) => Effect.Effect<string, MachineServiceError>;
   readonly archive: (binding: ThreadMachineBinding) => Effect.Effect<void, MachineServiceError>;
   readonly destroy: (binding: ThreadMachineBinding) => Effect.Effect<void, MachineServiceError>;
   readonly hostToGuestPath: (
