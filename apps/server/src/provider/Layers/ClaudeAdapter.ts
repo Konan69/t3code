@@ -73,11 +73,17 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import {
+  makeHostProcessLauncher,
+  type ProcessLauncherShape,
+} from "../../process/ProcessLauncher.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { planClaudeSkillDispatch } from "../Drivers/ClaudeSkillDispatch.ts";
@@ -103,6 +109,14 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import {
+  formatProviderChildExitReason,
+  logUnexpectedProviderChildExit,
+  makeProviderStderrBuffer,
+  type ProviderProcessExit,
+  type ProviderStderrBuffer,
+} from "../providerChildDiagnostics.ts";
+import { ClaudeSpawnedProcess, makeClaudeProcessLaunchInput } from "../claudeSpawn.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -283,6 +297,12 @@ interface ClaudeSessionContext {
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
   readonly query: ClaudeQueryRuntime;
   streamFiber: Fiber.Fiber<void, Error> | undefined;
+  readonly processDiagnostics: {
+    readonly stderr: ProviderStderrBuffer;
+    spawned: boolean;
+    exit: ProviderProcessExit | undefined;
+  };
+  readonly closeProcessScope: Effect.Effect<void>;
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
   currentApiModelId: string | undefined;
@@ -334,6 +354,7 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
 export interface ClaudeAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly processLauncher?: ProcessLauncherShape;
   readonly createQuery?: (input: {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
@@ -1727,6 +1748,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const processLauncher = options?.processLauncher ?? makeHostProcessLauncher(childProcessSpawner);
   const crypto = yield* Crypto.Crypto;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
@@ -3702,7 +3725,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         const failures = exit.cause.reasons.flatMap((reason) =>
           Cause.isFailReason(reason) ? [reason.error] : [],
         );
-        const message = failures[0]?.detail ?? "Claude runtime stream failed.";
+        let message = failures[0]?.detail ?? "Claude runtime stream failed.";
+        const processExit = context.processDiagnostics.exit;
+        if (processExit) {
+          const exitDetail = {
+            provider: "Claude Agent SDK",
+            threadId: context.session.threadId,
+            exitCode: processExit.exitCode,
+            signal: processExit.signal,
+            stderr: context.processDiagnostics.stderr.read(),
+          } as const;
+          yield* logUnexpectedProviderChildExit(exitDetail);
+          message = formatProviderChildExitReason(exitDetail);
+        }
         yield* emitRuntimeError(context, message, {
           failureCount: failures.length,
           failureTags: failures.map((failure) => failure._tag),
@@ -3796,6 +3831,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context.streamFiber = undefined;
     if (streamFiber && streamFiber.pollUnsafe() === undefined) {
       yield* Fiber.interrupt(streamFiber);
+    }
+    if (!context.processDiagnostics.spawned || context.processDiagnostics.exit !== undefined) {
+      yield* context.closeProcessScope;
     }
 
     const updatedAt = yield* nowIso;
@@ -4341,6 +4379,45 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           : {}),
       };
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      const processScope = yield* Scope.make("sequential");
+      let processScopeClosed = false;
+      const closeProcessScope = Effect.suspend(() => {
+        if (processScopeClosed) {
+          return Effect.void;
+        }
+        processScopeClosed = true;
+        return Scope.close(processScope, Exit.void);
+      });
+      const processDiagnostics = {
+        stderr: makeProviderStderrBuffer(),
+        spawned: false,
+        exit: undefined as ProviderProcessExit | undefined,
+      };
+      const spawnClaudeCodeProcess: NonNullable<ClaudeQueryOptions["spawnClaudeCodeProcess"]> = (
+        spawnOptions,
+      ) => {
+        processDiagnostics.spawned = true;
+        return new ClaudeSpawnedProcess({
+          launch: runPromise(
+            processLauncher
+              .launch(
+                makeClaudeProcessLaunchInput({
+                  threadId: input.threadId,
+                  options: spawnOptions,
+                }),
+              )
+              .pipe(Effect.provideService(Scope.Scope, processScope)),
+          ),
+          signal: spawnOptions.signal,
+          onStderr: processDiagnostics.stderr.append,
+          onExit: (exit) => {
+            processDiagnostics.exit = exit;
+          },
+          onSettled: () => {
+            runFork(closeProcessScope);
+          },
+        });
+      };
       // The attachments dir grant lets the agent Read/copy pasted images at
       // the paths ProviderService injects into the turn text, without an
       // approval prompt. It is a leaf directory holding only attachment
@@ -4353,6 +4430,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
+        spawnClaudeCodeProcess,
         systemPrompt: { type: "preset", preset: "claude_code" },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is
@@ -4429,7 +4507,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             detail: "Failed to start Claude runtime session.",
             cause,
           }),
-      });
+      }).pipe(Effect.tapError(() => closeProcessScope));
 
       const session: ProviderSession = {
         threadId,
@@ -4455,6 +4533,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         promptQueue,
         query: queryRuntime,
         streamFiber: undefined,
+        processDiagnostics,
+        closeProcessScope,
         startedAt,
         basePermissionMode: permissionMode,
         currentApiModelId: apiModelId,
