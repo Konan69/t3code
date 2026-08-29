@@ -852,7 +852,23 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       // is no longer needed, so discard later output instead of retaining it.
       yield* Ref.set(stdoutRef, null);
 
-      const url = readyOption.value;
+      const url = processLauncher.hostReachableUrl
+        ? yield* processLauncher
+            .hostReachableUrl({
+              ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+              url: readyOption.value,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OpenCodeRuntimeError({
+                    operation: "startOpenCodeServerProcess",
+                    detail: `Failed to resolve host-reachable OpenCode URL: ${cause.detail}`,
+                    cause,
+                  }),
+              ),
+            )
+        : readyOption.value;
       const version = yield* verifyOpenCodeServerVersion(
         createOpenCodeSdkClient({
           baseUrl: url,
