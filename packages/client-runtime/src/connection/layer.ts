@@ -10,6 +10,7 @@ import * as PlatformConnectionSource from "../platform/source.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 
 const resolverLayer = ConnectionResolver.layer.pipe(
   Layer.provide(RemoteEnvironmentAuthorization.layer),
@@ -19,7 +20,10 @@ const driverLayer = ConnectionDriver.layer.pipe(
   Layer.provide(Layer.mergeAll(resolverLayer, RpcSession.layer)),
 );
 
-const registryLayer = EnvironmentRegistry.layer.pipe(Layer.provide(driverLayer));
+const registryLayer = EnvironmentRegistry.layer.pipe(
+  Layer.provide(driverLayer),
+  Layer.provideMerge(WakeIntent.layer),
+);
 
 const onboardingLayer = ConnectionOnboarding.layer.pipe(Layer.provide(registryLayer));
 
