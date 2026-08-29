@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect } from "vite-plus/test";
 
+import * as ServerConfig from "../config.ts";
 import * as IncusMachineService from "./IncusMachineService.ts";
 import { MachineService, type ThreadMachineBinding } from "./MachineService.ts";
 
@@ -35,8 +36,12 @@ function makeHandle(input: {
 }
 
 const provideIncus = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
-  Layer.effect(MachineService, IncusMachineService.make({ uid: 1001, gid: 1002 })).pipe(
+  Layer.effect(
+    MachineService,
+    IncusMachineService.make({ uid: 1001, gid: 1002 }, { mcpPort: 3773 }),
+  ).pipe(
     Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+    Layer.provide(ServerConfig.layerTest("/repo", { prefix: "incus-machine-test" })),
     Layer.provide(NodeServices.layer),
   );
 
@@ -50,6 +55,19 @@ describe("IncusMachineService", () => {
       command: "sudo",
       args: ["-n", "zfs", "list", "tank/threads"],
     });
+  });
+
+  it("resolves provider binaries by name and exposes OpenCode outside guest loopback", () => {
+    expect(IncusMachineService.guestProviderBinary("/home/kixey/.local/share/pnpm/codex")).toBe(
+      "codex",
+    );
+    expect(IncusMachineService.guestProviderBinary("C:\\tools\\pi.cmd")).toBe("pi");
+    expect(
+      IncusMachineService.guestProviderArgs("/host/bin/opencode", [
+        "serve",
+        "--hostname=127.0.0.1",
+      ]),
+    ).toEqual(["serve", "--hostname=0.0.0.0"]);
   });
 
   it.effect("surfaces sudo failures without retrying plain zfs", () => {
@@ -99,7 +117,7 @@ describe("IncusMachineService", () => {
       const commands: Array<{ command: string; args: ReadonlyArray<string>; stdin?: unknown }> = [];
       let datasetExists = false;
       let machineExists = false;
-      let deviceExists = false;
+      const devices = new Map<string, Map<string, string>>();
       let running = false;
       let agentAttempts = 0;
       const spawner = ChildProcessSpawner.make((input) => {
@@ -150,10 +168,34 @@ describe("IncusMachineService", () => {
           return Effect.succeed(makeHandle({}));
         }
         if (args.slice(0, 3).join(" ") === "config device get") {
-          return Effect.succeed(makeHandle({ code: deviceExists ? 0 : 1 }));
+          const config = devices.get(args[4] ?? "");
+          return Effect.succeed(
+            makeHandle({
+              code: config ? 0 : 1,
+              stdout: config ? `${config.get(args[5] ?? "") ?? ""}\n` : "",
+            }),
+          );
         }
         if (args.slice(0, 3).join(" ") === "config device add") {
-          deviceExists = true;
+          const config = new Map<string, string>();
+          for (const option of args.slice(6)) {
+            const separator = option.indexOf("=");
+            if (separator >= 0) {
+              config.set(option.slice(0, separator), option.slice(separator + 1));
+            }
+          }
+          devices.set(args[4] ?? "", config);
+          return Effect.succeed(makeHandle({}));
+        }
+        if (args.slice(0, 3).join(" ") === "config device set") {
+          const config = devices.get(args[4] ?? "") ?? new Map<string, string>();
+          for (const option of args.slice(5)) {
+            const separator = option.indexOf("=");
+            if (separator >= 0) {
+              config.set(option.slice(0, separator), option.slice(separator + 1));
+            }
+          }
+          devices.set(args[4] ?? "", config);
           return Effect.succeed(makeHandle({}));
         }
         if (args[0] === "start") {
@@ -215,7 +257,7 @@ describe("IncusMachineService", () => {
         expect(commands.some((entry) => entry.command === "zfs")).toBe(false);
         expect(
           commands.filter((entry) => entry.args.slice(0, 3).join(" ") === "config device add"),
-        ).toHaveLength(1);
+        ).toHaveLength(3);
         expect(commands).toContainEqual({
           command: "incus",
           args: [
@@ -231,6 +273,31 @@ describe("IncusMachineService", () => {
           ],
           stdin: "ignore",
         });
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: [
+            "config",
+            "device",
+            "add",
+            "thread-thread-1",
+            "t3-mcp",
+            "proxy",
+            "listen=tcp:127.0.0.1:3773",
+            "connect=tcp:127.0.0.1:3773",
+            "bind=instance",
+          ],
+          stdin: "ignore",
+        });
+        const attachments = commands.find(
+          (entry) =>
+            entry.args.slice(0, 3).join(" ") === "config device add" &&
+            entry.args[4] === "attachments",
+        );
+        expect(attachments?.args[5]).toBe("disk");
+        expect(attachments?.args).toContain("readonly=true");
+        expect(attachments?.args).toContain("shift=true");
+        const attachmentSource = attachments?.args.find((arg) => arg.startsWith("source="));
+        expect(attachments?.args).toContain(attachmentSource?.replace("source=", "path="));
         expect(
           commands
             .filter((entry) => entry.command === "incus")
@@ -319,14 +386,27 @@ describe("IncusMachineService", () => {
     }).pipe(Effect.provide(provideIncus(spawner)));
   });
 
-  it.effect("maps cwd and preserves argv while forcing non-piped incus stdin to null", () => {
+  it.effect("maps cwd and launches with cached guest ids and piped stdio", () => {
     let captured: unknown;
+    let guestIdLookups = 0;
+    const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
     const spawner = ChildProcessSpawner.make((input) => {
-      const command = input as unknown as { args: ReadonlyArray<string> };
+      const command = input as unknown as {
+        command: string;
+        args: ReadonlyArray<string>;
+      };
+      commands.push({ command: command.command, args: command.args });
       if (command.args[0] === "list") {
         return Effect.succeed(
           makeHandle({ stdout: '[{"name":"thread-thread-1","status":"Running"}]' }),
         );
+      }
+      if (command.args.slice(0, 3).join(" ") === "config device get") {
+        return Effect.succeed(makeHandle({ code: 1 }));
+      }
+      if (command.args.includes("getent")) {
+        guestIdLookups += 1;
+        return Effect.succeed(makeHandle({ stdout: "kixey:x:1000:1000::/home/kixey:/bin/bash\n" }));
       }
       if (command.args.includes("codex")) {
         captured = input;
@@ -356,7 +436,9 @@ describe("IncusMachineService", () => {
           "exec",
           "thread-thread-1",
           "--user",
-          "kixey",
+          "1000",
+          "--group",
+          "1000",
           "--cwd",
           "/home/kixey/ws/packages/app",
           "--env",
@@ -366,7 +448,50 @@ describe("IncusMachineService", () => {
           "app-server",
           "--flag=value",
         ],
-        options: { stdin: "ignore" },
+      });
+      expect(
+        (captured as { options?: { stdin?: unknown } } | undefined)?.options?.stdin,
+      ).toBeUndefined();
+
+      yield* machines.exec({
+        binding,
+        command: "/host/bin/codex",
+        args: ["app-server"],
+        cwd: binding.hostWorkspaceRoot,
+        env: {
+          HOME: "/host/home",
+          PATH: "/host/bin",
+          WORKSPACE: binding.hostWorkspaceRoot,
+        },
+        extendEnv: true,
+        detached: true,
+      });
+      expect(guestIdLookups).toBe(1);
+      const second = captured as
+        | { args: ReadonlyArray<string>; options?: { detached?: boolean } }
+        | undefined;
+      expect(second?.options?.detached).toBe(true);
+      expect(second?.args).toContain("--env");
+      expect(second?.args).toContain("HOME=/home/kixey");
+      expect(second?.args).toContain(
+        "PATH=/home/kixey/.local/bin:/home/kixey/.local/share/pnpm:/home/kixey/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      );
+      expect(second?.args).toContain("WORKSPACE=/home/kixey/ws");
+      expect(second?.args.at(second.args.lastIndexOf("--") + 1)).toBe("codex");
+      expect(second?.args).not.toContain("/host/bin/codex");
+      expect(commands).toContainEqual({
+        command: "incus",
+        args: [
+          "config",
+          "device",
+          "add",
+          "thread-thread-1",
+          "t3-mcp",
+          "proxy",
+          "listen=tcp:127.0.0.1:3773",
+          "connect=tcp:127.0.0.1:3773",
+          "bind=instance",
+        ],
       });
 
       const escaped = yield* machines
@@ -374,5 +499,46 @@ describe("IncusMachineService", () => {
         .pipe(Effect.exit);
       expect(escaped._tag).toBe("Failure");
     }).pipe(Effect.provide(provideIncus(spawner)), Effect.scoped);
+  });
+
+  it.effect("rewrites guest listener URLs to a non-loopback machine address", () => {
+    const spawner = ChildProcessSpawner.make((input) => {
+      const command = input as unknown as { args: ReadonlyArray<string> };
+      if (command.args[0] === "list") {
+        return Effect.succeed(
+          makeHandle({
+            stdout: JSON.stringify([
+              {
+                name: "thread-thread-1",
+                state: {
+                  network: {
+                    lo: { addresses: [{ address: "127.0.0.1" }] },
+                    eth0: { addresses: [{ address: "10.42.0.18" }] },
+                  },
+                },
+              },
+            ]),
+          }),
+        );
+      }
+      return Effect.succeed(makeHandle({}));
+    });
+    const binding = {
+      machineId: "thread-thread-1",
+      machineName: "thread-thread-1",
+      state: "running",
+      hostWorkspaceRoot: "/tank/threads/thread-1/ws",
+      guestWorkspaceRoot: "/home/kixey/ws",
+    } satisfies ThreadMachineBinding;
+
+    return Effect.gen(function* () {
+      const machines = yield* MachineService;
+      expect(yield* machines.hostReachableUrl(binding, "https://example.com/api")).toBe(
+        "https://example.com/api",
+      );
+      expect(yield* machines.hostReachableUrl(binding, "http://127.0.0.1:4301")).toBe(
+        "http://10.42.0.18:4301/",
+      );
+    }).pipe(Effect.provide(provideIncus(spawner)));
   });
 });

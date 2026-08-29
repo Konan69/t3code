@@ -710,8 +710,26 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         });
       }
 
+      const hostUrl = processLauncher.hostReachableUrl
+        ? yield* processLauncher
+            .hostReachableUrl({
+              ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+              url: readyOption.value,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OpenCodeRuntimeError({
+                    operation: "startOpenCodeServerProcess",
+                    detail: `Failed to resolve host-reachable OpenCode URL: ${cause.detail}`,
+                    cause,
+                  }),
+              ),
+            )
+        : readyOption.value;
+
       return {
-        url: readyOption.value,
+        url: hostUrl,
         exitCode: processExit.pipe(Effect.map((exit) => exit.exitCode)),
         exitSignal: processExit.pipe(Effect.map((exit) => exit.signal)),
         stderrTail: Effect.sync(() => stderr.read()),
