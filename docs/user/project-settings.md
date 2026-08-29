@@ -14,3 +14,12 @@ T3 Code supports SVG, PNG, ICO, JPEG, GIF, AVIF, and WebP files. The selected pa
 each checkout in the project group and appears on your connected clients.
 
 To use automatic detection again, select **Automatic**.
+
+## Thread machines
+
+When an environment supports isolated thread machines, projects added to that environment start
+with **Thread machines** enabled. New threads then run inside their own machine instead of falling
+back to the environment host.
+
+To change this for a project, open **Settings**, select **Projects**, choose the project, and change
+**Thread machines**. The setting applies to threads created after the change.
