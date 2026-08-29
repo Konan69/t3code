@@ -29,6 +29,7 @@ const binding = {
   machineId: "thread-thread-1",
   machineName: "thread-thread-1",
   state: "running",
+  projectWorkspaceRoot: "/repo",
   hostWorkspaceRoot: "/tank/threads/thread-1/ws",
   guestWorkspaceRoot: "/home/kixey/ws",
 } satisfies ThreadMachineBinding;
@@ -96,8 +97,8 @@ function makeHandle() {
 
 const makeLayer = (input: {
   readonly machineMode: "off" | "thread";
-  readonly onWorkspace?: () => void;
-  readonly onCreate?: () => void;
+  readonly onWorkspace?: (projectWorkspaceRoot: string | undefined) => void;
+  readonly onCreate?: (projectWorkspaceRoot: string | undefined) => void;
   readonly onWorktree?: (input: unknown) => void;
   readonly onDispatch?: (command: unknown) => void;
   readonly onExec?: (execInput: unknown) => void;
@@ -110,12 +111,12 @@ const makeLayer = (input: {
   const machineLayer = Layer.succeed(
     MachineService,
     MachineService.of({
-      ensureWorkspace: () => {
-        input.onWorkspace?.();
+      ensureWorkspace: (_threadId, projectWorkspaceRoot) => {
+        input.onWorkspace?.(projectWorkspaceRoot);
         return Effect.succeed(Option.some(binding));
       },
-      createFromGolden: () => {
-        input.onCreate?.();
+      createFromGolden: (_threadId, projectWorkspaceRoot) => {
+        input.onCreate?.(projectWorkspaceRoot);
         return Effect.succeed(Option.some(binding));
       },
       start: () => Effect.void,
@@ -226,6 +227,33 @@ describe("ThreadMachineService", () => {
       expect(Option.isNone(result)).toBe(true);
       expect(creates).toBe(0);
     }).pipe(Effect.provide(makeLayer({ machineMode: "off", onCreate: () => (creates += 1) })));
+  });
+
+  it.effect("carries the project checkout root through machine creation and binding", () => {
+    const roots: Array<string | undefined> = [];
+    const dispatched: unknown[] = [];
+    return Effect.gen(function* () {
+      const service = yield* ThreadMachineService;
+      const result = yield* service.ensureForThread(threadId);
+
+      expect(roots).toEqual(["/repo", "/repo"]);
+      expect(Option.getOrThrow(result).projectWorkspaceRoot).toBe("/repo");
+      expect(dispatched).toContainEqual(
+        expect.objectContaining({
+          type: "thread.machine.bind",
+          binding: expect.objectContaining({ projectWorkspaceRoot: "/repo" }),
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          machineMode: "thread",
+          onWorkspace: (root) => roots.push(root),
+          onCreate: (root) => roots.push(root),
+          onDispatch: (command) => dispatched.push(command),
+        }),
+      ),
+    );
   });
 
   it.effect("keeps the unset-branch behavior for a new thread machine", () => {

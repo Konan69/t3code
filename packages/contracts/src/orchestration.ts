@@ -292,6 +292,8 @@ export const ThreadMachineBinding = Schema.Struct({
   machineId: TrimmedNonEmptyString,
   machineName: TrimmedNonEmptyString,
   state: ThreadMachineState,
+  // Optional so bindings persisted by older servers remain decodable.
+  projectWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   hostWorkspaceRoot: TrimmedNonEmptyString,
   guestWorkspaceRoot: TrimmedNonEmptyString,
 });
