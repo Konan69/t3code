@@ -42,6 +42,7 @@ export const layer = Layer.effect(
       start: () => Effect.void,
       stop: () => Effect.void,
       exec,
+      ensureExecutableShim: (input) => Effect.succeed(input.command),
       archive: () => Effect.void,
       destroy: () => Effect.void,
       hostToGuestPath: (_binding, hostPath) => Effect.succeed(hostPath),
