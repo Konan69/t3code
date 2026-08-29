@@ -102,7 +102,9 @@ const makeLayer = (input: {
   readonly onDispatch?: (command: unknown) => void;
   readonly onExec?: (execInput: unknown) => void;
   readonly existingMachine?: ThreadMachineBinding | null;
-  readonly existingBranch?: boolean;
+  readonly threadBranch?: string | null;
+  readonly existingBranches?: ReadonlyArray<string>;
+  readonly checkedOutBranches?: ReadonlyArray<string>;
   readonly failWorktreeCreate?: boolean;
 }) => {
   const machineLayer = Layer.succeed(
@@ -137,6 +139,7 @@ const makeLayer = (input: {
           Effect.succeed(
             Option.some({
               ...thread,
+              branch: input.threadBranch ?? thread.branch,
               machine: input.existingMachine ?? thread.machine,
             }),
           ),
@@ -155,23 +158,32 @@ const makeLayer = (input: {
             workingTree: { files: [], insertions: 0, deletions: 0 },
           }),
         remoteExists: () => Effect.succeed(false),
-        listRefs: () =>
-          Effect.succeed({
-            refs: input.existingBranch
-              ? [
-                  {
-                    name: `t3/${binding.machineName}`,
-                    current: false,
-                    isDefault: false,
-                    worktreePath: null,
-                  },
-                ]
-              : [],
+        listRefs: ({ query }) => {
+          const refs = (input.existingBranches ?? [])
+            .filter((name) => query === undefined || name.includes(query))
+            .map((name) => ({
+              name,
+              current: false,
+              isDefault: false,
+              worktreePath: null,
+            }));
+          return Effect.succeed({
+            refs,
             isRepo: true,
             hasPrimaryRemote: false,
             nextCursor: null,
-            totalCount: 0,
-          }),
+            totalCount: refs.length,
+          });
+        },
+        listWorktrees: () =>
+          Effect.succeed(
+            (input.checkedOutBranches ?? []).map((refName) => ({
+              path: refName === "main" ? "/repo" : `/worktrees/${refName}`,
+              refName,
+              locked: false,
+              prunable: false,
+            })),
+          ),
         createWorktree: (worktreeInput) => {
           input.onWorktree?.(worktreeInput);
           if (input.failWorktreeCreate) {
@@ -187,7 +199,7 @@ const makeLayer = (input: {
           return Effect.succeed({
             worktree: {
               path: binding.hostWorkspaceRoot,
-              refName: thread.branch ?? `t3/${binding.machineName}`,
+              refName: worktreeInput.newRefName ?? worktreeInput.refName,
             },
           });
         },
@@ -216,7 +228,7 @@ describe("ThreadMachineService", () => {
     }).pipe(Effect.provide(makeLayer({ machineMode: "off", onCreate: () => (creates += 1) })));
   });
 
-  it.effect("creates the dataset, populates it with a worktree, then creates the machine", () => {
+  it.effect("keeps the unset-branch behavior for a new thread machine", () => {
     const order: string[] = [];
     const dispatched: unknown[] = [];
     let worktreeInput: unknown;
@@ -234,6 +246,13 @@ describe("ThreadMachineService", () => {
       });
       expect(dispatched).toContainEqual(
         expect.objectContaining({
+          type: "thread.meta.update",
+          threadId,
+          branch: "t3/thread-thread-1",
+        }),
+      );
+      expect(dispatched).toContainEqual(
+        expect.objectContaining({
           type: "thread.machine.bind",
           threadId,
           binding,
@@ -249,6 +268,71 @@ describe("ThreadMachineService", () => {
             worktreeInput = value;
           },
           onCreate: () => order.push("device-and-start"),
+          onDispatch: (command) => dispatched.push(command),
+        }),
+      ),
+    );
+  });
+
+  it.effect("branches from a requested branch that the project checkout already uses", () => {
+    const dispatched: unknown[] = [];
+    let worktreeInput: unknown;
+    return Effect.gen(function* () {
+      const service = yield* ThreadMachineService;
+      yield* service.ensureForThread(threadId);
+
+      expect(worktreeInput).toEqual({
+        cwd: "/repo",
+        refName: "main",
+        newRefName: "t3/thread-thread-1",
+        baseRefName: "main",
+        path: "/tank/threads/thread-1/ws",
+      });
+      expect(dispatched).toContainEqual(
+        expect.objectContaining({
+          type: "thread.meta.update",
+          threadId,
+          branch: "t3/thread-thread-1",
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          machineMode: "thread",
+          threadBranch: "main",
+          existingBranches: ["main"],
+          checkedOutBranches: ["main"],
+          onWorktree: (value) => (worktreeInput = value),
+          onDispatch: (command) => dispatched.push(command),
+        }),
+      ),
+    );
+  });
+
+  it.effect("checks out an existing branch that no worktree uses", () => {
+    const dispatched: unknown[] = [];
+    let worktreeInput: unknown;
+    return Effect.gen(function* () {
+      const service = yield* ThreadMachineService;
+      yield* service.ensureForThread(threadId);
+
+      expect(worktreeInput).toEqual({
+        cwd: "/repo",
+        refName: "feature/existing",
+        path: "/tank/threads/thread-1/ws",
+      });
+      expect(dispatched).not.toContainEqual(
+        expect.objectContaining({
+          type: "thread.meta.update",
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          machineMode: "thread",
+          threadBranch: "feature/existing",
+          existingBranches: ["feature/existing"],
+          onWorktree: (value) => (worktreeInput = value),
           onDispatch: (command) => dispatched.push(command),
         }),
       ),
@@ -294,7 +378,7 @@ describe("ThreadMachineService", () => {
       Effect.provide(
         makeLayer({
           machineMode: "thread",
-          existingBranch: true,
+          existingBranches: [`t3/${binding.machineName}`],
           onWorktree: (value) => (worktreeInput = value),
         }),
       ),

@@ -132,12 +132,28 @@ export const make = Effect.gen(function* () {
     const branchExists = matchingRefs.refs.some(
       (ref) => ref.name === branch && ref.isRemote !== true,
     );
+    const branchIsCheckedOut = (yield* gitWorkflow.listWorktrees({ cwd: projectCwd })).some(
+      (worktree) => worktree.refName === branch,
+    );
+    const newBranch = `t3/${binding.machineName}`;
+    if (branchIsCheckedOut) {
+      yield* Effect.logInfo(
+        "thread machine branch is already checked out; creating a dedicated branch",
+        {
+          threadId: thread.id,
+          requestedBranch: branch,
+          newBranch,
+        },
+      );
+    }
     const worktree = yield* gitWorkflow.createWorktree({
       cwd: projectCwd,
-      refName: branchExists ? branch : baseRef,
-      ...(branchExists
-        ? {}
-        : { newRefName: branch, baseRefName: preparation?.baseBranch ?? baseRef }),
+      refName: branchIsCheckedOut ? branch : branchExists ? branch : baseRef,
+      ...(branchIsCheckedOut
+        ? { newRefName: newBranch, baseRefName: branch }
+        : branchExists
+          ? {}
+          : { newRefName: branch, baseRefName: preparation?.baseBranch ?? baseRef }),
       path: binding.hostWorkspaceRoot,
     });
     if (thread.branch !== worktree.worktree.refName) {
