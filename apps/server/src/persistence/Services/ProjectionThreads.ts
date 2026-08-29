@@ -38,6 +38,7 @@ export const ProjectionThread = Schema.Struct({
   machineId: Schema.NullOr(Schema.String),
   machineName: Schema.NullOr(Schema.String),
   machineState: Schema.NullOr(ThreadMachineState),
+  machineProjectWorkspaceRoot: Schema.NullOr(Schema.String),
   machineHostWorkspaceRoot: Schema.NullOr(Schema.String),
   machineGuestWorkspaceRoot: Schema.NullOr(Schema.String),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
