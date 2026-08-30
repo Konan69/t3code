@@ -67,6 +67,9 @@ import {
   setPendingConnectionError,
   useRemoteConnectionStatus,
 } from "./use-remote-environment-registry";
+import { environmentCatalog } from "../connection/catalog";
+
+const THREAD_OUTBOX_WAKE_RETRY_DELAY_MS = 16_000;
 
 export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).pipe(
   Atom.keepAlive,
@@ -497,6 +500,7 @@ async function preserveUploadedAttachmentsForEditor(
 }
 
 export function useThreadOutboxDrain(): void {
+  const wakeEnvironment = useAtomCommand(environmentCatalog.armWake, { reportFailure: false });
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -583,6 +587,8 @@ export function useThreadOutboxDrain(): void {
     },
     [],
   );
+  const wakeRequestedMessageIdsRef = useRef(new Set<MessageId>());
+  const wakeRetryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
     ensureThreadOutboxLoaded();
@@ -595,8 +601,38 @@ export function useThreadOutboxDrain(): void {
         blocked.unsubscribe();
       }
       blockedRecoverySubscriptionsRef.current.clear();
+      for (const timer of wakeRetryTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      wakeRetryTimersRef.current.clear();
     };
   }, []);
+
+  const clearWakeRequest = useCallback((messageId: MessageId) => {
+    wakeRequestedMessageIdsRef.current.delete(messageId);
+    const timer = wakeRetryTimersRef.current.get(messageId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      wakeRetryTimersRef.current.delete(messageId);
+    }
+  }, []);
+
+  const requestWake = useCallback(
+    (queuedMessage: QueuedThreadMessage) => {
+      if (wakeRequestedMessageIdsRef.current.has(queuedMessage.messageId)) {
+        return;
+      }
+      wakeRequestedMessageIdsRef.current.add(queuedMessage.messageId);
+      const timer = setTimeout(() => {
+        wakeRetryTimersRef.current.delete(queuedMessage.messageId);
+        wakeRequestedMessageIdsRef.current.delete(queuedMessage.messageId);
+        setRetryTick((current) => current + 1);
+      }, THREAD_OUTBOX_WAKE_RETRY_DELAY_MS);
+      wakeRetryTimersRef.current.set(queuedMessage.messageId, timer);
+      void wakeEnvironment(queuedMessage.environmentId);
+    },
+    [wakeEnvironment],
+  );
 
   const makeDeliveryHelpers = useCallback((queuedMessage: QueuedThreadMessage) => {
     const reportFailure = (
@@ -945,6 +981,19 @@ export function useThreadOutboxDrain(): void {
         environmentConnected: environment?.connectionState === "connected",
         threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
       });
+      if (deliveryAction === "wake") {
+        // A durable queued item is explicit user activity. Wake only for that
+        // pending work; passive mobile presence without an outbox stays lazy.
+        if (creation !== undefined && !isQueuedThreadCreationSendable(nextQueuedMessage)) {
+          continue;
+        }
+        requestWake(nextQueuedMessage);
+        return;
+      }
+      if (deliveryAction === "wait") {
+        continue;
+      }
+      clearWakeRequest(nextQueuedMessage.messageId);
       // The delivery action resolves first; the file-capability gate applies
       // only to a message that will send. Gating earlier would restore a
       // creation whose startTurn already made the thread as a duplicate draft
@@ -1082,6 +1131,7 @@ export function useThreadOutboxDrain(): void {
       void delivery
         .then((sent) => {
           if (sent) {
+            clearWakeRequest(nextQueuedMessage.messageId);
             retryAttemptRef.current.delete(nextQueuedMessage.messageId);
             retryNotBeforeRef.current.delete(nextQueuedMessage.messageId);
             const pendingTimer = retryTimersRef.current.get(nextQueuedMessage.messageId);
@@ -1092,6 +1142,10 @@ export function useThreadOutboxDrain(): void {
             return;
           }
 
+          // A transport can still look connected briefly after a suspended
+          // host disappears. Re-arm wake from the failed explicit delivery so
+          // recovery does not depend on eager connection-state convergence.
+          requestWake(nextQueuedMessage);
           scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
         })
         .finally(() => {
@@ -1101,11 +1155,13 @@ export function useThreadOutboxDrain(): void {
     }
   }, [
     connectedEnvironments,
+    clearWakeRequest,
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,
     projects,
     queuedMessagesByThreadKey,
     retryTick,
+    requestWake,
     restoreQueuedMessage,
     scheduleQueuedMessageRetry,
     sendQueuedCreation,
