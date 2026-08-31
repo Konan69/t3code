@@ -2,6 +2,11 @@ name: Mobile iOS Sideload
 
 on:
   workflow_dispatch:
+  # The Cloudbox fork develops off its own long-lived branch. Keep a narrow push
+  # trigger so the first build can run before this workflow reaches default.
+  push:
+    branches: [local/cloudbox]
+    paths: [.github/workflows/mobile-ios-sideload.yml]
 
 permissions:
   contents: read
