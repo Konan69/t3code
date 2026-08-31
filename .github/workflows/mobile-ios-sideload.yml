@@ -73,9 +73,10 @@ jobs:
             exit 1
           fi
 
-          scheme="$(xcodebuild -workspace "$workspace" -list -json | jq -r '.workspace.schemes[0]')"
-          if [ -z "$scheme" ] || [ "$scheme" = null ]; then
-            echo "No shared Xcode scheme found." >&2
+          scheme="$(basename "$workspace" .xcworkspace)"
+          if ! xcodebuild -workspace "$workspace" -list -json \
+            | jq -e --arg scheme "$scheme" '.workspace.schemes | index($scheme) != null' >/dev/null; then
+            echo "Generated app scheme '$scheme' was not found." >&2
             exit 1
           fi
 
