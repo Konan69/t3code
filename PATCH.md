@@ -1,15 +1,17 @@
 # T3 Code local Windows/WSL patch overlay
 
-## Current build — 2026-08-28
+## Current build — 2026-09-01
 
-- Official Windows shell/tag: `v0.0.36-nightly.20260828.1210`
-- Upstream source base: `origin/main` at `9257bd86` (one commit ahead of the
-  `.1210` tag)
-- Local branch: `local/main-20260828-nightly-1210-patched`
-- Pre-rebase backup: `backup/pre-1210-rebase-20260828`
-- Previous source branch: `local/main-20260826-nightly-1194-patched`
+- Official Windows shell/tag: `v0.0.38-nightly.20260901.1244`
+- Upstream source base: `origin/main` at `0bfb6df34` (one commit ahead of the
+  `.1244` tag)
+- Combined local branch:
+  `local/main-20260901-nightly-1244-cloudbox-patched`
+- Pre-rebase backups: `backup/pre-1244-full-overlay-20260901` and
+  `backup/pre-1244-cloudbox-20260901`
+- Previous source branch: `local/main-20260828-nightly-1210-patched`
 - Windows executable now reports:
-  `0.0.36-nightly.20260828.1210`
+  `0.0.38-nightly.20260901.1244`
 
 Automatic official updates replace the overlay. After each official update:
 install the signed official shell first, rebase this manifest onto the new
@@ -144,6 +146,27 @@ provenance/search/filter UI.
 V1 limitations: extension UI dialogs auto-cancel; historical `readThread` replay
 and `rollbackThread` are not implemented yet.
 
+## Cloudbox and thread-machine overlay
+
+The `.1244` branch includes the full prior Windows/WSL/pi overlay plus the
+complete `local/cloudbox` line:
+
+- host-local and Incus-backed machine service boundaries
+- per-thread golden machines, ZFS lifecycle, workspace and identity mounts
+- provider launch routing inside thread machines, including pi stdin handling
+- relay wake policies, host lifecycle APIs, explicit wake-on-interaction
+- desktop/web Connections controls and thread-machine workspace labels
+- mobile queued-work wake recovery
+- Cloudbox EAS channels and personal iOS sideload workflow
+
+The rebase preserved upstream `.1244` WSL runtime-archive hardening and OpenCode
+password/version support while retaining machine process launch and provider
+exit diagnostics. Current reapply order is the first-parent sequence from:
+
+```bash
+git log --first-parent --reverse --oneline origin/main..HEAD
+```
+
 ## Build and install
 
 ```bash
@@ -168,7 +191,21 @@ server.asar.pre-local-2026-08-28T14-27-53.968Z
 
 Older `.1151`/intermediate backups remain in the resources directory.
 
-## Validation — `.1210`
+## Validation — `.1244`
+
+- Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
+- Official executable after install:
+  `0.0.38-nightly.20260901.1244`.
+- All 15 workspace typechecks: passed.
+- Targeted rebase/conflict suites: passed, including 62/62 server projection
+  and Incus tests, 809/809 client-runtime tests, 51/51 WSL runtime tests, and
+  71/71 lint-plugin tests.
+- `vp run build:desktop`: passed.
+- Overlay installer: passed against the official `.1244` shell with WSL,
+  preview-cookie, pi, Claude Bridge, and machine-service markers.
+- Relaunched backend: listening on WSL port `3773`.
+
+## Historical validation — `.1210`
 
 - Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
 - Official executable after install:
