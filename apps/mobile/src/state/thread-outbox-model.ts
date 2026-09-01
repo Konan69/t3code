@@ -197,7 +197,7 @@ export type ThreadOutboxDispatchStep =
  * the message forever.
  */
 export function resolveThreadOutboxDispatchStep(input: {
-  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly deliveryAction: Exclude<ThreadOutboxDeliveryAction, "wake">;
   readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
   /** Null while the environment's server config has not synced yet. */
   readonly serverConfig: { readonly maxFileUploadBytes: number | undefined } | null;
