@@ -25,9 +25,10 @@
         "T3CODE_CLERK_PUBLISHABLE_KEY": "pk_live_Y2xlcmsudDMuY29kZXMk",
         "T3CODE_IOS_PERSONAL_TEAM": "1",
         "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID": "com.myproxi.t3code.dev",
+        "T3CODE_MOBILE_UPDATE_CHANNEL": "cloudbox-personal",
         "T3CODE_RELAY_URL": "https://relay.t3.codes"
       },
-      "channel": "development",
+      "channel": "cloudbox-personal",
       "developmentClient": true,
       "distribution": "internal"
     },

@@ -13,6 +13,7 @@ const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 const runtimeVersionPolicy =
   process.env.MOBILE_VERSION_POLICY ??
   (APP_VARIANT === "development" ? "appVersion" : "fingerprint");
+const updateChannel = repoEnv.T3CODE_MOBILE_UPDATE_CHANNEL?.trim();
 const EAS_PROJECT_ID = "060f681a-2a20-468e-8240-8365a8b0edad";
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
@@ -185,6 +186,13 @@ const config: ExpoConfig = {
     url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
+    ...(updateChannel
+      ? {
+          requestHeaders: {
+            "expo-channel-name": updateChannel,
+          },
+        }
+      : {}),
   },
   ios: {
     icon: variant.assets.iosIcon,
