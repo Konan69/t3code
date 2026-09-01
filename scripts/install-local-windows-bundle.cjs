@@ -180,7 +180,12 @@ const verifyDesktopArchive = (candidateArchive) => {
   const preload = asar
     .extractFile(candidateArchive, "apps/desktop/dist-electron/preload.cjs")
     .toString("utf8");
-  for (const marker of ["desktop:preview-set-cookie", "wsl-runtime", "stageRuntime", "mirrored"]) {
+  for (const marker of [
+    "desktop:preview-set-cookie",
+    "wsl-runtime",
+    "prepareRuntime",
+    "isLocalHostIpv4",
+  ]) {
     if (!main.includes(marker)) {
       fail(`candidate desktop bundle is missing marker: ${marker}`);
     }
@@ -192,7 +197,14 @@ const verifyDesktopArchive = (candidateArchive) => {
 
 const verifyServerArchive = (candidateArchive) => {
   const server = asar.extractFile(candidateArchive, "apps/server/dist/bin.mjs").toString("utf8");
-  for (const marker of ["activityAffectsShellSummary", "preview_set_cookie", "subscribeChanges"]) {
+  for (const marker of [
+    "activityAffectsShellSummary",
+    "preview_set_cookie",
+    "subscribeChanges",
+    "pi --mode rpc",
+    "MachineService",
+    "claude-bridge",
+  ]) {
     if (!server.includes(marker)) {
       fail(`candidate server bundle is missing marker: ${marker}`);
     }
