@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as ExpoCrypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import { p256 } from "@noble/curves/nist";
+import { sha256 } from "@noble/hashes/sha2";
 import { DpopPublicJwk, normalizeDpopHtu } from "@t3tools/shared/dpopCommon";
 import * as Layer from "effect/Layer";
 
@@ -95,17 +96,14 @@ function base64UrlToBytes(value: string): Uint8Array {
 function sha256Digest(
   data: Uint8Array,
   message: string,
-): Effect.Effect<Uint8Array, CloudDpopError, Crypto.Crypto> {
-  return Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) => crypto.digest("SHA-256", data)),
-    Effect.mapError(cloudDpopError(message)),
-  );
+): Effect.Effect<Uint8Array, CloudDpopError> {
+  return Effect.try({
+    try: () => sha256(data),
+    catch: cloudDpopError(message),
+  });
 }
 
-function base64UrlSha256(
-  data: Uint8Array,
-  message: string,
-): Effect.Effect<string, CloudDpopError, Crypto.Crypto> {
+function base64UrlSha256(data: Uint8Array, message: string): Effect.Effect<string, CloudDpopError> {
   return sha256Digest(data, message).pipe(Effect.map(Encoding.encodeBase64Url));
 }
 
