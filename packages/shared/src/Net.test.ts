@@ -74,9 +74,23 @@ it.layer(NetService.layer)("NetService", (it) => {
     it.effect("findAvailablePort returns preferred when it is free", () =>
       Effect.gen(function* () {
         const net = yield* NetService.NetService;
-        const preferred = yield* net.reserveLoopbackPort();
+        // reserveLoopbackPort asks the OS for an ephemeral port. On a busy host,
+        // another outbound connection can immediately reuse that released port
+        // as its source port before findAvailablePort probes it. Pick from the
+        // non-ephemeral unprivileged range instead so this tests preferred-port
+        // behavior rather than the kernel's ephemeral allocator.
+        const start = 10_000 + (process.pid % 10_000);
+        let preferred: number | null = null;
+        for (let offset = 0; offset < 1_000; offset += 1) {
+          const candidate = start + offset;
+          if (yield* net.isPortAvailableOnLoopback(candidate)) {
+            preferred = candidate;
+            break;
+          }
+        }
+        assert.notEqual(preferred, null);
 
-        const resolved = yield* net.findAvailablePort(preferred);
+        const resolved = yield* net.findAvailablePort(preferred!);
         assert.equal(resolved, preferred);
       }),
     );

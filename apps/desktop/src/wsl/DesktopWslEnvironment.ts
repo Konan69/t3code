@@ -199,9 +199,7 @@ const runWslShell = (
   const resolveNode = options.resolveNode !== false;
   const command = ChildProcess.make(
     "wsl.exe",
-    resolveNode
-      ? buildWslShellArgs(distro)
-      : [...buildDistroArgs(distro), "--exec", "sh", "-s"],
+    resolveNode ? buildWslShellArgs(distro) : [...buildDistroArgs(distro), "--exec", "sh", "-s"],
     {
       stdin: Stream.encodeText(
         Stream.make(

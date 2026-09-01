@@ -2397,7 +2397,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       `;
 
       yield* appendAndProject({
-        type: "thread.message-sent",
+        type: "thread.activity-appended",
         eventId: EventId.make("evt-stale-user-input-3"),
         aggregateKind: "thread",
         aggregateId: ThreadId.make("thread-stale-user-input"),
@@ -2408,13 +2408,15 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         metadata: {},
         payload: {
           threadId: ThreadId.make("thread-stale-user-input"),
-          messageId: MessageId.make("message-stale-user-input"),
-          role: "user",
-          text: "Continue",
-          turnId: null,
-          streaming: false,
-          createdAt: "2026-02-26T12:35:09.000Z",
-          updatedAt: "2026-02-26T12:35:09.000Z",
+          activity: {
+            id: EventId.make("activity-summary-refresh-trigger"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Approval requested",
+            payload: { requestId: "approval-summary-refresh", requestKind: "command" },
+            turnId: null,
+            createdAt: "2026-02-26T12:35:09.000Z",
+          },
         },
       });
 
