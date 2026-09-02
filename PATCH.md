@@ -158,7 +158,7 @@ complete `local/cloudbox` line:
 - mobile queued-work wake recovery
 - Cloudbox EAS channels and personal iOS sideload workflow
 
-The rebase preserved upstream `.1244` WSL runtime-archive hardening and OpenCode
+The rebase preserved upstream `.1253` WSL runtime-archive hardening and OpenCode
 password/version support while retaining machine process launch and provider
 exit diagnostics. Current reapply order is the first-parent sequence from:
 
@@ -177,18 +177,22 @@ node scripts/install-local-windows-bundle.cjs \
 ```
 
 Close every T3 Code process first. Windows file locks otherwise make the atomic
-ASAR swap fail with `EACCES`. The script rewrites only compiled desktop and
-server/web subtrees, rebuilds ASAR offsets/integrity metadata, validates patch
-markers, performs atomic swaps, and keeps timestamped official backups.
+resource swap fail with `EACCES`. The script rewrites the compiled desktop and
+server/web ASAR subtrees. On archive-based WSL builds it also rewrites
+`wsl-runtime.tar.gz`, regenerates its SHA-256 sidecar, and validates the same
+pi/Cloudbox markers inside the runtime. This gives the patched runtime a new
+content-addressed ID instead of silently reusing the official cached backend.
+All resources are swapped atomically with timestamped backups.
 
-Current `.1210` official backups:
+Current `.1253` backups:
 
 ```text
-app.asar.pre-local-2026-08-28T14-27-53.965Z
-server.asar.pre-local-2026-08-28T14-27-53.968Z
+app.asar.pre-local-2026-09-02T15-36-47.032Z
+server.asar.pre-local-2026-09-02T15-36-47.036Z
+wsl-runtime.tar.gz.pre-local-2026-09-02T15-36-47.039Z
 ```
 
-Older `.1151`/intermediate backups remain in the resources directory.
+Older `.1151` through `.1244` backups remain in the resources directory.
 
 ## Validation — `.1253`
 
@@ -203,6 +207,10 @@ Older `.1151`/intermediate backups remain in the resources directory.
 - Official executable after install:
   `0.0.39-nightly.20260902.1253`.
 - Relaunched backend: listening on WSL port `3773`.
+- Live backend path uses patched runtime ID
+  `sha256-703b5c81371fadf057c5278a1b452951466497c5652926ea37162ddd2fe9a336`;
+  live `bin.mjs` contains pi, Claude Bridge, MachineService, and cookie markers.
+- Cloudbox relay publishes returned HTTP 200 after restart.
 
 ## Historical validation — `.1244`
 
