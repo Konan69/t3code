@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - installs the bundled T3-owned pi extension atomically.
 /**
  * PiAdapter — `ProviderAdapterShape` implementation driving the pi CLI in
  * RPC mode (`pi --mode rpc`).
@@ -46,8 +47,13 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import * as NodeFS from "node:fs";
+import * as NodeOs from "node:os";
+import * as NodePath from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProcessLauncher,
   makeHostProcessLauncher,
@@ -76,6 +82,53 @@ const READY_TIMEOUT_MS = 45_000;
 const COMMAND_RESPONSE_TIMEOUT_MS = 30_000;
 const ENCODER = new TextEncoder();
 const PI_STDIN_QUEUE_CAPACITY = 256;
+const T3_MCP_ENDPOINT_ENV = "T3_CODE_MCP_ENDPOINT";
+const T3_MCP_TOKEN_ENV = "T3_CODE_MCP_BEARER_TOKEN";
+
+const defaultMcpExtensionSourcePath = (): string =>
+  import.meta.url.endsWith(".ts")
+    ? fileURLToPath(new URL("../pi/t3McpExtension.ts", import.meta.url))
+    : fileURLToPath(new URL("./t3McpExtension.mjs", import.meta.url));
+
+const defaultMcpExtensionPath = (): string =>
+  NodePath.join(NodeOs.homedir(), ".pi", "agent", "extensions", "t3-code-mcp.mjs");
+
+export function installPiMcpExtension(sourcePath: string, targetPath: string): void {
+  const source = NodeFS.readFileSync(sourcePath);
+  try {
+    if (NodeFS.readFileSync(targetPath).equals(source)) return;
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+  }
+
+  NodeFS.mkdirSync(NodePath.dirname(targetPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${targetPath}.tmp-${String(process.pid)}`;
+  try {
+    NodeFS.writeFileSync(temporaryPath, source, { mode: 0o600 });
+    NodeFS.renameSync(temporaryPath, targetPath);
+  } finally {
+    NodeFS.rmSync(temporaryPath, { force: true });
+  }
+}
+
+export function makePiMcpLaunchConfig(input: {
+  readonly endpoint: string;
+  readonly authorizationHeader: string;
+  readonly extensionPath: string;
+  readonly environment?: NodeJS.ProcessEnv | undefined;
+}): { readonly args: ReadonlyArray<string>; readonly environment: NodeJS.ProcessEnv } | undefined {
+  const match = /^Bearer\s+(.+)$/i.exec(input.authorizationHeader.trim());
+  const token = match?.[1]?.trim();
+  if (!token) return undefined;
+  return {
+    args: ["-e", input.extensionPath],
+    environment: {
+      ...(input.environment ?? {}),
+      [T3_MCP_ENDPOINT_ENV]: input.endpoint,
+      [T3_MCP_TOKEN_ENV]: token,
+    },
+  };
+}
 
 export const runPiStdinWriter = (
   queue: Queue.Queue<string>,
@@ -136,6 +189,8 @@ export interface PiAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly processLauncher?: ProcessLauncher["Service"] | undefined;
   readonly nativeEventLogPath?: string | undefined;
+  readonly mcpExtensionSourcePath?: string | undefined;
+  readonly mcpExtensionPath?: string | undefined;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -993,10 +1048,52 @@ export function makePiAdapter(
         const startedAtIso = yield* nowIso;
         const launchArgs =
           piConfig.launchArgs.trim().length > 0 ? piConfig.launchArgs.trim().split(/\s+/) : [];
-        const spawnOptions = options?.environment ? { env: options.environment } : {};
+        const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const mcpEndpoint = mcpSession
+          ? yield* (
+              processLauncher.hostReachableUrl?.({
+                threadId: input.threadId,
+                url: mcpSession.endpoint,
+              }) ?? Effect.succeed(mcpSession.endpoint)
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterProcessError({
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    detail: "Failed to resolve the T3 MCP endpoint for the pi process.",
+                    cause,
+                  }),
+              ),
+            )
+          : undefined;
+        let mcpLaunchConfig: ReturnType<typeof makePiMcpLaunchConfig> = undefined;
+        if (mcpSession && mcpEndpoint) {
+          const extensionSourcePath =
+            options?.mcpExtensionSourcePath ?? defaultMcpExtensionSourcePath();
+          const extensionPath = options?.mcpExtensionPath ?? defaultMcpExtensionPath();
+          yield* Effect.try({
+            try: () => installPiMcpExtension(extensionSourcePath, extensionPath),
+            catch: (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: "Failed to install the T3 MCP extension for pi.",
+                cause,
+              }),
+          });
+          mcpLaunchConfig = makePiMcpLaunchConfig({
+            endpoint: mcpEndpoint,
+            authorizationHeader: mcpSession.authorizationHeader,
+            extensionPath,
+            environment: options?.environment ?? process.env,
+          });
+        }
+        const processEnvironment = mcpLaunchConfig?.environment ?? options?.environment;
+        const spawnOptions = processEnvironment ? { env: processEnvironment } : {};
         const spawnCommand = yield* resolveSpawnCommand(
           piConfig.binaryPath || "pi",
-          ["--mode", "rpc", "--no-session", ...launchArgs],
+          ["--mode", "rpc", "--no-session", ...launchArgs, ...(mcpLaunchConfig?.args ?? [])],
           spawnOptions,
         ).pipe(
           Effect.mapError(
@@ -1018,7 +1115,7 @@ export function makePiAdapter(
               args: spawnCommand.args,
               shell: spawnCommand.shell,
               cwd: input.cwd ?? serverConfig.cwd,
-              env: options?.environment ?? undefined,
+              env: processEnvironment,
               extendEnv: options?.environment === undefined,
             }),
           )

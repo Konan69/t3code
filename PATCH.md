@@ -136,18 +136,27 @@ google, openai, anthropic, opencode-go
 ```
 
 Exact matching preserves `openai-codex`, `claude-bridge`, `opencode`, and
-`openrouter`. The current live catalog is 446 visible models across those four
+`openrouter`. The current live catalog is 458 visible models across those four
 providers. Both the model picker and Settings model list support provider
 dropdowns plus AND-across-token, order-independent searches over model name,
 provider, and full slug (`open 5.4`, `5.4 open`, etc.). OpenCode uses the same
 provenance/search/filter UI.
 
-V1 limitations: extension UI dialogs auto-cancel; historical `readThread` replay
-and `rollbackThread` are not implemented yet.
+Pi sessions receive T3's per-thread built-in MCP through a T3-owned pi
+extension. `ProviderService` keeps issuing the scoped credential; `PiAdapter`
+resolves a host-reachable endpoint, passes the bearer only through child
+environment variables, and atomically installs the standalone bundled extension
+under `~/.pi/agent/extensions/`. The extension discovers and registers the T3
+preview tools, forwards cancellation, preserves text/image results, and closes
+the MCP transport at session shutdown. This also works in thread machines
+because the pi extensions identity directory is mounted into them.
+
+Remaining V1 limitations: extension UI dialogs auto-cancel; historical
+`readThread` replay and `rollbackThread` are not implemented yet.
 
 ## Cloudbox and thread-machine overlay
 
-The `.1244` branch includes the full prior Windows/WSL/pi overlay plus the
+The `.1253` branch includes the full prior Windows/WSL/pi overlay plus the
 complete `local/cloudbox` line:
 
 - host-local and Incus-backed machine service boundaries
@@ -157,6 +166,13 @@ complete `local/cloudbox` line:
 - desktop/web Connections controls and thread-machine workspace labels
 - mobile queued-work wake recovery
 - Cloudbox EAS channels and personal iOS sideload workflow
+
+The recovered live deployment is GCP instance `cloudbox-test` in
+`europe-west2-b`, environment `8ba54bb4-ad1f-4bcc-b1f3-bfa1671e3daf`. The
+ignored `~/cloudbox/cloudbox.json` now targets the current `.1253` combined
+branch. Windows user-level wake URL/name/secret/environment variables are set
+from the retained Alchemy state without logging the bearer. The authenticated
+wake service successfully resumed the VM and reported `RUNNING`.
 
 The rebase preserved upstream `.1253` WSL runtime-archive hardening and OpenCode
 password/version support while retaining machine process launch and provider
