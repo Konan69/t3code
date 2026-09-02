@@ -247,14 +247,30 @@ const verifyServerMarkers = (server, source) => {
   }
 };
 
+const verifyPiMcpExtension = (extension, source) => {
+  for (const marker of ["T3_CODE_MCP_ENDPOINT", "registerT3McpTools"]) {
+    if (!extension.includes(marker)) {
+      fail(`${source} is missing pi MCP marker: ${marker}`);
+    }
+  }
+};
+
 const verifyServerArchive = (candidateArchive) => {
   const server = asar.extractFile(candidateArchive, "apps/server/dist/bin.mjs").toString("utf8");
   verifyServerMarkers(server, "candidate server bundle");
+  verifyPiMcpExtension(
+    asar.extractFile(candidateArchive, "apps/server/dist/t3McpExtension.mjs").toString("utf8"),
+    "candidate server bundle",
+  );
 };
 
 const verifyWslRuntimeArchive = (candidateArchive) => {
   const server = runTar(["-xOf", candidateArchive, "apps/server/dist/bin.mjs"]).toString("utf8");
   verifyServerMarkers(server, "candidate WSL runtime");
+  verifyPiMcpExtension(
+    runTar(["-xOf", candidateArchive, "apps/server/dist/t3McpExtension.mjs"]).toString("utf8"),
+    "candidate WSL runtime",
+  );
 };
 
 const verifyLegacyServer = (candidateDirectory) => {
@@ -262,6 +278,10 @@ const verifyLegacyServer = (candidateDirectory) => {
   if (!fs.existsSync(serverEntry) || fs.statSync(serverEntry).size === 0) {
     fail(`server bundle is missing: ${serverEntry}`);
   }
+  verifyPiMcpExtension(
+    fs.readFileSync(path.join(candidateDirectory, "t3McpExtension.mjs"), "utf8"),
+    "candidate legacy server bundle",
+  );
 };
 
 const stagedArchive = path.join(resourcesDir, `.app.asar.local-new-${process.pid}`);
