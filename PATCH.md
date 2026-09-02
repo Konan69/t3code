@@ -1,17 +1,16 @@
 # T3 Code local Windows/WSL patch overlay
 
-## Current build — 2026-09-01
+## Current build — 2026-09-02
 
-- Official Windows shell/tag: `v0.0.38-nightly.20260901.1244`
-- Upstream source base: `origin/main` at `0bfb6df34` (one commit ahead of the
-  `.1244` tag)
+- Official Windows shell/tag: `v0.0.39-nightly.20260902.1253`
+- Upstream source base: exact `.1253` tag at `47a95332a`
 - Combined local branch:
+  `local/main-20260902-nightly-1253-cloudbox-patched`
+- Pre-rebase backup: `backup/pre-1253-full-overlay-20260902`
+- Previous source branch:
   `local/main-20260901-nightly-1244-cloudbox-patched`
-- Pre-rebase backups: `backup/pre-1244-full-overlay-20260901` and
-  `backup/pre-1244-cloudbox-20260901`
-- Previous source branch: `local/main-20260828-nightly-1210-patched`
 - Windows executable now reports:
-  `0.0.38-nightly.20260901.1244`
+  `0.0.39-nightly.20260902.1253`
 
 Automatic official updates replace the overlay. After each official update:
 install the signed official shell first, rebase this manifest onto the new
@@ -191,7 +190,21 @@ server.asar.pre-local-2026-08-28T14-27-53.968Z
 
 Older `.1151`/intermediate backups remain in the resources directory.
 
-## Validation — `.1244`
+## Validation — `.1253`
+
+- Exact release-tag rebase completed across 106 steps.
+- Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
+- All 15 workspace typechecks: passed.
+- Focused conflict and overlay tests: 121/121 server, 59/59 client-runtime,
+  and 6/6 mobile DPoP.
+- `vp run build:desktop`: passed.
+- Overlay installer: passed against the official `.1253` shell with WSL,
+  preview-cookie, pi, Claude Bridge, and machine-service markers.
+- Official executable after install:
+  `0.0.39-nightly.20260902.1253`.
+- Relaunched backend: listening on WSL port `3773`.
+
+## Historical validation — `.1244`
 
 - Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
 - Official executable after install:
