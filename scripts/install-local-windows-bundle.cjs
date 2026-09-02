@@ -198,7 +198,7 @@ const verifyDesktopArchive = (candidateArchive) => {
 const verifyServerArchive = (candidateArchive) => {
   const server = asar.extractFile(candidateArchive, "apps/server/dist/bin.mjs").toString("utf8");
   for (const marker of [
-    "activityAffectsShellSummary",
+    "shouldRefreshThreadShellSummary",
     "preview_set_cookie",
     "subscribeChanges",
     "pi --mode rpc",
