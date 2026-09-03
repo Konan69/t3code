@@ -13,8 +13,9 @@
  * v1 scope: prompt / steer / abort, streaming text + reasoning deltas, tool
  * lifecycle items, usage updates, compaction items, session stop. Extension
  * UI dialogs are auto-cancelled (pi extensions that require interactive
- * answers will see a cancelled response). Thread persistence and rollback
- * land in a later slice.
+ * answers will see a cancelled response). Pi sessions are persisted by
+ * session id and resumed on restart; historical reads and rollback land in a
+ * later slice.
  *
  * @module provider/Layers/PiAdapter
  */
@@ -30,6 +31,7 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
+  TrimmedNonEmptyString,
   TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -43,6 +45,7 @@ import type * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -84,6 +87,38 @@ const ENCODER = new TextEncoder();
 const PI_STDIN_QUEUE_CAPACITY = 256;
 const T3_MCP_ENDPOINT_ENV = "T3_CODE_MCP_ENDPOINT";
 const T3_MCP_TOKEN_ENV = "T3_CODE_MCP_BEARER_TOKEN";
+
+const PiSessionId = Schema.String.check(Schema.isUUID(4));
+
+export const PiResumeCursor = Schema.Struct({
+  threadId: ThreadId,
+  sessionId: PiSessionId,
+  cwd: TrimmedNonEmptyString,
+});
+export type PiResumeCursor = typeof PiResumeCursor.Type;
+
+const PiGetStateResponse = Schema.Struct({
+  data: Schema.Struct({
+    sessionId: PiSessionId,
+    sessionFile: Schema.optional(Schema.String),
+  }),
+});
+
+const decodePiResumeCursor = Schema.decodeUnknownExit(PiResumeCursor);
+const decodePiGetStateResponse = Schema.decodeUnknownEffect(PiGetStateResponse);
+
+export function readPiResumeCursor(value: unknown): PiResumeCursor | undefined {
+  const result = decodePiResumeCursor(value);
+  return Exit.isSuccess(result) ? result.value : undefined;
+}
+
+export function makePiLaunchArgs(input: {
+  readonly sessionId: string;
+  readonly launchArgs: ReadonlyArray<string>;
+  readonly mcpArgs: ReadonlyArray<string>;
+}): ReadonlyArray<string> {
+  return ["--mode", "rpc", "--session-id", input.sessionId, ...input.launchArgs, ...input.mcpArgs];
+}
 
 const defaultMcpExtensionSourcePath = (): string =>
   import.meta.url.endsWith(".ts")
@@ -168,7 +203,9 @@ interface PiPendingCommand {
 
 interface PiSessionContext {
   readonly threadId: ThreadId;
-  readonly cwd: string | undefined;
+  readonly cwd: string;
+  readonly sessionId: Ref.Ref<string>;
+  readonly sessionFile: Ref.Ref<string | undefined>;
   readonly runtimeMode: ProviderSession["runtimeMode"];
   readonly createdAtIso: string;
   readonly child: ChildProcessSpawner.ChildProcessHandle;
@@ -1046,6 +1083,22 @@ export function makePiAdapter(
         }
         const sessionScope = yield* Scope.make();
         const startedAtIso = yield* nowIso;
+        const resumeCursor = readPiResumeCursor(input.resumeCursor);
+        const persistedSessionId = resumeCursor?.sessionId;
+        const sessionId = persistedSessionId ?? (yield* randomUUIDv4);
+        const effectiveCwd = input.cwd ?? serverConfig.cwd;
+        yield* Effect.annotateCurrentSpan({
+          "pi.resume.source": persistedSessionId !== undefined ? "persisted" : "fresh",
+          "pi.session_id": sessionId,
+        });
+        if (resumeCursor && resumeCursor.cwd !== effectiveCwd) {
+          yield* Effect.annotateCurrentSpan({ "pi.resume.cwd_changed": true });
+          yield* Effect.logWarning("pi.resume.cwd-changed", {
+            threadId: input.threadId,
+            persistedCwd: resumeCursor.cwd,
+            effectiveCwd,
+          });
+        }
         const launchArgs =
           piConfig.launchArgs.trim().length > 0 ? piConfig.launchArgs.trim().split(/\s+/) : [];
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
@@ -1093,7 +1146,11 @@ export function makePiAdapter(
         const spawnOptions = processEnvironment ? { env: processEnvironment } : {};
         const spawnCommand = yield* resolveSpawnCommand(
           piConfig.binaryPath || "pi",
-          ["--mode", "rpc", "--no-session", ...launchArgs, ...(mcpLaunchConfig?.args ?? [])],
+          makePiLaunchArgs({
+            sessionId,
+            launchArgs,
+            mcpArgs: mcpLaunchConfig?.args ?? [],
+          }),
           spawnOptions,
         ).pipe(
           Effect.mapError(
@@ -1114,7 +1171,7 @@ export function makePiAdapter(
               command: spawnCommand.command,
               args: spawnCommand.args,
               shell: spawnCommand.shell,
-              cwd: input.cwd ?? serverConfig.cwd,
+              cwd: effectiveCwd,
               env: processEnvironment,
               extendEnv: options?.environment === undefined,
             }),
@@ -1139,7 +1196,9 @@ export function makePiAdapter(
         );
         const context: PiSessionContext = {
           threadId: input.threadId,
-          cwd: input.cwd ?? serverConfig.cwd,
+          cwd: effectiveCwd,
+          sessionId: yield* Ref.make(sessionId),
+          sessionFile: yield* Ref.make<string | undefined>(undefined),
           runtimeMode: input.runtimeMode,
           createdAtIso: startedAtIso,
           child,
@@ -1168,6 +1227,7 @@ export function makePiAdapter(
         ).pipe(Effect.result);
         if (Result.isFailure(readyState)) {
           // Startup failed: tear the child down before surfacing why.
+          sessions.delete(input.threadId);
           yield* shutdownPiContext(context).pipe(Effect.ignoreCause);
           yield* Scope.close(sessionScope, Exit.void).pipe(Effect.ignore);
           return yield* new ProviderAdapterProcessError({
@@ -1180,9 +1240,41 @@ export function makePiAdapter(
           });
         }
 
+        const decodedReadyState = yield* decodePiGetStateResponse(readyState.success).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: "The pi process returned an invalid get_state response.",
+                cause,
+              }),
+          ),
+          Effect.result,
+        );
+        if (Result.isFailure(decodedReadyState)) {
+          sessions.delete(input.threadId);
+          yield* shutdownPiContext(context).pipe(Effect.ignoreCause);
+          return yield* decodedReadyState.failure;
+        }
+
+        const reportedState = decodedReadyState.success.data;
+        if (persistedSessionId !== undefined && reportedState.sessionId !== persistedSessionId) {
+          sessions.delete(input.threadId);
+          yield* shutdownPiContext(context).pipe(Effect.ignoreCause);
+          return yield* new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+            detail: `The pi session could not be resumed: requested session id '${persistedSessionId}', but pi reported '${reportedState.sessionId}'.`,
+          });
+        }
+        yield* Ref.set(context.sessionId, reportedState.sessionId);
+        yield* Ref.set(context.sessionFile, reportedState.sessionFile);
+
         yield* applyModelSelection(context, input.modelSelection?.model);
 
         const modelValue = yield* Ref.get(context.model);
+        const effectiveSessionId = yield* Ref.get(context.sessionId);
         const base = yield* buildEventBase({ threadId: input.threadId });
         const session: ProviderSession = {
           provider: PROVIDER,
@@ -1192,6 +1284,11 @@ export function makePiAdapter(
           ...(context.cwd ? { cwd: context.cwd } : {}),
           ...(modelValue ? { model: modelValue } : {}),
           threadId: input.threadId,
+          resumeCursor: {
+            threadId: input.threadId,
+            sessionId: effectiveSessionId,
+            cwd: context.cwd,
+          } satisfies PiResumeCursor,
           createdAt: startedAtIso,
           updatedAt: startedAtIso,
         };
@@ -1296,6 +1393,7 @@ export function makePiAdapter(
         const updatedAt = yield* nowIso;
         const modelValue = yield* Ref.get(context.model);
         const activeTurn = yield* Ref.get(context.activeTurnId);
+        const sessionId = yield* Ref.get(context.sessionId);
         return {
           provider: PROVIDER,
           providerInstanceId: boundInstanceId,
@@ -1304,6 +1402,11 @@ export function makePiAdapter(
           ...(context.cwd ? { cwd: context.cwd } : {}),
           ...(modelValue ? { model: modelValue } : {}),
           threadId: context.threadId,
+          resumeCursor: {
+            threadId: context.threadId,
+            sessionId,
+            cwd: context.cwd,
+          } satisfies PiResumeCursor,
           createdAt: context.createdAtIso,
           updatedAt,
           ...(activeTurn ? { activeTurnId: activeTurn } : {}),
