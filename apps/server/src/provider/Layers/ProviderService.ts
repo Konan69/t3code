@@ -337,6 +337,34 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
     });
 
+  const refreshSessionActivityAfterTurnSettles = (
+    source: {
+      readonly instanceId: ProviderInstanceId;
+      readonly provider: ProviderDriverKind;
+    },
+    event: ProviderRuntimeEvent,
+  ): Effect.Effect<void> => {
+    if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
+      return Effect.void;
+    }
+    return directory
+      .upsert({
+        threadId: event.threadId,
+        provider: source.provider,
+        providerInstanceId: source.instanceId,
+        runtimePayload: { activeTurnId: null },
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.session.settle-activity-refresh-failed", {
+            threadId: event.threadId,
+            provider: source.provider,
+            cause,
+          }),
+        ),
+      );
+  };
+
   const processRuntimeEvent = (
     source: {
       readonly instanceId: ProviderInstanceId;
@@ -349,7 +377,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
           eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
+        }).pipe(
+          Effect.andThen(refreshSessionActivityAfterTurnSettles(source, canonicalEvent)),
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+        ),
       ),
     );
 
