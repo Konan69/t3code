@@ -44,6 +44,11 @@ vi.mock("expo-secure-store", () => ({
   },
 }));
 
+const invalidDigestCrypto = Crypto.make({
+  randomBytes: (byteCount) => new Uint8Array(NodeCrypto.randomBytes(byteCount)),
+  digest: () => Effect.succeed(new Uint8Array(32)),
+});
+
 function proofIat(proof: string): number {
   const payload = proof.split(".")[1];
   if (!payload) {
@@ -76,6 +81,27 @@ describe("mobile DPoP", () => {
         NodeCrypto.createHash("sha256").update("typed-array").digest("hex"),
       );
     }).pipe(Effect.provide(cryptoLayer)),
+  );
+
+  it.effect("creates relay-verifiable proofs without the platform digest", () =>
+    Effect.gen(function* () {
+      const proofKey = yield* generateDpopProofKeyPair();
+      const proof = yield* createDpopProof({
+        method: "POST",
+        url: "https://relay.example.test/v1/dpop/token",
+        proofKey,
+      });
+
+      expect(
+        verifyDpopProof({
+          proof: proof.proof,
+          method: "POST",
+          url: "https://relay.example.test/v1/dpop/token",
+          expectedThumbprint: proofKey.thumbprint,
+          nowEpochSeconds: proofIat(proof.proof),
+        }),
+      ).toMatchObject({ ok: true, thumbprint: proofKey.thumbprint });
+    }).pipe(Effect.provideService(Crypto.Crypto, invalidDigestCrypto)),
   );
 
   it.effect("persists and reuses the installation proof key", () =>

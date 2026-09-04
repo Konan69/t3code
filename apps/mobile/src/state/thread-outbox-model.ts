@@ -161,7 +161,7 @@ export function threadOutboxRetryDelayMs(attempt: number): number {
   return Math.min(1_000 * 2 ** Math.max(0, attempt - 1), THREAD_OUTBOX_MAX_RETRY_DELAY_MS);
 }
 
-export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
+export type ThreadOutboxDeliveryAction = "wait" | "wake" | "remove" | "send";
 
 export function resolveThreadOutboxDeliveryAction(input: {
   readonly isCreation: boolean;
@@ -179,12 +179,18 @@ export function resolveThreadOutboxDeliveryAction(input: {
     // Wait for the shell to be live before sending: until the thread list has
     // synchronized, a previously delivered creation whose cleanup failed would
     // look missing and get re-issued, duplicating the thread.
-    return input.environmentConnected && input.shellStatus === "live" ? "send" : "wait";
+    if (!input.environmentConnected) {
+      return "wake";
+    }
+    return input.shellStatus === "live" ? "send" : "wait";
   }
   if (!input.threadExists) {
+    if (!input.environmentConnected) {
+      return "wake";
+    }
     return input.shellStatus === "live" ? "remove" : "wait";
   }
-  return input.environmentConnected ? "send" : "wait";
+  return input.environmentConnected ? "send" : "wake";
 }
 
 export type ThreadOutboxDispatchStep =
@@ -200,7 +206,7 @@ export type ThreadOutboxDispatchStep =
  * gone, can still be removed while config loads.
  */
 export function resolveThreadOutboxDispatchStep(input: {
-  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly deliveryAction: Exclude<ThreadOutboxDeliveryAction, "wake">;
   readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
   /** Null while the environment's server config has not synced yet. */
   readonly serverConfig: { readonly maxFileUploadBytes: number | undefined } | null;

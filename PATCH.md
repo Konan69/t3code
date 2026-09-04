@@ -1,15 +1,18 @@
 # T3 Code local Windows/WSL patch overlay
 
-## Current build — 2026-08-28
+## Current build — 2026-09-04
 
-- Official Windows shell/tag: `v0.0.36-nightly.20260828.1210`
-- Upstream source base: `origin/main` at `9257bd86` (one commit ahead of the
-  `.1210` tag)
-- Local branch: `local/main-20260828-nightly-1210-patched`
-- Pre-rebase backup: `backup/pre-1210-rebase-20260828`
-- Previous source branch: `local/main-20260826-nightly-1194-patched`
-- Windows executable now reports:
-  `0.0.36-nightly.20260828.1210`
+- Official Windows shell/tag: `v0.0.39-nightly.20260904.1280`
+- Upstream source base: exact `.1280` tag at `d6e29dc9d`
+- Combined local branch:
+  `local/main-20260904-nightly-1280-cloudbox-patched`
+- Pre-move backup: `backup/pre-1280-full-overlay-20260904`
+- Previous source branch:
+  `local/main-20260902-nightly-1253-cloudbox-patched`
+- Overlay move: 43 commits were replayed onto `.1280`; the remaining overlay
+  content was then brought across with a merge from the pre-move backup. This
+  was a replay-plus-merge update, not a pure linear rebase.
+- Build and install validation: pending.
 
 Automatic official updates replace the overlay. After each official update:
 install the signed official shell first, rebase this manifest onto the new
@@ -135,14 +138,52 @@ google, openai, anthropic, opencode-go
 ```
 
 Exact matching preserves `openai-codex`, `claude-bridge`, `opencode`, and
-`openrouter`. The current live catalog is 446 visible models across those four
+`openrouter`. The current live catalog is 458 visible models across those four
 providers. Both the model picker and Settings model list support provider
 dropdowns plus AND-across-token, order-independent searches over model name,
 provider, and full slug (`open 5.4`, `5.4 open`, etc.). OpenCode uses the same
 provenance/search/filter UI.
 
-V1 limitations: extension UI dialogs auto-cancel; historical `readThread` replay
-and `rollbackThread` are not implemented yet.
+Pi sessions receive T3's per-thread built-in MCP through a T3-owned pi
+extension. `ProviderService` keeps issuing the scoped credential; `PiAdapter`
+resolves a host-reachable endpoint, passes the bearer only through child
+environment variables, and atomically installs the standalone bundled extension
+under `~/.pi/agent/extensions/`. The extension discovers and registers the T3
+preview tools, forwards cancellation, preserves text/image results, and closes
+the MCP transport at session shutdown. This also works in thread machines
+because the pi extensions identity directory is mounted into them.
+
+Remaining V1 limitations: extension UI dialogs auto-cancel; historical
+`readThread` replay and `rollbackThread` are not implemented yet.
+
+## Cloudbox and thread-machine overlay
+
+The `.1280` branch includes the full prior Windows/WSL/pi overlay plus the
+complete `local/cloudbox` line:
+
+- host-local and Incus-backed machine service boundaries
+- per-thread golden machines, ZFS lifecycle, workspace and identity mounts
+- provider launch routing inside thread machines, including pi stdin handling
+- relay wake policies, host lifecycle APIs, explicit wake-on-interaction
+- desktop/web Connections controls and thread-machine workspace labels
+- mobile queued-work wake recovery
+- Cloudbox EAS channels and personal iOS sideload workflow
+
+The recovered live deployment is GCP instance `cloudbox-test` in
+`europe-west2-b`, environment `8ba54bb4-ad1f-4bcc-b1f3-bfa1671e3daf`. The
+ignored `~/cloudbox/cloudbox.json` targets the combined overlay branch.
+Windows user-level wake URL/name/secret/environment variables are set
+from the retained Alchemy state without logging the bearer. The authenticated
+wake service successfully resumed the VM and reported `RUNNING`.
+
+The move preserves upstream `.1280` refactors, including the new Antigravity
+provider, while retaining WSL runtime-archive hardening, OpenCode
+password/version support, machine process launch, and provider exit diagnostics.
+Current reapply order is the first-parent sequence from:
+
+```bash
+git log --first-parent --reverse --oneline origin/main..HEAD
+```
 
 ## Build and install
 
@@ -155,20 +196,70 @@ node scripts/install-local-windows-bundle.cjs \
 ```
 
 Close every T3 Code process first. Windows file locks otherwise make the atomic
-ASAR swap fail with `EACCES`. The script rewrites only compiled desktop and
-server/web subtrees, rebuilds ASAR offsets/integrity metadata, validates patch
-markers, performs atomic swaps, and keeps timestamped official backups.
+resource swap fail with `EACCES`. The script rewrites the compiled desktop and
+server/web ASAR subtrees. On archive-based WSL builds it also rewrites
+`wsl-runtime.tar.gz`, regenerates its SHA-256 sidecar, and validates the same
+pi/Cloudbox markers inside the runtime. This gives the patched runtime a new
+content-addressed ID instead of silently reusing the official cached backend.
+All resources are swapped atomically with timestamped backups.
 
-Current `.1210` official backups:
+Most recent validated `.1253` backups:
 
 ```text
-app.asar.pre-local-2026-08-28T14-27-53.965Z
-server.asar.pre-local-2026-08-28T14-27-53.968Z
+app.asar.pre-local-2026-09-02T15-36-47.032Z
+server.asar.pre-local-2026-09-02T15-36-47.036Z
+wsl-runtime.tar.gz.pre-local-2026-09-02T15-36-47.039Z
 ```
 
-Older `.1151`/intermediate backups remain in the resources directory.
+Older `.1151` through `.1244` backups remain in the resources directory.
 
-## Validation — `.1210`
+## Validation — `.1280`
+
+- Merge resolution and source-marker verification: completed.
+- Workspace typecheck was attempted without installing the `.1280` dependency
+  set. It remains blocked by the pre-existing `.1253` `node_modules` tree.
+- Focused server machine/orchestration/migration tests: 92/92 passed; mobile
+  DPoP/outbox tests: 47/47 passed; desktop WSL/backend tests: 165/165 passed.
+- Provider tests: 1052 passed. Five Antigravity suites could not load the
+  missing new `yauzl` dependency, and one unchanged ACP test returned
+  `ProcessExited` instead of its expected `ConnectionTerminated` event.
+- Desktop build: pending and intentionally not run during merge resolution.
+- Overlay install and Windows executable verification: pending and intentionally
+  not run during merge resolution.
+
+## Historical validation — `.1253`
+
+- Exact release-tag rebase completed across 106 steps.
+- Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
+- All 15 workspace typechecks: passed.
+- Focused conflict and overlay tests: 121/121 server, 59/59 client-runtime,
+  and 6/6 mobile DPoP.
+- `vp run build:desktop`: passed.
+- Overlay installer: passed against the official `.1253` shell with WSL,
+  preview-cookie, pi, Claude Bridge, and machine-service markers.
+- Official executable after install:
+  `0.0.39-nightly.20260902.1253`.
+- Relaunched backend: listening on WSL port `3773`.
+- Live backend path uses patched runtime ID
+  `sha256-703b5c81371fadf057c5278a1b452951466497c5652926ea37162ddd2fe9a336`;
+  live `bin.mjs` contains pi, Claude Bridge, MachineService, and cookie markers.
+- Cloudbox relay publishes returned HTTP 200 after restart.
+
+## Historical validation — `.1244`
+
+- Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
+- Official executable after install:
+  `0.0.38-nightly.20260901.1244`.
+- All 15 workspace typechecks: passed.
+- Targeted rebase/conflict suites: passed, including 62/62 server projection
+  and Incus tests, 809/809 client-runtime tests, 51/51 WSL runtime tests, and
+  71/71 lint-plugin tests.
+- `vp run build:desktop`: passed.
+- Overlay installer: passed against the official `.1244` shell with WSL,
+  preview-cookie, pi, Claude Bridge, and machine-service markers.
+- Relaunched backend: listening on WSL port `3773`.
+
+## Historical validation — `.1210`
 
 - Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
 - Official executable after install:

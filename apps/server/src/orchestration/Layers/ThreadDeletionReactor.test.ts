@@ -18,6 +18,8 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { describe, expect, it } from "vite-plus/test";
 
+import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { MachineService } from "../../machine/MachineService.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -213,7 +215,16 @@ describe("ThreadDeletionReactor drain", () => {
       const terminalManager = {
         close: () => Effect.void,
       } as unknown as TerminalManager.TerminalManager["Service"];
+      const gitWorkflow = {
+        removeWorktree: () => Effect.void,
+        pruneWorktrees: () => Effect.void,
+      } as unknown as GitWorkflowService["Service"];
+      const machines = {
+        destroy: () => Effect.void,
+      } as unknown as MachineService["Service"];
       const layer = ThreadDeletionReactorLive.pipe(
+        Layer.provide(Layer.succeed(GitWorkflowService, gitWorkflow)),
+        Layer.provide(Layer.succeed(MachineService, machines)),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(TerminalManager.TerminalManager, terminalManager)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),

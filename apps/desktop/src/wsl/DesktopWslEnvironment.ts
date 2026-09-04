@@ -199,9 +199,7 @@ const runWslShell = (
   const resolveNode = options.resolveNode !== false;
   const command = ChildProcess.make(
     "wsl.exe",
-    resolveNode
-      ? buildWslShellArgs(distro)
-      : [...buildDistroArgs(distro), "--exec", "sh", "-s"],
+    resolveNode ? buildWslShellArgs(distro) : [...buildDistroArgs(distro), "--exec", "sh", "-s"],
     {
       stdin: Stream.encodeText(
         Stream.make(
@@ -1045,19 +1043,31 @@ const windowsToWslPathImpl = (
 
 const IPV4_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
+export const DISTRO_DEFAULT_ROUTE_IP_COMMAND =
+  "ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == \"src\") { print $(i + 1); exit } }'";
+
+export const parseDistroIp = (raw: string): Option.Option<string> => {
+  const parts = raw.trim().split(/\s+/);
+  const srcIndex = parts.indexOf("src");
+  const candidate = srcIndex >= 0 ? parts[srcIndex + 1] : parts.length === 1 ? parts[0] : undefined;
+  return candidate !== undefined && IPV4_PATTERN.test(candidate)
+    ? Option.some(candidate)
+    : Option.none<string>();
+};
+
 const getDistroIpImpl = (
   distro: string | null,
 ): Effect.Effect<Option.Option<string>, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      // `hostname -I` prints a space-separated list of all non-loopback
-      // IPs the distro has bound. The first entry on the WSL2 default
-      // network is always the eth0 vEthernet address Windows can reach
-      // directly (no wslhost forwarding required).
+      // Use the default-route interface because container bridges such as docker0
+      // and br-* can sort ahead of the real interface in `hostname -I`. Under
+      // mirrored networking this yields the host address, allowing
+      // DesktopBackendConfiguration to detect the shared stack and use loopback.
       const command = ChildProcess.make(
         "wsl.exe",
-        [...buildDistroArgs(distro), "--", "sh", "-c", "hostname -I"],
+        [...buildDistroArgs(distro), "--", "sh", "-c", DISTRO_DEFAULT_ROUTE_IP_COMMAND],
         {
           stdin: "ignore",
           stdout: "pipe",
@@ -1070,9 +1080,7 @@ const getDistroIpImpl = (
       const stdoutBytes = yield* Stream.runCollect(handle.stdout);
       const exitCode = yield* handle.exitCode;
       if ((exitCode as unknown as number) !== 0) return Option.none<string>();
-      const raw = decodeUtf8(concatChunks(stdoutBytes)).trim();
-      const candidate = raw.split(/\s+/).find((part) => IPV4_PATTERN.test(part));
-      return candidate ? Option.some(candidate) : Option.none<string>();
+      return parseDistroIp(decodeUtf8(concatChunks(stdoutBytes)));
     }),
   ).pipe(
     Effect.timeoutOption(USER_HOME_TIMEOUT),

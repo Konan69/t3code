@@ -38,7 +38,7 @@ function makeHandle(input: {
 }
 
 const EMPTY_IDENTITY_MANIFEST = JSON.stringify({ version: 1, mounts: [] });
-const PROJECT_ROOT = `${process.cwd()}/apps/server/src/machine`;
+const PROJECT_ROOT = `${process.cwd()}/src/machine`;
 
 interface TestIdentityManifestOptions {
   readonly contents?: string;
@@ -313,7 +313,7 @@ describe("IncusMachineService", () => {
             version: 1,
             mounts: [
               {
-                hostPath: `${process.cwd()}/apps/server/package.json`,
+                hostPath: `${process.cwd()}/package.json`,
                 guestPath: "/home/kixey/.codex",
                 readOnly: false,
               },
@@ -383,7 +383,7 @@ describe("IncusMachineService", () => {
           readOnly: false,
         },
         {
-          hostPath: `${process.cwd()}/apps/server`,
+          hostPath: `${process.cwd()}/src`,
           guestPath: "/home/kixey/.pi",
           readOnly: true,
         },
@@ -401,7 +401,7 @@ describe("IncusMachineService", () => {
         readonly: "false",
       });
       expect(Object.fromEntries(devices.get("identity-1-pi") ?? [])).toEqual({
-        source: `${process.cwd()}/apps/server`,
+        source: `${process.cwd()}/src`,
         path: "/home/kixey/.pi",
         shift: "true",
         readonly: "true",

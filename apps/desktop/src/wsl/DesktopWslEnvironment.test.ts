@@ -6,6 +6,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -21,6 +22,7 @@ import {
   formatMissingToolsReason,
   formatNodePtyProbeFailureReason,
   formatWslShellTransportFailureReason,
+  parseDistroIp,
   parseNodePath,
   parseNodeVersion,
   parseResolvedPath,
@@ -142,6 +144,21 @@ describe("probeWslDistros", () => {
       expect(error).toBeInstanceOf(DesktopWslDistroListError);
       expect(error.message).toContain("timed out");
     }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("parseDistroIp", () => {
+  it("extracts the default-route source address", () => {
+    expect(parseDistroIp("1.1.1.1 via 192.168.0.1 dev eth1 src 192.168.0.165 uid 1000")).toEqual(
+      Option.some("192.168.0.165"),
+    );
+    expect(parseDistroIp("192.168.0.165\n")).toEqual(Option.some("192.168.0.165"));
+  });
+
+  it("rejects output without a valid source address", () => {
+    expect(parseDistroIp("")).toEqual(Option.none());
+    expect(parseDistroIp("1.1.1.1 via 192.168.0.1 dev eth1 uid 1000")).toEqual(Option.none());
+    expect(parseDistroIp("1.1.1.1 dev eth1 src malformed uid 1000")).toEqual(Option.none());
   });
 });
 

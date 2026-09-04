@@ -39,6 +39,7 @@ const rejectedBeforeSession = Layer.succeed(
     getPartition: () => Effect.die("getPartition must not be reached"),
     isPartition: () => false,
     getSession: () => Effect.die("getSession must not be reached"),
+    setCookie: () => Effect.die("setCookie must not be reached"),
     clearCookies: () => Effect.die("clearCookies must not be reached"),
     clearCache: () => Effect.die("clearCache must not be reached"),
   }),
