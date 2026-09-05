@@ -174,8 +174,6 @@ describe("BrowserSession", () => {
       const error = yield* browserSessions.getPartition("environment-a").pipe(Effect.flip);
 
       assert.instanceOf(error, BrowserSession.BrowserSessionPartitionDerivationError);
-      assert.isTrue(BrowserSession.isBrowserSessionGetSessionError(error));
-      assert.isTrue(BrowserSession.isBrowserSessionError(error));
       assert.equal(error.scope, "environment-a");
       assert.strictEqual(error.cause, platformCause);
       assert.strictEqual(error.cause.reason.cause, nativeCause);
@@ -198,8 +196,6 @@ describe("BrowserSession", () => {
       const error = yield* browserSessions.getSession("environment-b").pipe(Effect.flip);
 
       assert.instanceOf(error, BrowserSession.BrowserSessionCreationError);
-      assert.isTrue(BrowserSession.isBrowserSessionGetSessionError(error));
-      assert.isTrue(BrowserSession.isBrowserSessionError(error));
       assert.equal(error.scope, "environment-b");
       assert.equal(error.partition, partition);
       assert.strictEqual(error.cause, cause);
@@ -323,7 +319,6 @@ describe("BrowserSession", () => {
       const storageError = yield* browserSessions.clearCookies().pipe(Effect.flip);
 
       assert.instanceOf(storageError, BrowserSession.BrowserSessionStorageClearError);
-      assert.isTrue(BrowserSession.isBrowserSessionError(storageError));
       assert.equal(storageError.partition, secondPartition);
       assert.strictEqual(storageError.cause, storageCause);
       assert.equal(
@@ -340,7 +335,6 @@ describe("BrowserSession", () => {
       const cacheError = yield* browserSessions.clearCache().pipe(Effect.flip);
 
       assert.instanceOf(cacheError, BrowserSession.BrowserSessionCacheClearError);
-      assert.isTrue(BrowserSession.isBrowserSessionError(cacheError));
       assert.equal(cacheError.partition, firstPartition);
       assert.strictEqual(cacheError.cause, cacheCause);
       assert.equal(

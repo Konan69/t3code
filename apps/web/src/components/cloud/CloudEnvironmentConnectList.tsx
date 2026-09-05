@@ -13,7 +13,7 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import * as Option from "effect/Option";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useEffectEvent, useState } from "react";
 
 import { environmentCatalog } from "~/connection/catalog";
 import { cn } from "~/lib/utils";
@@ -27,6 +27,8 @@ import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { presentSavedCloudEnvironmentConnection } from "./cloudEnvironmentConnectionPresentation";
+
+const EMPTY_DISCOVERY_REFRESH_INTERVAL_MS = 5_000;
 
 export interface SavedCloudEnvironmentConnection {
   readonly environmentId: EnvironmentId;
@@ -58,11 +60,13 @@ export function CloudEnvironmentConnectRows({
   primaryEnvironmentId,
   savedEnvironments,
   showSavedEnvironments = false,
+  refreshWhileEmpty = false,
   empty = null,
 }: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly savedEnvironments: ReadonlyArray<SavedCloudEnvironmentConnection>;
   readonly showSavedEnvironments?: boolean;
+  readonly refreshWhileEmpty?: boolean;
   readonly empty?: ReactNode;
 }) {
   const environmentsState = useRelayEnvironmentDiscovery();
@@ -78,6 +82,10 @@ export function CloudEnvironmentConnectRows({
   const relaySession = useAtomValue(managedRelaySessionAtom);
   const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
     reportFailure: false,
+  });
+  const refreshDiscoveryWhenIdle = useEffectEvent(async () => {
+    if (environmentsState.refreshing || environmentsState.offline) return;
+    await refreshRelayEnvironments();
   });
   const connectRelayEnvironment = useCallback(
     async (environment: RelayClientEnvironmentRecord) => {
@@ -140,8 +148,10 @@ export function CloudEnvironmentConnectRows({
   );
 
   useEffect(() => {
-    void refreshRelayEnvironments();
-  }, [refreshRelayEnvironments]);
+    if (!refreshWhileEmpty || document.visibilityState === "visible") {
+      void refreshRelayEnvironments();
+    }
+  }, [refreshRelayEnvironments, refreshWhileEmpty]);
 
   const connectEnvironment = async (environment: RelayClientEnvironmentRecord) => {
     setConnectingEnvironmentId(environment.environmentId);
@@ -183,10 +193,54 @@ export function CloudEnvironmentConnectRows({
       environment.environmentId !== primaryEnvironmentId &&
       (showSavedEnvironments || !savedById.has(environment.environmentId)),
   );
+  // Discovery clears its list on refresh, so poll only until a machine appears.
+  const shouldRefreshWhileEmpty =
+    refreshWhileEmpty && visibleEnvironments.length === 0 && !environmentsState.offline;
+
+  useEffect(() => {
+    if (!shouldRefreshWhileEmpty) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    let pending = false;
+    const visible = () => document.visibilityState === "visible";
+    const schedule = () => {
+      clearTimeout(timer);
+      if (!disposed && visible()) {
+        timer = setTimeout(() => void refresh(), EMPTY_DISCOVERY_REFRESH_INTERVAL_MS);
+      }
+    };
+    const refresh = async () => {
+      if (disposed || pending || !visible()) return;
+      clearTimeout(timer);
+      pending = true;
+      try {
+        await refreshDiscoveryWhenIdle();
+      } finally {
+        pending = false;
+        schedule();
+      }
+    };
+    const onFocus = () => void refresh();
+    const onVisibilityChange = () => {
+      clearTimeout(timer);
+      if (visible()) void refresh();
+    };
+
+    schedule();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [shouldRefreshWhileEmpty]);
 
   const standalone = showSavedEnvironments || savedEnvironments.length === 0;
 
   if (
+    !refreshWhileEmpty &&
     standalone &&
     visibleEnvironments.length === 0 &&
     environmentsState.refreshing &&

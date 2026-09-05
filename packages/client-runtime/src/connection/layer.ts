@@ -12,13 +12,9 @@ import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
 import * as WakeIntent from "./wakeIntent.ts";
 
-const resolverLayer = ConnectionResolver.layer.pipe(
-  Layer.provide(RemoteEnvironmentAuthorization.layer),
-);
-
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   const driverLayer = ConnectionDriver.layer.pipe(
-    Layer.provide(Layer.mergeAll(resolverLayer, RpcSession.layerWithOptions(options))),
+    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layerWithOptions(options))),
   );
   const registryLayer = EnvironmentRegistry.layer.pipe(
     Layer.provide(driverLayer),
@@ -41,7 +37,10 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       );
     }).pipe(Effect.withSpan("clientRuntime.connection.application.start")),
   );
-  return connectionStartupLayer.pipe(Layer.provideMerge(connectionServicesLayer));
+  return connectionStartupLayer.pipe(
+    Layer.provideMerge(connectionServicesLayer),
+    Layer.provideMerge(RemoteEnvironmentAuthorization.layer),
+  );
 }
 
 export const layer = layerWithOptions({});
