@@ -99,6 +99,21 @@ export function groupModelsForDisplay<
   ];
 }
 
+export function nextHiddenModelsForBulkToggle(
+  models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "isCustom">>,
+  hiddenModels: ReadonlyArray<string>,
+): string[] {
+  const builtInSlugs = models.filter((model) => !model.isCustom).map((model) => model.slug);
+  const builtInSlugSet = new Set(builtInSlugs);
+  const allBuiltInModelsHidden = builtInSlugs.every((slug) => hiddenModels.includes(slug));
+
+  if (allBuiltInModelsHidden) {
+    return hiddenModels.filter((slug) => !builtInSlugSet.has(slug));
+  }
+
+  return [...new Set([...hiddenModels, ...builtInSlugs])];
+}
+
 interface ProviderModelsSectionProps {
   /** Identifier used to namespace input ids within the DOM. */
   readonly instanceId: ProviderInstanceId;
@@ -196,6 +211,8 @@ export function ProviderModelsSection({
     [models],
   );
   const builtInModels = useMemo(() => models.filter((model) => !model.isCustom), [models]);
+  const allBuiltInModelsHidden =
+    builtInModels.length > 0 && builtInModels.every((model) => hiddenModelSet.has(model.slug));
   const showFilter = models.length > FILTER_THRESHOLD;
   const isFiltering = (showFilter && filter.trim().length > 0) || selectedSubProvider !== "__all__";
   const visibleModels = useMemo(
@@ -563,13 +580,29 @@ export function ProviderModelsSection({
             </Select>
           ) : null}
         </div>
-        <span className="text-xs text-muted-foreground">
-          {visibleModels.length === models.length
-            ? `${models.length} model${models.length === 1 ? "" : "s"}`
-            : `${visibleModels.length} of ${models.length} models`}
-          {favoriteCount > 0 ? ` · ${favoriteCount} favorite${favoriteCount === 1 ? "" : "s"}` : ""}
-          {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
-        </span>
+        <div className="flex items-center gap-2">
+          {builtInModels.length > 0 ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost-muted"
+              onClick={() =>
+                onHiddenModelsChange(nextHiddenModelsForBulkToggle(models, hiddenModels))
+              }
+            >
+              {allBuiltInModelsHidden ? "Enable all" : "Disable all"}
+            </Button>
+          ) : null}
+          <span className="text-xs text-muted-foreground">
+            {visibleModels.length === models.length
+              ? `${models.length} model${models.length === 1 ? "" : "s"}`
+              : `${visibleModels.length} of ${models.length} models`}
+            {favoriteCount > 0
+              ? ` · ${favoriteCount} favorite${favoriteCount === 1 ? "" : "s"}`
+              : ""}
+            {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
+          </span>
+        </div>
       </div>
       <div
         ref={listRef}

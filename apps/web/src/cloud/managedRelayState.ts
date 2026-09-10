@@ -38,7 +38,7 @@ const managedRelayAtomRuntime = Atom.runtime(
   ),
 );
 
-export const managedRelayQueryManager = createManagedRelayQueryManager(managedRelayAtomRuntime);
+const managedRelayQueryManager = createManagedRelayQueryManager(managedRelayAtomRuntime);
 
 const managedRelayMutationScheduler = createAtomCommandScheduler();
 

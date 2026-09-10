@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 
 import {
@@ -41,7 +41,7 @@ export const machineNameForThread = (threadId: ThreadId): string => {
     return plain;
   }
 
-  const digest = createHash("sha256").update(raw).digest("hex").slice(0, 12);
+  const digest = NodeCrypto.createHash("sha256").update(raw).digest("hex").slice(0, 12);
   const available = INCUS_NAME_MAX_LENGTH - MACHINE_NAME_PREFIX.length - digest.length - 1;
   const prefix = sanitized.slice(0, available).replace(/-+$/g, "") || "id";
   return `${MACHINE_NAME_PREFIX}${prefix}-${digest}`;
@@ -54,7 +54,7 @@ export type MachineState = typeof MachineState.Type;
 export const ThreadMachineBinding = ContractThreadMachineBinding;
 export type ThreadMachineBinding = ThreadMachineBindingType;
 
-export class MachineServiceError extends Schema.TaggedErrorClass<MachineServiceError>()(
+export class MachineServiceError extends Schema.TaggedError<MachineServiceError>()(
   "MachineServiceError",
   {
     operation: Schema.String,

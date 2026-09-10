@@ -13,8 +13,8 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
-  buildWslNodeEnvPreamble,
   buildWslRuntimeInstallScript,
+  buildWslNodeEnvPreamble,
   buildWslShellArgs,
   buildWslRuntimeInvalidateScript,
   buildWslRuntimePruneScript,
@@ -29,7 +29,6 @@ import {
   parseToolchainReport,
   parseWslRuntimeRoot,
   probeWslDistros,
-  sanitizeWslRuntimeId,
 } from "./DesktopWslEnvironment.ts";
 
 const encoder = new TextEncoder();
@@ -215,8 +214,18 @@ describe("buildWslShellArgs", () => {
 });
 
 describe("WSL runtime cache", () => {
-  it("sanitizes cache ids before interpolating them into Linux paths", () => {
-    expect(sanitizeWslRuntimeId("1.2.3/x64; touch /tmp/nope")).toBe("1.2.3_x64__touch__tmp_nope");
+  it.each([
+    [
+      "install",
+      (id: string) => buildWslRuntimeInstallScript("/runtime.tar.gz", id, "b".repeat(64)),
+    ],
+    ["prune", buildWslRuntimePruneScript],
+    ["invalidate", buildWslRuntimeInvalidateScript],
+  ] as const)("sanitizes cache ids in the %s script", (_, buildScript) => {
+    const runtimeId = "1.2.3/x64; touch /tmp/nope";
+    const script = buildScript(runtimeId);
+    expect(script).toContain("/1.2.3_x64__touch__tmp_nope");
+    expect(script).not.toContain(runtimeId);
   });
 
   it("installs through a temporary directory and only reuses valid completed caches", () => {

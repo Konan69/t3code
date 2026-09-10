@@ -59,9 +59,15 @@ import Migration0044 from "./Migrations/044_ClearAutomaticProjectModelDefaults.t
 import Migration0045 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
 import Migration0046 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
 import Migration0047 from "./Migrations/047_ProjectionProjectIcon.ts";
-import Migration0048 from "./Migrations/048_ProjectionMachineBindings.ts";
-import Migration0049 from "./Migrations/049_ProjectionMachineProjectWorkspaceRoot.ts";
-import Migration0050 from "./Migrations/050_RepairProjectionProjectsAutoPull.ts";
+import Migration0048 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
+import Migration0049 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
+import Migration0050 from "./Migrations/050_ProjectionThreadPullRequests.ts";
+import Migration0900 from "./Migrations/900_ProjectionMachineBindings.ts";
+import Migration0901 from "./Migrations/901_ProjectionMachineProjectWorkspaceRoot.ts";
+import Migration0902 from "./Migrations/902_RepairProjectionProjectsAutoPull.ts";
+import Migration0903 from "./Migrations/903_RepairProjectionThreadBranchPullRequest.ts";
+import Migration0904 from "./Migrations/904_RepairProjectionThreadsActiveOrderKey.ts";
+import Migration0905 from "./Migrations/905_RepairProjectionThreadPullRequests.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -73,7 +79,7 @@ import Migration0050 from "./Migrations/050_RepairProjectionProjectsAutoPull.ts"
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
-export const migrationEntries = [
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -121,14 +127,20 @@ export const migrationEntries = [
   [45, "ProjectionProjectsAutoPull", Migration0045],
   [46, "RepairAutomaticSettlementTimestamps", Migration0046],
   [47, "ProjectionProjectIcon", Migration0047],
-  [48, "ProjectionMachineBindings", Migration0048],
-  [49, "ProjectionMachineProjectWorkspaceRoot", Migration0049],
-  [50, "RepairProjectionProjectsAutoPull", Migration0050],
+  [48, "ProjectionThreadBranchPullRequest", Migration0048],
+  [49, "ProjectionThreadsActiveOrderKey", Migration0049],
+  [50, "ProjectionThreadPullRequests", Migration0050],
+  [900, "ProjectionMachineBindings", Migration0900],
+  [901, "ProjectionMachineProjectWorkspaceRoot", Migration0901],
+  [902, "RepairProjectionProjectsAutoPull", Migration0902],
+  [903, "RepairProjectionThreadBranchPullRequest", Migration0903],
+  [904, "RepairProjectionThreadsActiveOrderKey", Migration0904],
+  [905, "RepairProjectionThreadPullRequests", Migration0905],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-export const makeMigrationLoader = (throughId?: number) =>
+const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries

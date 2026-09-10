@@ -66,7 +66,7 @@ export type EnsureWslNodePtyResult =
       readonly retryLimit?: number;
     };
 
-export class DesktopWslDistroListError extends Schema.TaggedErrorClass<DesktopWslDistroListError>()(
+export class DesktopWslDistroListError extends Schema.TaggedError<DesktopWslDistroListError>()(
   "DesktopWslDistroListError",
   { reason: Schema.String },
 ) {
@@ -270,8 +270,7 @@ const WSL_RUNTIME_READY_MARKER = ".t3code-wsl-runtime-ready";
 const WSL_RUNTIME_SELECTED_MARKER = ".t3code-wsl-runtime-selected";
 const WSL_RUNTIME_SELECTION_GRACE_MINUTES = 5;
 
-export const sanitizeWslRuntimeId = (value: string): string =>
-  value.replace(/[^A-Za-z0-9._-]/g, "_");
+const sanitizeWslRuntimeId = (value: string): string => value.replace(/[^A-Za-z0-9._-]/g, "_");
 
 // `archiveSha256` is the digest the build recorded alongside the archive. The
 // install verifies the bytes before extracting, so an archive can never be

@@ -34,6 +34,7 @@ const thread = {
   interactionMode: "default",
   branch: "t3/machine-launch",
   worktreePath: null,
+  pullRequests: [],
   machine: binding,
   latestTurn: null,
   createdAt: "2026-01-01T00:00:00.000Z",
