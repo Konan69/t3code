@@ -121,6 +121,7 @@ describe("BrowserSession", () => {
         const browserSession = {
           clearCache: vi.fn(() => Promise.resolve()),
           clearStorageData: vi.fn(() => Promise.resolve()),
+          cookies: { set: vi.fn(() => Promise.resolve()) },
           getUserAgent: vi.fn(() => userAgent),
           setPermissionRequestHandler: vi.fn(),
           setPermissionCheckHandler: vi.fn(),
