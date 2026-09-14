@@ -33,6 +33,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProcessLauncher } from "../../process/ProcessLauncher.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
@@ -112,6 +113,7 @@ export type CodexDriverEnv =
   | HttpClient.HttpClient
   | ModelManifest.ModelManifest
   | Path.Path
+  | ProcessLauncher
   | ProviderEventLoggers
   | ServerConfig
   | ServerSettingsService;
@@ -128,6 +130,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const resetCreditCoordinator = yield* CodexResetCreditCoordinator;
+      const processLauncher = yield* ProcessLauncher;
       const fileSystem = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
@@ -184,6 +187,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const adapter = yield* makeCodexAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        processLauncher,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
 

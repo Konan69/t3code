@@ -67,6 +67,7 @@ import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationHost,
   PreviewAutomationHostFocus,
+  PreviewAutomationCookie,
   PreviewAutomationPressInput,
   PreviewAutomationResponse,
   PreviewAutomationScrollInput,
@@ -199,6 +200,13 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   displayName: Schema.String,
 });
 
+export const DesktopCloudboxWakeConfigSchema = Schema.Struct({
+  endpoint: Schema.String,
+  name: Schema.String,
+  secret: Schema.String,
+  environmentId: Schema.NullOr(Schema.String),
+});
+export type DesktopCloudboxWakeConfig = typeof DesktopCloudboxWakeConfigSchema.Type;
 export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);
 export type DesktopSnapShotMode = typeof DesktopSnapShotMode.Type;
 
@@ -1160,6 +1168,11 @@ export const DesktopPreviewSetAudioMutedInputSchema = Schema.Struct({
   audioMuted: Schema.Boolean,
 });
 
+export const DesktopPreviewSetCookieInputSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  cookie: PreviewAutomationCookie,
+});
+
 export const DesktopPreviewAnnotationThemeInputSchema = Schema.Struct({
   theme: DesktopPreviewAnnotationThemeSchema,
 });
@@ -1236,6 +1249,7 @@ export interface DesktopBridge {
   getConnectionCatalog?: () => Promise<string | null>;
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
+  getCloudboxWakeConfig?: () => Promise<DesktopCloudboxWakeConfig | null>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   /** Resolves a suggested SSH alias before populating the connection form. */
   resolveSshHost: (alias: string) => Promise<DesktopSshEnvironmentTarget>;
@@ -1373,6 +1387,8 @@ export interface DesktopPreviewBridge {
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
   clearCookies: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
+  /** Set one cookie in an environment-scoped preview partition. */
+  setCookie: (environmentId: EnvironmentId, cookie: PreviewAutomationCookie) => Promise<void>;
   /** Drop the HTTP cache for the preview partition (all tabs). */
   clearCache: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
   /**

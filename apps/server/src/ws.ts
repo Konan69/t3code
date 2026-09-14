@@ -72,6 +72,7 @@ import {
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
+  type ThreadMachineBinding,
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
@@ -134,6 +135,7 @@ import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
+import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -605,6 +607,7 @@ const makeWsRpcLayer = (
       });
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const threadMachines = yield* ThreadMachineService.ThreadMachineService;
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -1002,6 +1005,7 @@ const makeWsRpcLayer = (
           // The setup script's terminal, once started. Cancel closes only this
           // one so terminals the user opened meanwhile survive.
           let setupTerminalId: string | null = null;
+          let targetMachineBinding: ThreadMachineBinding | undefined;
 
           const cleanupCreatedThread = () =>
             createdThread
@@ -1111,6 +1115,68 @@ const makeWsRpcLayer = (
               const worktreePath = targetWorktreePath;
               const requestedAt = yield* nowIso;
               yield* track(worktreeSetupTracker.stageStatus(threadId, "setup-script", "running"));
+              const machineBinding = targetMachineBinding;
+              if (machineBinding && targetProjectId) {
+                yield* threadMachines
+                  .runSetupForThread({
+                    threadId: command.threadId,
+                    projectId: targetProjectId,
+                    binding: machineBinding,
+                  })
+                  .pipe(
+                    Effect.matchEffect({
+                      onFailure: (error) =>
+                        appendSetupScriptActivity({
+                          threadId: command.threadId,
+                          kind: "setup-script.failed",
+                          summary: "Setup script failed",
+                          createdAt: requestedAt,
+                          payload: { detail: error.detail, worktreePath },
+                          tone: "error",
+                        }).pipe(
+                          Effect.andThen(
+                            track(
+                              worktreeSetupTracker.stageStatus(
+                                threadId,
+                                "setup-script",
+                                "failed",
+                                error.detail,
+                              ),
+                            ),
+                          ),
+                          Effect.asVoid,
+                        ),
+                      onSuccess: (setupResult) =>
+                        setupResult.status === "no-script"
+                          ? track(
+                              worktreeSetupTracker.stageStatus(
+                                threadId,
+                                "setup-script",
+                                "skipped",
+                                "no setup script",
+                              ),
+                            )
+                          : recordSetupScriptStarted({
+                              requestedAt,
+                              worktreePath,
+                              scriptId: setupResult.scriptId,
+                              scriptName: setupResult.scriptName,
+                              terminalId: `machine:${machineBinding.machineName}:setup`,
+                            }).pipe(
+                              Effect.andThen(
+                                track(
+                                  worktreeSetupTracker.stageStatus(
+                                    threadId,
+                                    "setup-script",
+                                    "done",
+                                  ),
+                                ),
+                              ),
+                            ),
+                    }),
+                  );
+                return;
+              }
               const setupResult = yield* projectSetupScriptRunner
                 .runForThread({
                   threadId,
@@ -1307,7 +1373,36 @@ const makeWsRpcLayer = (
               createdThread = true;
             }
 
-            if (prepareWorktree && shouldPrepareWorktree && worktreeBaseRef) {
+            const machineBinding = yield* threadMachines.ensureForThread(
+              command.threadId,
+              prepareWorktree,
+            );
+            targetMachineBinding = Option.getOrUndefined(machineBinding);
+            if (targetMachineBinding) {
+              targetWorktreePath = targetMachineBinding.hostWorkspaceRoot;
+              if (!targetProjectId) {
+                const thread = yield* projectionSnapshotQuery.getThreadShellById(command.threadId);
+                targetProjectId = Option.getOrUndefined(thread)?.projectId;
+              }
+              yield* track(
+                worktreeSetupTracker.update(threadId, (snapshot) => ({
+                  ...snapshot,
+                  worktreePath: targetMachineBinding?.hostWorkspaceRoot ?? snapshot.worktreePath,
+                  stages: snapshot.stages.map((stage) =>
+                    stage.id === "checkout" || stage.id === "submodules"
+                      ? { ...stage, status: "skipped", detail: "thread machine workspace" }
+                      : stage,
+                  ),
+                })),
+              );
+            }
+
+            if (
+              prepareWorktree &&
+              shouldPrepareWorktree &&
+              worktreeBaseRef &&
+              !targetMachineBinding
+            ) {
               yield* worktreeSetupTracker.stageStatus(threadId, "checkout", "running");
               let checkoutTotal: number | null = null;
               const worktree = yield* gitWorkflow.createWorktree(
@@ -1475,7 +1570,10 @@ const makeWsRpcLayer = (
                     })
                   : Effect.void;
                 const removeCreatedWorktree =
-                  tracked && targetWorktreePath && bootstrap?.prepareWorktree
+                  tracked &&
+                  targetWorktreePath &&
+                  bootstrap?.prepareWorktree &&
+                  !targetMachineBinding
                     ? closeSetupTerminal.pipe(
                         Effect.ignoreCause({ log: true }),
                         Effect.andThen(
@@ -2880,7 +2978,10 @@ const makeWsRpcLayer = (
               }
               return yield* issueAssetUrl({
                 resource: input.resource,
-                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+                workspaceRoot:
+                  thread.value.machine?.hostWorkspaceRoot ??
+                  thread.value.worktreePath ??
+                  project.value.workspaceRoot,
               });
             }),
             { "rpc.aggregate": "workspace" },

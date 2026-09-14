@@ -39,7 +39,7 @@ export function useConnectionController() {
   const updateBearer = useAtomCommand(updateBearerConnection, { reportFailure: false });
   const registerEnvironment = useAtomCommand(environmentCatalog.register, "environment register");
   const removeEnvironmentMutation = useAtomCommand(environmentCatalog.remove, "environment remove");
-  const retryEnvironmentMutation = useAtomCommand(environmentCatalog.retryNow, "environment retry");
+  const retryEnvironmentMutation = useAtomCommand(environmentCatalog.armWake, "environment retry");
   const setEnvironmentEnabledMutation = useAtomCommand(
     environmentCatalog.setEnabled,
     "environment toggle",
@@ -78,16 +78,21 @@ export function useConnectionController() {
     [connectPairingUrlMutation],
   );
   const connectRelayEnvironment = useCallback(
-    (environment: RelayClientEnvironmentRecord) =>
-      registerEnvironment(
+    async (environment: RelayClientEnvironmentRecord) => {
+      const result = await registerEnvironment(
         new RelayConnectionRegistration({
           target: new RelayConnectionTarget({
             environmentId: environment.environmentId,
             label: environment.label,
           }),
         }),
-      ),
-    [registerEnvironment],
+      );
+      if (result._tag === "Success") {
+        await retryEnvironmentMutation(environment.environmentId);
+      }
+      return result;
+    },
+    [registerEnvironment, retryEnvironmentMutation],
   );
   const removeEnvironment = useCallback(
     (environmentId: EnvironmentId) => removeEnvironmentMutation(environmentId),

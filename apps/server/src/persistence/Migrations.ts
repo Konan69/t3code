@@ -1,15 +1,15 @@
 /**
- * Migration runner with an inline loader.
+ * Migration runner with a static registry.
  *
- * Uses Migrator.make with fromRecord to define migrations inline.
  * All migrations are statically imported - no dynamic file system loading.
  *
  * `runMigrations` is called by the SQLite persistence layer at startup, so the
  * schema is always up to date before the application starts.
  */
 
-import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+
+import { type MigrationEntry, runMigrationsByName } from "./NameBasedMigrator.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -63,17 +63,11 @@ import Migration0048 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts
 import Migration0049 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 import Migration0050 from "./Migrations/050_ProjectionThreadPullRequests.ts";
 import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
+import Migration0900 from "./Migrations/900_ProjectionMachineBindings.ts";
+import Migration0901 from "./Migrations/901_ProjectionMachineProjectWorkspaceRoot.ts";
+import Migration0902 from "./Migrations/902_RepairProjectionProjectsAutoPull.ts";
 
-/**
- * Migration loader with all migrations defined inline.
- *
- * Key format: "{id}_{name}" where:
- * - id: numeric migration ID (determines execution order)
- * - name: descriptive name for the migration
- *
- * Uses Migrator.fromRecord which parses the key format and
- * returns migrations sorted by ID.
- */
+// Names are permanent identities; ids determine execution order only.
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -126,24 +120,12 @@ const migrationEntries = [
   [49, "ProjectionThreadsActiveOrderKey", Migration0049],
   [50, "ProjectionThreadPullRequests", Migration0050],
   [51, "ProjectionThreadMessageContext", Migration0051],
-] as const;
+  [900, "ProjectionMachineBindings", Migration0900],
+  [901, "ProjectionMachineProjectWorkspaceRoot", Migration0901],
+  [902, "RepairProjectionProjectsAutoPull", Migration0902],
+] as const satisfies ReadonlyArray<MigrationEntry>;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
-
-const makeMigrationLoader = (throughId?: number) =>
-  Migrator.fromRecord(
-    Object.fromEntries(
-      migrationEntries
-        .filter(([id]) => throughId === undefined || id <= throughId)
-        .map(([id, name, migration]) => [`${id}_${name}`, migration]),
-    ),
-  );
-
-/**
- * Migrator run function - no schema dumping needed
- * Uses the base Migrator.make without platform dependencies
- */
-const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
@@ -152,8 +134,8 @@ export interface RunMigrationsOptions {
 /**
  * Run all pending migrations.
  *
- * Creates the migrations tracking table (effect_sql_migrations) if it doesn't exist,
- * then runs any migrations with ID greater than the latest recorded migration.
+ * Bootstraps legacy names into t3_fork_migrations, then runs untracked names
+ * in ascending id order without modifying effect_sql_migrations.
  *
  * Returns array of [id, name] tuples for migrations that were run.
  *
@@ -162,7 +144,7 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
+  const executedMigrations = yield* runMigrationsByName(migrationEntries, toMigrationInclusive);
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

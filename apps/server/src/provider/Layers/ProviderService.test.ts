@@ -3295,6 +3295,77 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
     }),
   );
 
+  it.effect("refreshes session activity when completed and aborted turns settle", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-settle-activity");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const initial = (yield* directory.listBindings()).find(
+        (binding) => binding.threadId === threadId,
+      );
+      assert.ok(initial);
+
+      yield* advanceTestClock(1_000);
+      const completedReceipt = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === asEventId("evt-settle-completed")),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      fanout.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-settle-completed"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: asTurnId("turn-settle-completed"),
+        payload: { state: "completed" },
+      });
+      yield* Fiber.join(completedReceipt);
+
+      const afterCompleted = (yield* directory.listBindings()).find(
+        (binding) => binding.threadId === threadId,
+      );
+      assert.ok(afterCompleted);
+      assert.ok(Date.parse(afterCompleted.lastSeenAt) > Date.parse(initial.lastSeenAt));
+
+      yield* advanceTestClock(1_000);
+      const abortedReceipt = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === asEventId("evt-settle-aborted")),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      fanout.codex.emit({
+        type: "turn.aborted",
+        eventId: asEventId("evt-settle-aborted"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: asTurnId("turn-settle-aborted"),
+        payload: { reason: "interrupted" },
+      });
+      yield* Fiber.join(abortedReceipt);
+
+      const afterAborted = (yield* directory.listBindings()).find(
+        (binding) => binding.threadId === threadId,
+      );
+      assert.ok(afterAborted);
+      assert.ok(Date.parse(afterAborted.lastSeenAt) > Date.parse(afterCompleted.lastSeenAt));
+      assert.equal(
+        (afterAborted.runtimePayload as { readonly activeTurnId?: unknown }).activeTurnId,
+        null,
+      );
+    }),
+  );
+
   it.effect("fans out canonical runtime events in emission order", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

@@ -17,6 +17,8 @@ import {
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
   type PreviewTabId,
+  type PreviewAutomationSetCookieInput,
+  type PreviewAutomationSetCookiePayload,
 } from "@t3tools/contracts";
 
 import {
@@ -111,6 +113,12 @@ const invokeTargeted = <A extends object>(
       ...(toolIcon ? { toolIcon } : {}),
     })),
   );
+};
+
+const setCookie = (input: PreviewAutomationSetCookieInput) => {
+  const { tabId, ...cookie } = input;
+  const payload: PreviewAutomationSetCookiePayload = { cookie };
+  return invoke<void>("setCookie", payload, undefined, tabId);
 };
 
 const UploadedRecordingArtifact = Schema.Struct({
@@ -212,6 +220,7 @@ const handlers = {
         ...(toolIcon ? { toolIcon } : {}),
       })),
     ),
+  preview_set_cookie: (input) => setCookie(input).pipe(Effect.as({})),
   preview_wait_for: (input) => invokeTargeted<object>("waitFor", input, input.timeoutMs),
   preview_recording_start: (input) =>
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),

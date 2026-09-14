@@ -42,6 +42,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { ProcessLauncher, makeHostProcessLauncher } from "../../process/ProcessLauncher.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -107,6 +108,7 @@ function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
 
 export interface GrokAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
+  readonly processLauncher?: ProcessLauncher["Service"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly instanceId?: ProviderInstanceId;
@@ -349,6 +351,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const processLauncher =
+      options?.processLauncher ?? makeHostProcessLauncher(childProcessSpawner);
     const serverConfig = yield* Effect.service(ServerConfig);
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
@@ -1004,6 +1008,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 }
               : {}),
             childProcessSpawner,
+            processLauncher,
+            threadId: input.threadId,
             cwd,
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
@@ -1323,6 +1329,24 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               Effect.gen(function* () {
                 if (event._tag === "EventStreamBarrier") {
                   yield* Deferred.succeed(event.acknowledge, undefined);
+                  return;
+                }
+                if (event._tag === "ProcessExited") {
+                  if (ctx.stopped) return;
+                  ctx.stopped = true;
+                  sessions.delete(ctx.threadId);
+                  yield* offerRuntimeEvent({
+                    type: "session.exited",
+                    ...(yield* makeEventStamp()),
+                    provider: PROVIDER,
+                    threadId: ctx.threadId,
+                    payload: {
+                      exitKind: "error",
+                      recoverable: true,
+                      reason: event.reason,
+                    },
+                  });
+                  yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
                   return;
                 }
                 if (

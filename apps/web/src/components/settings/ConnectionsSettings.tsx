@@ -166,6 +166,7 @@ import { requestConfirmDialog } from "~/confirmDialog";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
+import { CloudboxHostControls } from "./CloudboxHostControls";
 import {
   ServerUpdateAction,
   ServerUpdateProgress,
@@ -1559,9 +1560,14 @@ function SavedBackendListRow({
         </Tooltip>
       }
       below={
-        serverUpdateState.status !== "idle" ? (
-          <div className="mt-1 max-w-md">
-            <ServerUpdateProgress state={serverUpdateState} />
+        (enabled && environment.relayManaged) || serverUpdateState.status !== "idle" ? (
+          <div className="mt-1 max-w-md space-y-1">
+            {enabled && environment.relayManaged ? (
+              <CloudboxHostControls environment={environment} />
+            ) : null}
+            {serverUpdateState.status !== "idle" ? (
+              <ServerUpdateProgress state={serverUpdateState} />
+            ) : null}
           </div>
         ) : null
       }

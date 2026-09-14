@@ -103,32 +103,27 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 
-  it.effect("fails loudly on a migration slot collision", () =>
+  it.effect("accepts migration ids recorded under multiple names", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-slot-" });
       const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-slot-dest-" });
       const source = yield* createFixtureSource(sourceDir);
-      // Simulate another branch having claimed slot 1 first: the id is
-      // recorded, so this checkout's migration 1 silently never runs.
+      // Names are the identity even when another branch used the same id.
       yield* withDatabase(
         source,
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          yield* sql`UPDATE effect_sql_migrations
-            SET name = 'SomebodyElsesMigration' WHERE migration_id = 1`;
+          yield* sql`INSERT INTO t3_fork_migrations (name, migration_id)
+            VALUES ('SomebodyElsesMigration', 1)`;
         }),
       );
 
-      const error = yield* runMigrateDevDb(
+      const result = yield* runMigrateDevDb(
         { baseDir: destDir, source, projects: 5, threadsPerProject: 10 },
         { sharedHome: sourceDir },
-      ).pipe(Effect.flip);
-      assert.equal(error._tag, "MigrateDevDbSlotCollisionError");
-      if (error._tag === "MigrateDevDbSlotCollisionError") {
-        assert.equal(error.slot, 1);
-        assert.equal(error.appliedName, "SomebodyElsesMigration");
-      }
+      );
+      assert.deepStrictEqual(result.executedMigrations, []);
     }),
   );
 

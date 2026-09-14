@@ -33,6 +33,9 @@ import {
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
+import * as MachineServiceLive from "./machine/MachineServiceLive.ts";
+import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
+import * as MachineProcessLauncher from "./process/MachineProcessLauncher.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
@@ -63,7 +66,7 @@ import * as GitHubCli from "./sourceControl/GitHubCli.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
-import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { ProviderInstanceRegistryHydrationProcessLauncherLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -78,12 +81,16 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "./orchestration/ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "./orchestration/ThreadPlanProgress.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "./orchestration/ThreadSettlementReactor.ts";
+import { MachineReactorLive } from "./orchestration/Layers/MachineReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -240,6 +247,11 @@ const HttpServerLive = Layer.unwrap(
 
 const PlatformServicesLive = NodeServices.layer;
 
+const MachineServiceLayerLive = MachineServiceLive.layer;
+const ThreadMachineServiceLayerLive = ThreadMachineService.layer.pipe(
+  Layer.provide(MachineServiceLayerLive),
+);
+
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
@@ -247,6 +259,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ThreadSettlementReactor.layer),
+  Layer.provideMerge(MachineReactorLive),
+  Layer.provideMerge(MachineServiceLayerLive),
+  Layer.provideMerge(ThreadMachineServiceLayerLive),
   Layer.provideMerge(PullRequestSyncReactor.layer),
   Layer.provideMerge(ThreadPullRequestReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
@@ -255,6 +270,25 @@ const ReactorLayerLive = Layer.empty.pipe(
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
   Layer.provide(ProviderSessionRuntime.layer),
+);
+
+const MachineProcessLauncherSnapshotLayerLive = OrchestrationProjectionSnapshotQueryLive.pipe(
+  Layer.provideMerge(ThreadBackgroundLiveness.layer),
+  Layer.provideMerge(ThreadPlanProgress.layer),
+);
+const MachineProcessLauncherLayerLive = MachineProcessLauncher.layer.pipe(
+  Layer.provide(MachineServiceLayerLive),
+  Layer.provide(MachineProcessLauncherSnapshotLayerLive),
+);
+const OpenCodeRuntimeLayerLive = OpenCodeRuntime.OpenCodeRuntimeProcessLauncher.pipe(
+  Layer.provide(MachineProcessLauncherLayerLive),
+);
+const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationProcessLauncherLive.pipe(
+  Layer.provide(OpenCodeRuntimeLayerLive),
+  Layer.provide(MachineProcessLauncherLayerLive),
+);
+const ProviderProcessRuntimeLayerLive = ProviderInstanceRegistryLayerLive.pipe(
+  Layer.provideMerge(OpenCodeRuntimeLayerLive),
 );
 
 // `ProviderAdapterRegistryLive` is now a facade that resolves kind → adapter
@@ -475,7 +509,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(AntigravityInstallationRefreshLive),
   Layer.provideMerge(ProviderAuthServiceLive),
   // Core Services
-  Layer.provideMerge(ServerSettingsLayerLive),
+  Layer.provideMerge(Layer.mergeAll(ServerSettingsLayerLive, MachineServiceLayerLive)),
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(
     Layer.mergeAll(SourceControlProviderRegistryLayerLive, PullRequestServiceLive),
@@ -495,8 +529,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
-  // with explicit `providerInstances` entries on boot.
-  Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+  // with explicit `providerInstances` entries on boot. The same composed
+  // layer owns the host ProcessLauncher and OpenCode runtime used by drivers.
+  Layer.provideMerge(ProviderProcessRuntimeLayerLive),
 ).pipe(
   Layer.provideMerge(AntigravityInstallation.layer),
   // Shared native/canonical NDJSON writers used by both the per-instance
@@ -510,12 +545,6 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(ProviderEventLoggers.layer, ModelManifest.layer, CodexResetCredit.layer),
   ),
-  // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
-  // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
-  // the rewritten registry reads snapshots off the instance registry and
-  // no longer transitively provides it. Exposing it at the runtime level
-  // keeps a single Live for all opencode consumers.
-  Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, ProjectFaviconResolverLayerLive)),
   Layer.provideMerge(RepositoryIdentityResolverLayerLive),

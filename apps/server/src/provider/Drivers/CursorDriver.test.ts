@@ -13,6 +13,7 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProcessLauncher } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { CursorDriver } from "./CursorDriver.ts";
@@ -22,6 +23,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(ServerSettingsService.layerTest()),
+  Layer.provideMerge(Layer.mock(ProcessLauncher, {})),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({
       shouldRunScopeWork: () => Effect.succeed(false),

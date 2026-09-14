@@ -81,10 +81,10 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        // The turn can settle while background work runs on (subagent
-        // fleets, workflow runs, Monitor watch loops). Those live inside the
-        // provider process, so stopping the session would kill them silently,
-        // and nothing bumps lastSeenAt between turns.
+        // A settled turn refreshes lastSeenAt, but background work can outlive
+        // that turn (subagent fleets, workflow runs, Monitor watch loops).
+        // Those jobs live inside the provider process, so stopping the session
+        // would kill them silently.
         if (thread?.backgroundLiveness != null) {
           yield* Effect.logDebug("provider.session.reaper.skipped-background-work", {
             threadId: binding.threadId,

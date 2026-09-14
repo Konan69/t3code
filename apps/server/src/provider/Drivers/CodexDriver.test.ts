@@ -16,6 +16,7 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProcessLauncher } from "../../process/ProcessLauncher.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { layerTest as codexResetCreditLayerTest } from "../Layers/codexResetCredit.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
@@ -34,6 +35,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(ModelManifest.layerTest),
   Layer.provideMerge(codexResetCreditLayerTest),
+  Layer.provideMerge(Layer.mock(ProcessLauncher, {})),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({
       shouldRunScopeWork: () => Effect.succeed(false),

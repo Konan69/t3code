@@ -13,6 +13,7 @@ import {
   PreviewAutomationScrollInput,
   PreviewAutomationSetColorSchemeInput,
   PreviewAutomationSetColorSchemeResult,
+  PreviewAutomationSetCookieInput,
   PreviewAutomationSnapshot,
   PreviewAutomationStatus,
   PreviewAutomationTabTargetInput,
@@ -208,6 +209,17 @@ const PreviewEvaluateTool = browserTool(
   }).annotate(Tool.Title, "Evaluate JavaScript in preview"),
 );
 
+export const PreviewSetCookieTool = browserTool(
+  Tool.make("preview_set_cookie", {
+    description:
+      "Set one cookie in this environment's isolated collaborative browser partition. Supply the cookie URL, name, value, and any optional domain, path, security, SameSite, or expiry attributes.",
+    parameters: PreviewAutomationSetCookieInput,
+    success: PreviewActionResult,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Set preview cookie"),
+);
+
 const PreviewWaitForTool = readonlyBrowserTool(
   Tool.make("preview_wait_for", {
     description:
@@ -253,6 +265,7 @@ export const PreviewToolkit = Toolkit.make(
   PreviewPressTool,
   PreviewScrollTool,
   PreviewEvaluateTool,
+  PreviewSetCookieTool,
   PreviewWaitForTool,
   PreviewRecordingStartTool,
   PreviewRecordingStopTool,
@@ -269,6 +282,7 @@ export const PreviewStandardToolkit = Toolkit.make(
   PreviewPressTool,
   PreviewScrollTool,
   PreviewEvaluateTool,
+  PreviewSetCookieTool,
   PreviewWaitForTool,
   PreviewRecordingStartTool,
   PreviewRecordingStopTool,

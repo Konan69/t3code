@@ -2,6 +2,7 @@ import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
+  ContainerIcon,
   FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
@@ -80,6 +81,7 @@ interface MobileRunContextSelectorProps {
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
+  inThreadMachine: boolean;
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel: string | null;
   onUsePreviousWorktree: () => void;
@@ -97,6 +99,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   onEnvironmentChange,
   effectiveEnvMode,
   activeWorktreePath,
+  inThreadMachine,
   onEnvModeChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
@@ -105,14 +108,15 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
     [availableEnvironments, environmentId],
   );
-  const WorkspaceIcon =
-    effectiveEnvMode === "worktree"
+  const WorkspaceIcon = inThreadMachine
+    ? ContainerIcon
+    : effectiveEnvMode === "worktree"
       ? FolderGit2Icon
       : activeWorktreePath
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = envModeLocked
-    ? resolveLockedWorkspaceLabel(activeWorktreePath)
+    ? resolveLockedWorkspaceLabel(activeWorktreePath, inThreadMachine)
     : effectiveEnvMode === "worktree"
       ? resolveEnvModeLabel("worktree")
       : resolveCurrentWorkspaceLabel(activeWorktreePath);
@@ -482,7 +486,13 @@ export const BranchToolbar = memo(function BranchToolbar({
       hasServerThread: serverThread !== null,
       draftThreadEnvMode: draftThread?.envMode,
     });
-  const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+  // A thread machine owns its workspace: a bound thread, or a draft in a project whose
+  // Thread machines setting is on, has nothing to choose here.
+  const inThreadMachine =
+    (serverThread?.machine ?? null) !== null ||
+    (serverThread === null && draftThread !== null && activeProject?.machineMode === "thread");
+  const envModeLocked =
+    envLocked || inThreadMachine || (serverThread !== null && activeWorktreePath !== null);
 
   // "Previous worktree" hops a draft into the most recently active worktree
   // of this project — the "keep going where I just was" follow-up flow. Only
@@ -558,6 +568,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onEnvironmentChange={onEnvironmentChange}
             effectiveEnvMode={effectiveEnvMode}
             activeWorktreePath={activeWorktreePath}
+            inThreadMachine={inThreadMachine}
             onEnvModeChange={onEnvModeChange}
             previousWorktreeLabel={previousWorktreeLabel}
             onUsePreviousWorktree={onUsePreviousWorktree}
@@ -596,6 +607,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
               activeWorktreePath={activeWorktreePath}
+              inThreadMachine={inThreadMachine}
               onEnvModeChange={onEnvModeChange}
               previousWorktreeLabel={previousWorktreeLabel}
               onUsePreviousWorktree={onUsePreviousWorktree}

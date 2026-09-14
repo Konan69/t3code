@@ -296,6 +296,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         defaultThreadEnvMode: null,
         autoPull: false,
+        machineMode: "off",
         scripts: [],
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
@@ -350,6 +351,12 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        machineId: "thread-null-options",
+        machineName: "thread-thread-null-options",
+        machineState: "running",
+        machineProjectWorkspaceRoot: "/repo",
+        machineHostWorkspaceRoot: "/tank/threads/thread-null-options/ws",
+        machineGuestWorkspaceRoot: "/home/kixey/ws",
         latestTurnId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
@@ -395,6 +402,12 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-opus-4-6",
       });
+      assert.strictEqual(Option.getOrNull(persisted)?.machineState, "running");
+      assert.strictEqual(Option.getOrNull(persisted)?.machineProjectWorkspaceRoot, "/repo");
+      assert.strictEqual(
+        Option.getOrNull(persisted)?.machineHostWorkspaceRoot,
+        "/tank/threads/thread-null-options/ws",
+      );
     }),
   );
 
@@ -414,6 +427,12 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        machineId: null,
+        machineName: null,
+        machineState: null,
+        machineProjectWorkspaceRoot: null,
+        machineHostWorkspaceRoot: null,
+        machineGuestWorkspaceRoot: null,
         latestTurnId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-25T00:00:00.000Z",
@@ -495,6 +514,12 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        machineId: null,
+        machineName: null,
+        machineState: null,
+        machineProjectWorkspaceRoot: null,
+        machineHostWorkspaceRoot: null,
+        machineGuestWorkspaceRoot: null,
         linkedPullRequest,
         branchPullRequest,
         latestTurnId: null,

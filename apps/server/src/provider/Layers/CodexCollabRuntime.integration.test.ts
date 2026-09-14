@@ -12,19 +12,25 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServicesBase from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { type ProviderApprovalDecision, type ProviderEvent, ThreadId } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { assert, describe } from "vite-plus/test";
 
 import wireFixture from "../testFixtures/codexMultiAgentWire.json" with { type: "json" };
+import { HostProcessLauncherLive } from "../../process/ProcessLauncher.ts";
 import { makeCodexSessionRuntime } from "./CodexSessionRuntime.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+const NodeServices = {
+  layer: HostProcessLauncherLive.pipe(Layer.provideMerge(NodeServicesBase.layer)),
+};
 
 const ROOT = wireFixture.rootThreadId;
 const [CHILD_A, CHILD_B] = wireFixture.childThreadIds as [string, string];

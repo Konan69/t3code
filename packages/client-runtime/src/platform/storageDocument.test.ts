@@ -193,6 +193,55 @@ describe("ConnectionCatalogDocument", () => {
     }),
   );
 
+  it("migrates version 1 catalogs without adding a relay wake policy", () => {
+    const document = Schema.decodeUnknownSync(ConnectionCatalogDocument)({
+      schemaVersion: 1,
+      targets: [
+        {
+          _tag: "RelayConnectionTarget",
+          environmentId: ENVIRONMENT_ID,
+          label: "Cloud",
+        },
+      ],
+      profiles: [],
+      credentials: [],
+      remoteDpopTokens: [],
+    });
+
+    expect(document.schemaVersion).toBe(2);
+    expect(document.targets).toEqual([
+      new RelayConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Cloud",
+      }),
+    ]);
+    const target = document.targets[0];
+    expect(target?._tag).toBe("RelayConnectionTarget");
+    if (target?._tag === "RelayConnectionTarget") {
+      expect(target.wakePolicy).toBeUndefined();
+    }
+  });
+
+  it("round-trips a local relay wake policy in version 2 catalogs", () => {
+    const target = new RelayConnectionTarget({
+      environmentId: ENVIRONMENT_ID,
+      label: "Cloud",
+      wakePolicy: {
+        endpoint: "https://wake.example.test",
+        name: "cloudbox",
+        secret: "local-secret",
+        mode: "explicit-intent",
+      },
+    });
+    const encoded = Schema.encodeSync(ConnectionCatalogDocument)({
+      ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      targets: [target],
+    });
+
+    expect(encoded).toMatchObject({ schemaVersion: 2 });
+    expect(Schema.decodeUnknownSync(ConnectionCatalogDocument)(encoded).targets).toEqual([target]);
+  });
+
   it.each([
     { name: "legacy", accountId: undefined },
     { name: "account-bound", accountId: "account-1" },

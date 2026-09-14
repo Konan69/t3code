@@ -19,7 +19,7 @@ const PROCESS_TERMINATE_GRACE = Duration.seconds(1);
 const LIST_TIMEOUT = Duration.seconds(8);
 const PRE_WARM_TIMEOUT = Duration.seconds(10);
 const WSLPATH_TIMEOUT = Duration.seconds(10);
-const PROBE_TIMEOUT = Duration.seconds(10);
+const PROBE_TIMEOUT = Duration.seconds(60);
 const TOOLCHAIN_TIMEOUT = Duration.seconds(10);
 const BUILD_TIMEOUT = Duration.minutes(5);
 const RUNTIME_INSTALL_TIMEOUT = Duration.minutes(2);
@@ -139,6 +139,15 @@ export class DesktopWslEnvironment extends Context.Service<
 const buildDistroArgs = (distro: string | null): ReadonlyArray<string> =>
   distro ? ["-d", distro] : [];
 
+export const buildWslShellArgs = (distro: string | null): ReadonlyArray<string> => [
+  ...buildDistroArgs(distro),
+  "--",
+  "bash",
+  "--noprofile",
+  "--norc",
+  "-s",
+];
+
 const concatChunks = (arrays: ReadonlyArray<Uint8Array>): Uint8Array => {
   let totalLength = 0;
   for (const arr of arrays) totalLength += arr.byteLength;
@@ -167,7 +176,7 @@ const TIMEOUT_RESULT: ShellResult = {
   transportFailure: "timeout",
 };
 
-const formatWslShellTransportFailureReason = (
+export const formatWslShellTransportFailureReason = (
   failure: ShellResult["transportFailure"],
   subject = "Node.js",
 ): string | null => {
@@ -186,7 +195,7 @@ const formatWslShellTransportFailureReason = (
 // Reuse the SSH remote resolver so WSL and SSH discover version-managed Node
 // the same way. Passing the engine range lets the resolver fall through to
 // version managers like nvm when a system node exists but is too old.
-const buildWslNodeEnvPreamble = (
+export const buildWslNodeEnvPreamble = (
   nodeEngineRange?: string | null,
 ): string => `${buildRemoteNodeEnvScript({ nodeEngineRange: nodeEngineRange ?? null })}
 ensure_remote_node_path || true
@@ -205,15 +214,13 @@ const runWslShell = (
   } = {},
 ): Effect.Effect<ShellResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const spawner = ChildProcessSpawner.ChildProcessSpawner;
-  // Node probes use a login bash so profile-managed PATH entries and supported
-  // version managers are available. Runtime installation needs only POSIX tools,
-  // so it skips profile loading and runs sh directly.
+  // Node discovery is explicit in the generated preamble, so loading user
+  // profiles is unnecessary and can corrupt strict script exit status. Runtime
+  // installation needs only POSIX tools and uses sh directly.
   const resolveNode = options.resolveNode !== false;
   const command = ChildProcess.make(
     "wsl.exe",
-    resolveNode
-      ? [...buildDistroArgs(distro), "--", "bash", "-l", "-s"]
-      : [...buildDistroArgs(distro), "--exec", "sh", "-s"],
+    resolveNode ? buildWslShellArgs(distro) : [...buildDistroArgs(distro), "--exec", "sh", "-s"],
     {
       stdin: Stream.encodeText(
         Stream.make(
@@ -503,7 +510,7 @@ export const parseWslRuntimeRoot = (stdout: string): string | null => {
 // distro problem rather than a build problem.
 const NODE_PTY_BINARY_MISSING_EXIT_CODE = 4;
 
-const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
+export const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
   exitCode === NODE_PTY_BINARY_MISSING_EXIT_CODE
     ? "WSL support is missing from this T3 Code build: the packaged Linux node-pty binary was not included. Install a build that includes WSL support."
     : null;
@@ -1078,19 +1085,31 @@ const windowsToWslPathImpl = (
 
 const IPV4_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
+export const DISTRO_DEFAULT_ROUTE_IP_COMMAND =
+  "ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == \"src\") { print $(i + 1); exit } }'";
+
+export const parseDistroIp = (raw: string): Option.Option<string> => {
+  const parts = raw.trim().split(/\s+/);
+  const srcIndex = parts.indexOf("src");
+  const candidate = srcIndex >= 0 ? parts[srcIndex + 1] : parts.length === 1 ? parts[0] : undefined;
+  return candidate !== undefined && IPV4_PATTERN.test(candidate)
+    ? Option.some(candidate)
+    : Option.none<string>();
+};
+
 const getDistroIpImpl = (
   distro: string | null,
 ): Effect.Effect<Option.Option<string>, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      // `hostname -I` prints a space-separated list of all non-loopback
-      // IPs the distro has bound. The first entry on the WSL2 default
-      // network is always the eth0 vEthernet address Windows can reach
-      // directly (no wslhost forwarding required).
+      // Use the default-route interface because container bridges such as docker0
+      // and br-* can sort ahead of the real interface in `hostname -I`. Under
+      // mirrored networking this yields the host address, allowing
+      // DesktopBackendConfiguration to detect the shared stack and use loopback.
       const command = ChildProcess.make(
         "wsl.exe",
-        [...buildDistroArgs(distro), "--", "sh", "-c", "hostname -I"],
+        [...buildDistroArgs(distro), "--", "sh", "-c", DISTRO_DEFAULT_ROUTE_IP_COMMAND],
         {
           stdin: "ignore",
           stdout: "pipe",
@@ -1103,9 +1122,7 @@ const getDistroIpImpl = (
       const stdoutBytes = yield* Stream.runCollect(handle.stdout);
       const exitCode = yield* handle.exitCode;
       if ((exitCode as unknown as number) !== 0) return Option.none<string>();
-      const raw = decodeUtf8(concatChunks(stdoutBytes)).trim();
-      const candidate = raw.split(/\s+/).find((part) => IPV4_PATTERN.test(part));
-      return candidate ? Option.some(candidate) : Option.none<string>();
+      return parseDistroIp(decodeUtf8(concatChunks(stdoutBytes)));
     }),
   ).pipe(
     Effect.timeoutOption(USER_HOME_TIMEOUT),

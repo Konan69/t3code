@@ -247,18 +247,27 @@ function paginateBranches(input: {
   };
 }
 
-function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
-  const worktreePaths = new Map<string, string>();
+export function parseGitWorktreePorcelain(
+  stdout: string,
+): ReadonlyArray<GitVcsDriver.GitWorktreeEntry> {
+  const worktrees: GitVcsDriver.GitWorktreeEntry[] = [];
   let currentPath: string | null = null;
   let currentBranch: string | null = null;
+  let currentLocked = false;
   let currentPrunable = false;
 
   const flush = () => {
-    if (currentPath !== null && currentBranch !== null && !currentPrunable) {
-      worktreePaths.set(currentBranch, currentPath);
+    if (currentPath !== null) {
+      worktrees.push({
+        path: currentPath,
+        refName: currentBranch,
+        locked: currentLocked,
+        prunable: currentPrunable,
+      });
     }
     currentPath = null;
     currentBranch = null;
+    currentLocked = false;
     currentPrunable = false;
   };
 
@@ -269,12 +278,24 @@ function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
       currentPath = field.slice("worktree ".length);
     } else if (field.startsWith("branch refs/heads/")) {
       currentBranch = field.slice("branch refs/heads/".length);
+    } else if (field === "locked" || field.startsWith("locked ")) {
+      currentLocked = true;
     } else if (field === "prunable" || field.startsWith("prunable ")) {
       currentPrunable = true;
     }
   }
   flush();
 
+  return worktrees;
+}
+
+function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
+  const worktreePaths = new Map<string, string>();
+  for (const worktree of parseGitWorktreePorcelain(stdout)) {
+    if (worktree.refName !== null && !worktree.prunable) {
+      worktreePaths.set(worktree.refName, worktree.path);
+    }
+  }
   return worktreePaths;
 }
 
@@ -3029,6 +3050,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const listWorktrees: GitVcsDriver.GitVcsDriver["Service"]["listWorktrees"] = Effect.fn(
+    "listWorktrees",
+  )(function* (input) {
+    const result = yield* executeGit(
+      "GitVcsDriver.listWorktrees",
+      input.cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+      {
+        timeoutMs: 30_000,
+        maxOutputBytes: 16 * 1024 * 1024,
+        fallbackErrorDetail: "Git worktree enumeration failed.",
+      },
+    );
+    return parseGitWorktreePorcelain(result.stdout).map((worktree) => ({
+      ...worktree,
+      path: path.normalize(path.resolve(worktree.path)),
+    }));
+  });
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input, options) {
@@ -3345,11 +3385,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* pruneWorktrees({ cwd: input.cwd });
       return;
     }
-    // Raw stderr stays out of both the wire error and the log (it can carry
-    // secrets); log bounded diagnostics so a genuine failure is visible
-    // server-side.
+    const stderr = result.stderr.trim();
     yield* Effect.logWarning(
-      `GitVcsDriver.removeWorktree: git worktree remove exited with code ${result.exitCode} for ${input.path} (stderr length ${result.stderr.length}).`,
+      `GitVcsDriver.removeWorktree: git worktree remove exited with code ${result.exitCode} for ${input.path} (stderr length ${result.stderr.length}): ${stderr || "<empty>"}`,
     );
     return yield* new GitCommandError({
       ...gitCommandContext({ operation: "GitVcsDriver.removeWorktree", cwd: input.cwd, args }),
@@ -3556,6 +3594,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffFileContents,
     readConfigValue,
     listRefs,
+    listWorktrees,
     createWorktree: (input, options) =>
       withListRefsInvalidation(input.cwd, createWorktree(input, options)),
     fetchPullRequestBranch: (input) =>

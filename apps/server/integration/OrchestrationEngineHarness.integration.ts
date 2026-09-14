@@ -67,6 +67,8 @@ import {
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "../src/orchestration/ThreadSettlementReactor.ts";
+import { MachineReactor } from "../src/orchestration/Services/MachineReactor.ts";
+import { ThreadMachineService } from "../src/machine/ThreadMachineService.ts";
 import * as PullRequestSyncReactor from "../src/orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../src/orchestration/ThreadPullRequestReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
@@ -406,6 +408,12 @@ export const makeOrchestrationIntegrationHarness = (
         }),
       ),
       Layer.provideMerge(
+        Layer.succeed(MachineReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
         Layer.succeed(PullRequestSyncReactor.PullRequestSyncReactor, {
           start: () => Effect.void,
           drain: Effect.void,
@@ -426,6 +434,15 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.succeed(
+          ThreadMachineService,
+          ThreadMachineService.of({
+            ensureForThread: () => Effect.succeed(Option.none()),
+            runSetupForThread: () => Effect.succeed({ status: "no-script" }),
+          }),
+        ),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(

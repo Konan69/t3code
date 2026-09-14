@@ -1,4 +1,10 @@
-import { FolderGit2Icon, FolderGitIcon, FolderIcon, HistoryIcon } from "lucide-react";
+import {
+  ContainerIcon,
+  FolderGit2Icon,
+  FolderGitIcon,
+  FolderIcon,
+  HistoryIcon,
+} from "lucide-react";
 import { memo, useMemo } from "react";
 
 import {
@@ -24,6 +30,8 @@ interface BranchToolbarEnvModeSelectorProps {
   envLocked: boolean;
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
+  /** The thread runs (or will run) inside its own thread machine; the workspace is fixed. */
+  inThreadMachine?: boolean;
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel?: string | null;
   onUsePreviousWorktree?: () => void;
@@ -33,6 +41,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   envLocked,
   effectiveEnvMode,
   activeWorktreePath,
+  inThreadMachine = false,
   onEnvModeChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
@@ -55,7 +64,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
         data-composer-context-control
       >
-        {activeWorktreePath ? (
+        {inThreadMachine ? (
+          <ContainerIcon className="size-3 shrink-0" />
+        ) : activeWorktreePath ? (
           <FolderGitIcon className="size-3 shrink-0" />
         ) : (
           <FolderIcon className="size-3 shrink-0" />
@@ -68,7 +79,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             data-composer-label-motion
             className="block w-full min-w-0 max-w-[240px] truncate transition-opacity duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none"
           >
-            {resolveLockedWorkspaceLabel(activeWorktreePath)}
+            {resolveLockedWorkspaceLabel(activeWorktreePath, inThreadMachine)}
           </span>
         </span>
       </span>

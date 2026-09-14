@@ -249,6 +249,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // automatic seed here, but only a metadata update records an
           // explicit project default.
           defaultModelSelection: null,
+          ...(command.machineMode !== undefined ? { machineMode: command.machineMode } : {}),
           faviconPath: null,
           projectIcon: null,
           scripts: [],
@@ -305,6 +306,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { defaultThreadEnvMode: command.defaultThreadEnvMode }
             : {}),
           ...(command.autoPull !== undefined ? { autoPull: command.autoPull } : {}),
+          ...(command.machineMode !== undefined ? { machineMode: command.machineMode } : {}),
           ...(command.faviconPath !== undefined ? { faviconPath: command.faviconPath } : {}),
           ...(command.projectIcon !== undefined ? { projectIcon: command.projectIcon } : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
@@ -400,10 +402,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: thread.projectId,
       });
       const occurredAt = yield* nowIso;
       return {
@@ -417,15 +424,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           deletedAt: occurredAt,
+          projectWorkspaceRoot: project.workspaceRoot,
+          machine: thread.machine,
         },
       };
     }
 
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const thread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: thread.projectId,
       });
       const occurredAt = yield* nowIso;
       return {
@@ -440,6 +454,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           archivedAt: occurredAt,
           updatedAt: occurredAt,
+          projectWorkspaceRoot: project.workspaceRoot,
+          machine: thread.machine,
         },
       };
     }
@@ -1264,6 +1280,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           interactionMode: command.interactionMode,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.machine.bind": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.machine-bound",
+        payload: {
+          threadId: command.threadId,
+          binding: command.binding,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.machine.state.set": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (thread.machine == null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has no machine binding.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.machine-state-set",
+        payload: {
+          threadId: command.threadId,
+          state: command.state,
           updatedAt: occurredAt,
         },
       };

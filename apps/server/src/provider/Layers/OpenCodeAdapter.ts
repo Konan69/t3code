@@ -46,6 +46,10 @@ import {
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
+  formatProviderChildExitReason,
+  logUnexpectedProviderChildExit,
+} from "../providerChildDiagnostics.ts";
+import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
@@ -2790,7 +2794,15 @@ export function makeOpenCodeAdapter(
               if (yield* Ref.get(context.stopped)) {
                 return;
               }
-              yield* emitUnexpectedExit(context, `OpenCode server exited unexpectedly (${code}).`);
+              const exitDetail = {
+                provider: "OpenCode server",
+                threadId: context.session.threadId,
+                exitCode: code,
+                signal: context.server.exitSignal ? yield* context.server.exitSignal : null,
+                stderr: context.server.stderrTail ? yield* context.server.stderrTail : "",
+              } as const;
+              yield* logUnexpectedProviderChildExit(exitDetail);
+              yield* emitUnexpectedExit(context, formatProviderChildExitReason(exitDetail));
             }),
           ),
           Effect.forkIn(context.sessionScope),
@@ -2829,6 +2841,7 @@ export function makeOpenCodeAdapter(
               // process automatically. No manual `server.close()` needed.
               const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
+                threadId: input.threadId,
                 binaryPath,
                 directory,
                 serverUrl,

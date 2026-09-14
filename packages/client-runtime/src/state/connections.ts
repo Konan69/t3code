@@ -7,7 +7,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
-import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
+import { AVAILABLE_CONNECTION_STATE, type RelayWakePolicy } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
   GitHubRoutingPermissions,
@@ -44,6 +44,11 @@ const EMPTY_ENVIRONMENT_CATALOG_STATE: EnvironmentCatalogState = Object.freeze({
   isReady: false,
   entries: new Map(),
 });
+
+export interface SetWakePolicyInput {
+  readonly environmentId: EnvironmentIdType;
+  readonly policy: RelayWakePolicy | null;
+}
 
 export function createEnvironmentCatalogAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
@@ -170,6 +175,31 @@ export function createEnvironmentCatalogAtoms<R, E>(
         Effect.flatMap((registry) => registry.retryNow(environmentId)),
       ),
   });
+  const armWake = createRuntimeCommand(runtime, {
+    label: "environment-catalog:arm-wake",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (environmentId: EnvironmentIdType) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.armWake(environmentId)),
+      ),
+  });
+  const setWakePolicy = createRuntimeCommand(runtime, {
+    label: "environment-catalog:set-wake-policy",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: ({ environmentId, policy }: SetWakePolicyInput) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.setWakePolicy(environmentId, policy)),
+      ),
+  });
+  const wakeStatus = createRuntimeCommand(runtime, {
+    label: "environment-catalog:wake-status",
+    execute: (environmentId: EnvironmentIdType) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.wakeStatus(environmentId)),
+      ),
+  });
 
   return {
     catalogAtom,
@@ -184,5 +214,8 @@ export function createEnvironmentCatalogAtoms<R, E>(
     removeRelayEnvironments,
     retryNow,
     setEnabled,
+    armWake,
+    setWakePolicy,
+    wakeStatus,
   };
 }

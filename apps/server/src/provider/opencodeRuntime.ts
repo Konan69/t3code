@@ -1,6 +1,11 @@
 import * as NodeURL from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  ProviderApprovalDecision,
+  RuntimeMode,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   createOpencodeClient,
   type Agent,
@@ -30,7 +35,16 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
+import {
+  makeProviderStderrBuffer,
+  observeProviderProcessExit,
+} from "./providerChildDiagnostics.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
+import {
+  HostProcessLauncherLive,
+  ProcessLauncher,
+  type ProcessLaunchInput,
+} from "../process/ProcessLauncher.ts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
@@ -87,14 +101,18 @@ export interface OpenCodeServerProcess {
   readonly serverPassword?: string;
   readonly version: string;
   readonly isRunning: Effect.Effect<boolean>;
-  readonly exitCode: Effect.Effect<number, never>;
+  readonly exitCode: Effect.Effect<number | null, never>;
+  readonly exitSignal?: Effect.Effect<string | null, never>;
+  readonly stderrTail?: Effect.Effect<string, never>;
 }
 
 export interface OpenCodeServerConnection {
   readonly url: string;
   readonly serverPassword?: string;
   readonly version: string;
-  readonly exitCode: Effect.Effect<number, never> | null;
+  readonly exitCode: Effect.Effect<number | null, never> | null;
+  readonly exitSignal?: Effect.Effect<string | null, never> | null;
+  readonly stderrTail?: Effect.Effect<string, never> | null;
   readonly external: boolean;
 }
 
@@ -217,6 +235,7 @@ export interface OpenCodeRuntimeShape {
    * (see {@link Scope.make}) and close it when done.
    */
   readonly startOpenCodeServerProcess: (input: {
+    readonly threadId?: ThreadId;
     readonly binaryPath: string;
     readonly directory: string;
     readonly serverPassword?: string;
@@ -231,6 +250,7 @@ export interface OpenCodeRuntimeShape {
    * freshly spawned local server whose lifetime is bound to the caller's scope.
    */
   readonly connectToOpenCodeServer: (input: {
+    readonly threadId?: ThreadId;
     readonly binaryPath: string;
     readonly directory: string;
     readonly serverUrl?: string | null;
@@ -571,8 +591,35 @@ function ensureRuntimeError(
     : new OpenCodeRuntimeError({ operation, detail, cause });
 }
 
+export function makeOpenCodeServerProcessLaunchInput(input: {
+  readonly threadId?: ThreadId;
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly hostPlatform: NodeJS.Platform;
+  readonly shell: boolean | string;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+  readonly serverPassword?: string;
+}): ProcessLaunchInput {
+  return {
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+    command: input.command,
+    args: input.args,
+    detached: input.hostPlatform !== "win32",
+    shell: input.shell,
+    env: {
+      ...input.environment,
+      ...(input.serverPassword !== undefined
+        ? { OPENCODE_SERVER_PASSWORD: input.serverPassword }
+        : {}),
+      OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
+    },
+    extendEnv: input.environment === undefined,
+  };
+}
+
 const makeOpenCodeRuntime = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const processLauncher = yield* ProcessLauncher;
   const netService = yield* NetService.NetService;
   const hostPlatform = yield* HostProcessPlatform;
   const resolveCommand = (command: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
@@ -676,24 +723,20 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         ...(input.environment !== undefined ? { environment: input.environment } : {}),
       });
 
-      const child = yield* spawner
-        .spawn(
-          ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-            detached: hostPlatform !== "win32",
+      // Respect an OPENCODE_CONFIG_CONTENT provided by the caller or the
+      // inherited process environment, only falling back to the empty config
+      // when neither is set. The value stays explicit because `extendEnv` is
+      // false whenever `input.environment` is provided.
+      const child = yield* processLauncher
+        .launch(
+          makeOpenCodeServerProcessLaunchInput({
+            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            command: spawnCommand.command,
+            args: spawnCommand.args,
+            hostPlatform,
             shell: spawnCommand.shell,
-            env: {
-              ...input.environment,
-              ...(serverPassword !== undefined ? { OPENCODE_SERVER_PASSWORD: serverPassword } : {}),
-              // Respect an OPENCODE_CONFIG_CONTENT provided by the caller or
-              // the inherited process environment, only falling back to the
-              // empty config when neither is set. Setting it unconditionally
-              // previously clobbered the user's opencode config, hiding their
-              // providers/models. The value is set explicitly (rather than
-              // relying on inheritance) because `extendEnv` is false whenever
-              // `input.environment` is provided.
-              OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
-            },
-            extendEnv: input.environment === undefined,
+            environment: input.environment,
+            ...(serverPassword !== undefined ? { serverPassword } : {}),
           }),
         )
         .pipe(
@@ -728,7 +771,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       yield* Scope.addFinalizer(runtimeScope, terminateChild);
 
       const stdoutRef = yield* Ref.make<string | null>("");
-      const stderrRef = yield* Ref.make<string | null>("");
+      const stderr = makeProviderStderrBuffer();
       const readyDeferred = yield* Deferred.make<string, OpenCodeRuntimeError>();
 
       const setReadyFromStdoutChunk = (chunk: string) =>
@@ -755,35 +798,29 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       );
       const stderrFiber = yield* child.stderr.pipe(
         Stream.decodeText(),
-        Stream.runForEach((chunk) =>
-          Ref.update(stderrRef, (stderr) =>
-            stderr === null
-              ? null
-              : `${stderr}${chunk}`.slice(-OPENCODE_SERVER_STARTUP_MAX_OUTPUT_CHARS),
-          ),
-        ),
+        Stream.runForEach((chunk) => Effect.sync(() => stderr.append(chunk))),
         Effect.ignore,
         Effect.forkIn(runtimeScope),
       );
 
-      const exitFiber = yield* child.exitCode.pipe(
-        Effect.flatMap((code) =>
+      const processExit = observeProviderProcessExit(child.exitCode);
+      const exitFiber = yield* processExit.pipe(
+        Effect.flatMap(({ exitCode, signal }) =>
           Effect.gen(function* () {
             const stdout = (yield* Ref.get(stdoutRef)) ?? "";
-            const stderr = (yield* Ref.get(stderrRef)) ?? "";
-            const exitCode = Number(code);
+            const stderrOutput = stderr.read();
             yield* Deferred.fail(
               readyDeferred,
               new OpenCodeRuntimeError({
                 operation: "startOpenCodeServerProcess",
                 detail: [
-                  `OpenCode server exited before startup completed (code: ${String(exitCode)}).`,
+                  `OpenCode server exited before startup completed (code: ${String(exitCode)}, signal: ${signal ?? "unknown"}).`,
                   stdout.trim() ? `stdout:\n${stdout.trim()}` : null,
-                  stderr.trim() ? `stderr:\n${stderr.trim()}` : null,
+                  stderrOutput.trim() ? `stderr:\n${stderrOutput.trim()}` : null,
                 ]
                   .filter(Boolean)
                   .join("\n\n"),
-                cause: { exitCode, stdout, stderr },
+                cause: { exitCode, signal, stdout, stderr: stderrOutput },
               }),
             ).pipe(Effect.ignore);
           }),
@@ -821,9 +858,24 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       // readers can block OpenCode when its output buffers fill. Startup output
       // is no longer needed, so discard later output instead of retaining it.
       yield* Ref.set(stdoutRef, null);
-      yield* Ref.set(stderrRef, null);
 
-      const url = readyOption.value;
+      const url = processLauncher.hostReachableUrl
+        ? yield* processLauncher
+            .hostReachableUrl({
+              ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+              url: readyOption.value,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OpenCodeRuntimeError({
+                    operation: "startOpenCodeServerProcess",
+                    detail: `Failed to resolve host-reachable OpenCode URL: ${cause.detail}`,
+                    cause,
+                  }),
+              ),
+            )
+        : readyOption.value;
       const version = yield* verifyOpenCodeServerVersion(
         createOpenCodeSdkClient({
           baseUrl: url,
@@ -837,10 +889,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         ...(serverPassword !== undefined ? { serverPassword } : {}),
         version,
         isRunning: child.isRunning.pipe(Effect.orElseSucceed(() => false)),
-        exitCode: child.exitCode.pipe(
-          Effect.map(Number),
-          Effect.orElseSucceed(() => 0),
-        ),
+        exitCode: processExit.pipe(Effect.map((exit) => exit.exitCode)),
+        exitSignal: processExit.pipe(Effect.map((exit) => exit.signal)),
+        stderrTail: Effect.sync(() => stderr.read()),
       } satisfies OpenCodeServerProcess;
     });
 
@@ -863,12 +914,15 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           ...(serverPassword !== undefined ? { serverPassword } : {}),
           version,
           exitCode: null,
+          exitSignal: null,
+          stderrTail: null,
           external: true,
         })),
       );
     }
 
     return startOpenCodeServerProcess({
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
       binaryPath: input.binaryPath,
       directory: input.directory,
       ...(input.serverPassword !== undefined ? { serverPassword: input.serverPassword } : {}),
@@ -882,6 +936,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         ...(server.serverPassword !== undefined ? { serverPassword: server.serverPassword } : {}),
         version: server.version,
         exitCode: server.exitCode,
+        ...(server.exitSignal !== undefined ? { exitSignal: server.exitSignal } : {}),
+        ...(server.stderrTail !== undefined ? { stderrTail: server.stderrTail } : {}),
         external: false,
       })),
     );
@@ -1063,6 +1119,11 @@ export class OpenCodeRuntime extends Context.Service<OpenCodeRuntime, OpenCodeRu
   "t3/provider/opencodeRuntime",
 ) {}
 
-export const OpenCodeRuntimeLive = Layer.effect(OpenCodeRuntime, makeOpenCodeRuntime).pipe(
-  Layer.provide(NetService.layer),
+export const OpenCodeRuntimeProcessLauncher = Layer.effect(
+  OpenCodeRuntime,
+  makeOpenCodeRuntime,
+).pipe(Layer.provide(NetService.layer));
+
+export const OpenCodeRuntimeLive = OpenCodeRuntimeProcessLauncher.pipe(
+  Layer.provide(HostProcessLauncherLive),
 );

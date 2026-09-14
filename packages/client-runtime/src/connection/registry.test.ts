@@ -39,6 +39,7 @@ import {
   BearerConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
+  type RelayWakePolicy,
   SshConnectionTarget,
   type ConnectionTarget,
   type PreparedConnection,
@@ -55,6 +56,7 @@ import * as RpcSession from "../rpc/session.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { runDesktopCommitWithReconnectObserver } from "../state/server.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -86,6 +88,12 @@ const SECOND_RELAY_TARGET = new RelayConnectionTarget({
   environmentId: EnvironmentId.make("environment-relay-2"),
   label: "Second relay environment",
 });
+const WAKE_POLICY: RelayWakePolicy = {
+  endpoint: "https://wake.example.test",
+  name: "cloudbox",
+  secret: "local-secret",
+  mode: "explicit-intent",
+};
 
 const BEARER_TARGET = new BearerConnectionTarget({
   environmentId: EnvironmentId.make("environment-bearer"),
@@ -406,6 +414,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
           ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.never }),
         ),
         Layer.succeed(ConnectionDriver.ConnectionDriver, driver),
+        WakeIntent.layer,
         cacheLayer,
         Layer.succeed(Persistence.EnvironmentOwnedDataCleanup, ownedDataCleanup),
       ),
@@ -786,6 +795,99 @@ describe("EnvironmentRegistry", () => {
         expect((yield* registry.state(RELAY_TARGET.environmentId)).phase).toBe("available");
         expect(yield* Ref.get(harness.sessions)).toHaveLength(0);
       }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("persists and emits relay wake policy edits without connecting", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([RELAY_TARGET]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const policyAdded = yield* Effect.forkChild(
+          SubscriptionRef.changes(registry.entries).pipe(
+            Stream.filterMap((entries) => {
+              const target = entries.get(RELAY_TARGET.environmentId)?.target;
+              return target?._tag === "RelayConnectionTarget" && target.wakePolicy !== undefined
+                ? Result.succeed(target)
+                : Result.failVoid;
+            }),
+            Stream.runHead,
+            Effect.map(Option.getOrThrow),
+          ),
+          { startImmediately: true },
+        );
+
+        yield* registry.setWakePolicy(RELAY_TARGET.environmentId, WAKE_POLICY);
+
+        expect((yield* Fiber.join(policyAdded)).wakePolicy).toEqual(WAKE_POLICY);
+        expect((yield* Ref.get(harness.storedTargets)).get(RELAY_TARGET.environmentId)).toEqual(
+          new RelayConnectionTarget({
+            environmentId: RELAY_TARGET.environmentId,
+            label: RELAY_TARGET.label,
+            wakePolicy: WAKE_POLICY,
+          }),
+        );
+        expect(yield* Ref.get(harness.sessions)).toHaveLength(0);
+
+        const policyRemoved = yield* Effect.forkChild(
+          SubscriptionRef.changes(registry.entries).pipe(
+            Stream.filterMap((entries) => {
+              const target = entries.get(RELAY_TARGET.environmentId)?.target;
+              return target?._tag === "RelayConnectionTarget" && target.wakePolicy === undefined
+                ? Result.succeed(target)
+                : Result.failVoid;
+            }),
+            Stream.runHead,
+            Effect.map(Option.getOrThrow),
+          ),
+          { startImmediately: true },
+        );
+        yield* registry.setWakePolicy(RELAY_TARGET.environmentId, null);
+
+        expect((yield* Fiber.join(policyRemoved)).wakePolicy).toBeUndefined();
+        expect((yield* Ref.get(harness.storedTargets)).get(RELAY_TARGET.environmentId)).toEqual(
+          RELAY_TARGET,
+        );
+        expect(yield* Ref.get(harness.sessions)).toHaveLength(0);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
+  it.effect("rejects wake policy edits for non-relay and unknown environments", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([BEARER_TARGET], [BEARER_PROFILE]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const unsupported = yield* Effect.flip(
+          registry.setWakePolicy(BEARER_TARGET.environmentId, WAKE_POLICY),
+        );
+        const missing = yield* Effect.flip(
+          registry.setWakePolicy(EnvironmentId.make("missing-environment"), WAKE_POLICY),
+        );
+
+        expect(unsupported._tag).toBe("WakePolicyUnsupportedTargetError");
+        expect(unsupported.message).toContain("not a relay connection target");
+        expect(missing._tag).toBe("EnvironmentNotRegisteredError");
+        expect((yield* Ref.get(harness.storedTargets)).get(BEARER_TARGET.environmentId)).toEqual(
+          BEARER_TARGET,
+        );
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
+  it.effect("reports NoPolicy without making a host request", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([RELAY_TARGET]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+
+        expect(yield* registry.wakeStatus(RELAY_TARGET.environmentId)).toEqual({
+          _tag: "NoPolicy",
+        });
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
   );
 

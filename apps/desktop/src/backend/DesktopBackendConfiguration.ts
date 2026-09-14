@@ -749,6 +749,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     ...baseConfig,
     args: [
       ...distroArgs,
+      "--cd",
+      "~",
       "--exec",
       "env",
       `PATH=${launchPath}`,

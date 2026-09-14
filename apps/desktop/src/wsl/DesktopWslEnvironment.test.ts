@@ -6,6 +6,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -13,10 +14,15 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   buildWslRuntimeInstallScript,
+  buildWslNodeEnvPreamble,
+  buildWslShellArgs,
   buildWslRuntimeInvalidateScript,
   buildWslRuntimePruneScript,
   DesktopWslDistroListError,
   formatMissingToolsReason,
+  formatNodePtyProbeFailureReason,
+  formatWslShellTransportFailureReason,
+  parseDistroIp,
   parseNodePath,
   parseNodeVersion,
   parseResolvedPath,
@@ -139,6 +145,73 @@ describe("probeWslDistros", () => {
       expect(error).toBeInstanceOf(DesktopWslDistroListError);
       expect(error.message).toContain("timed out");
     }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("parseDistroIp", () => {
+  it("extracts the default-route source address", () => {
+    expect(parseDistroIp("1.1.1.1 via 192.168.0.1 dev eth1 src 192.168.0.165 uid 1000")).toEqual(
+      Option.some("192.168.0.165"),
+    );
+    expect(parseDistroIp("192.168.0.165\n")).toEqual(Option.some("192.168.0.165"));
+  });
+
+  it("rejects output without a valid source address", () => {
+    expect(parseDistroIp("")).toEqual(Option.none());
+    expect(parseDistroIp("1.1.1.1 via 192.168.0.1 dev eth1 uid 1000")).toEqual(Option.none());
+    expect(parseDistroIp("1.1.1.1 dev eth1 src malformed uid 1000")).toEqual(Option.none());
+  });
+});
+
+describe("formatNodePtyProbeFailureReason", () => {
+  it("identifies a packaged build that omitted the Linux node-pty prebuild", () => {
+    const reason = formatNodePtyProbeFailureReason(4);
+
+    expect(reason).toContain("packaged Linux node-pty binary was not included");
+    expect(reason).toContain("--wsl-prebuild");
+  });
+
+  it("leaves other node-pty load failures to the compatibility diagnostic", () => {
+    expect(formatNodePtyProbeFailureReason(1)).toBeNull();
+  });
+});
+
+describe("formatWslShellTransportFailureReason", () => {
+  it("distinguishes timeouts and spawn failures from normal shell exit codes", () => {
+    expect(formatWslShellTransportFailureReason("timeout")).toContain("timed out");
+    expect(formatWslShellTransportFailureReason("spawn")).toContain("could not start wsl.exe");
+    expect(formatWslShellTransportFailureReason("process")).toContain("lost communication");
+    expect(formatWslShellTransportFailureReason(null)).toBeNull();
+  });
+});
+
+describe("buildWslNodeEnvPreamble", () => {
+  it("passes the required Node engine range into the shared resolver", () => {
+    const preamble = buildWslNodeEnvPreamble("^22.16 || ^23.11 || >=24.10");
+
+    expect(preamble).toContain("T3_NODE_ENGINE_RANGE='^22.16 || ^23.11 || >=24.10'");
+    expect(preamble.indexOf("T3_NODE_ENGINE_RANGE=")).toBeLessThan(
+      preamble.lastIndexOf("ensure_remote_node_path || true"),
+    );
+  });
+
+  it("keeps the shared resolver permissive when no Node engine range is provided", () => {
+    expect(buildWslNodeEnvPreamble()).toContain("T3_NODE_ENGINE_RANGE=''");
+  });
+});
+
+describe("buildWslShellArgs", () => {
+  it("runs strict backend scripts without user login profiles", () => {
+    expect(buildWslShellArgs("Ubuntu-24.04")).toEqual([
+      "-d",
+      "Ubuntu-24.04",
+      "--",
+      "bash",
+      "--noprofile",
+      "--norc",
+      "-s",
+    ]);
+    expect(buildWslShellArgs(null)).not.toContain("-l");
   });
 });
 

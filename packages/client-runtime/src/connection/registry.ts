@@ -18,17 +18,20 @@ import {
   type ConnectionRegistration,
   type PlatformConnectionRegistration,
   type PrimaryConnectionRegistration,
+  RelayConnectionRegistration,
   SshConnectionProfile,
   connectionRegistrationCatalogEntry,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as Connectivity from "./connectivity.ts";
-import type {
-  ConnectionAttemptError,
-  ConnectionTarget,
-  NetworkStatus,
-  SupervisorConnectionState,
+import {
+  type ConnectionAttemptError,
+  type ConnectionTarget,
+  type NetworkStatus,
+  RelayConnectionTarget,
+  type RelayWakePolicy,
+  type SupervisorConnectionState,
 } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
@@ -38,6 +41,8 @@ import {
   GitHubRoutingPermissions,
   gitHubRoutingConnectionKey,
 } from "./githubRoutingPermissions.ts";
+import { wakeStatus as requestWakeStatus, type WakeStatusResult } from "./wakeEndpoint.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 
 const isSshConnectionProfile = Schema.is(SshConnectionProfile);
 
@@ -62,6 +67,20 @@ export class PlatformEnvironmentRemovalError extends Schema.TaggedError<Platform
     return `Platform-managed environment ${this.environmentId} cannot be removed.`;
   }
 }
+
+export class WakePolicyUnsupportedTargetError extends Schema.TaggedError<WakePolicyUnsupportedTargetError>()(
+  "WakePolicyUnsupportedTargetError",
+  {
+    environmentId: EnvironmentId,
+    targetTag: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Environment ${this.environmentId} uses ${this.targetTag}, not a relay connection target.`;
+  }
+}
+
+export type EnvironmentWakeStatusResult = WakeStatusResult | { readonly _tag: "NoPolicy" };
 
 export class EnvironmentRegistry extends Context.Service<
   EnvironmentRegistry,
@@ -106,6 +125,19 @@ export class EnvironmentRegistry extends Context.Service<
       void,
       EnvironmentNotRegisteredError | Persistence.ConnectionPersistenceError
     >;
+    readonly armWake: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    readonly setWakePolicy: (
+      environmentId: EnvironmentId,
+      policy: RelayWakePolicy | null,
+    ) => Effect.Effect<
+      void,
+      | Persistence.ConnectionPersistenceError
+      | EnvironmentNotRegisteredError
+      | WakePolicyUnsupportedTargetError
+    >;
+    readonly wakeStatus: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<EnvironmentWakeStatusResult, EnvironmentNotRegisteredError>;
     readonly state: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<SupervisorConnectionState, EnvironmentNotRegisteredError>;
@@ -154,6 +186,7 @@ export const make = Effect.gen(function* () {
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
+  const wakeIntent = yield* WakeIntent.WakeIntent;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const persistedTargets = yield* storage.list;
   const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
@@ -452,6 +485,40 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const setWakePolicy = Effect.fn("EnvironmentRegistry.setWakePolicy")(function* (
+    environmentId: EnvironmentId,
+    policy: RelayWakePolicy | null,
+  ) {
+    yield* withLeaseLock(
+      environmentId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(environmentId);
+        if (entry.target._tag !== "RelayConnectionTarget") {
+          return yield* new WakePolicyUnsupportedTargetError({
+            environmentId,
+            targetTag: entry.target._tag,
+          });
+        }
+        const target = new RelayConnectionTarget({
+          environmentId: entry.target.environmentId,
+          label: entry.target.label,
+          ...(policy === null ? {} : { wakePolicy: policy }),
+        });
+        yield* registrations.register(new RelayConnectionRegistration({ target }));
+        yield* Ref.update(persistedTargetsByEnvironment, (current) => {
+          const next = new Map(current);
+          next.set(environmentId, target);
+          return next;
+        });
+        yield* SubscriptionRef.update(entries, (current) => {
+          const next = new Map(current);
+          next.set(environmentId, { ...entry, target });
+          return next;
+        });
+      }),
+    );
+  });
+
   const installPlatformRegistration = Effect.fn("EnvironmentRegistry.installPlatformRegistration")(
     function* (registration: PlatformConnectionRegistration) {
       const entry = connectionRegistrationCatalogEntry(registration);
@@ -738,6 +805,9 @@ export const make = Effect.gen(function* () {
           nextEntries.set(environmentId, next);
           return nextEntries;
         });
+        if (enabled && entry.target._tag === "RelayConnectionTarget") {
+          yield* wakeIntent.arm(environmentId);
+        }
         if (lease !== undefined) {
           yield* enabled ? lease.supervisor.connect : lease.supervisor.disconnect;
         } else if (enabled) {
@@ -765,6 +835,23 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const armWake = (environmentId: EnvironmentId) =>
+    getEntry(environmentId).pipe(
+      Effect.flatMap((entry) =>
+        entry.target._tag === "RelayConnectionTarget" ? wakeIntent.arm(environmentId) : Effect.void,
+      ),
+      Effect.andThen(retryNow(environmentId)),
+      Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
+      Effect.withSpan("EnvironmentRegistry.armWake"),
+    );
+  const wakeStatus = Effect.fn("EnvironmentRegistry.wakeStatus")(function* (
+    environmentId: EnvironmentId,
+  ) {
+    const entry = yield* getEntry(environmentId);
+    return entry.target._tag === "RelayConnectionTarget" && entry.target.wakePolicy !== undefined
+      ? yield* requestWakeStatus(entry.target.wakePolicy)
+      : ({ _tag: "NoPolicy" } as const);
+  });
   const state = Effect.fn("EnvironmentRegistry.state")(function* (environmentId: EnvironmentId) {
     const supervisor = yield* acquireSupervisor(environmentId);
     return yield* SubscriptionRef.get(supervisor.state);
@@ -805,6 +892,9 @@ export const make = Effect.gen(function* () {
     removeRelayEnvironments,
     retryNow,
     setEnabled,
+    armWake,
+    setWakePolicy,
+    wakeStatus,
     state,
     stateChanges,
     run,

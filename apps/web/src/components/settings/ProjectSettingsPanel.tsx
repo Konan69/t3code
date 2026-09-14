@@ -7,7 +7,11 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { type EnvironmentId, type ProjectIconOverride } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type ProjectIconOverride,
+  type ProjectMachineMode,
+} from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import { Trash2Icon } from "lucide-react";
@@ -27,6 +31,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   SettingResetButton,
@@ -172,6 +177,7 @@ function ProjectDetail({
     group.memberProjects.find(
       (member) => environmentById.get(member.environmentId)?.serverConfig != null,
     ) ?? group.memberProjects[0]!;
+  const selectedServerConfig = environmentById.get(representative.environmentId)?.serverConfig;
   const threads = useThreadShells();
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
@@ -209,6 +215,7 @@ function ProjectDetail({
         title: string;
         faviconPath: string | null;
         projectIcon: ProjectIconOverride | null;
+        machineMode: ProjectMachineMode;
       }>,
       failureTitle: string,
     ): Promise<AtomCommandResult<void, unknown>> => {
@@ -268,6 +275,13 @@ function ProjectDetail({
       await updateAllMembers({ title }, "Failed to rename project");
     },
     [group.memberProjects, updateAllMembers],
+  );
+
+  const machineMode = representative.machineMode ?? "off";
+  const setMachineMode = useCallback(
+    (mode: ProjectMachineMode) =>
+      void updateAllMembers({ machineMode: mode }, "Failed to update thread machines"),
+    [updateAllMembers],
   );
 
   // ----- project icon -----
@@ -477,6 +491,28 @@ function ProjectDetail({
               </div>
             }
           />
+          {selectedServerConfig?.environment.capabilities.threadMachines === true ? (
+            <SettingsRow
+              title="Thread machines"
+              description="Run new threads in isolated Incus machines. Linux hosts only; off preserves normal local and worktree behavior."
+              control={
+                <Select
+                  value={machineMode}
+                  onValueChange={(value) => {
+                    if (value === "off" || value === "thread") setMachineMode(value);
+                  }}
+                >
+                  <SelectTrigger aria-label="Thread machines">
+                    <SelectValue>{machineMode === "thread" ? "On" : "Off"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectItem value="off">Off</SelectItem>
+                    <SelectItem value="thread">On for new threads</SelectItem>
+                  </SelectContent>
+                </Select>
+              }
+            />
+          ) : null}
         </SettingsSection>
         <ProjectActionsSettings />
         {hasMultipleCheckouts ? checkoutChoices : null}

@@ -8,6 +8,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 
+import { ProcessLauncher, makeHostProcessLauncher } from "../../process/ProcessLauncher.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import { makeXAiPromptCompletionRuntime } from "./XAiAcpExtension.ts";
 
@@ -25,6 +26,7 @@ interface GrokAcpRuntimeInput extends Omit<
   "authMethodId" | "clientCapabilities" | "spawn"
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  readonly processLauncher?: ProcessLauncher["Service"];
   readonly grokSettings: GrokAcpRuntimeGrokSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
@@ -76,8 +78,10 @@ export const makeGrokAcpRuntime = (
   Crypto.Crypto | Scope.Scope
 > =>
   Effect.gen(function* () {
+    const processLauncher =
+      input.processLauncher ?? makeHostProcessLauncher(input.childProcessSpawner);
     const acpContext = yield* Layer.build(
-      AcpSessionRuntime.layer({
+      AcpSessionRuntime.layerWithProcessLauncher({
         ...input,
         spawn: buildGrokAcpSpawnInput(
           input.grokSettings,
@@ -86,11 +90,7 @@ export const makeGrokAcpRuntime = (
           input.runtimeMode,
         ),
         authMethodId: resolveGrokAuthMethodId(input.environment),
-      }).pipe(
-        Layer.provide(
-          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
-        ),
-      ),
+      }).pipe(Layer.provide(Layer.succeed(ProcessLauncher, processLauncher))),
     );
     const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
       Effect.provide(acpContext),

@@ -44,6 +44,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { ProcessLauncher, makeHostProcessLauncher } from "../../process/ProcessLauncher.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -99,6 +100,7 @@ function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
 
 export interface CursorAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
+  readonly processLauncher?: ProcessLauncher["Service"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   /**
@@ -328,6 +330,8 @@ export function makeCursorAdapter(
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const processLauncher =
+      options?.processLauncher ?? makeHostProcessLauncher(childProcessSpawner);
     const serverConfig = yield* Effect.service(ServerConfig);
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
@@ -552,6 +556,8 @@ export function makeCursorAdapter(
                 }
               : {}),
             childProcessSpawner,
+            processLauncher,
+            threadId: input.threadId,
             cwd,
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
@@ -807,6 +813,23 @@ export function makeCursorAdapter(
                 switch (event._tag) {
                   case "EventStreamBarrier":
                     yield* Deferred.succeed(event.acknowledge, undefined);
+                    return;
+                  case "ProcessExited":
+                    if (ctx.stopped) return;
+                    ctx.stopped = true;
+                    sessions.delete(ctx.threadId);
+                    yield* offerRuntimeEvent({
+                      type: "session.exited",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      payload: {
+                        exitKind: "error",
+                        recoverable: true,
+                        reason: event.reason,
+                      },
+                    });
+                    yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
                     return;
                   case "ModeChanged":
                     return;
