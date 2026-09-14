@@ -6,31 +6,38 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
+class LocalBundleError extends Error {}
+
 const fail = (message) => {
-  console.error(`[local-bundle] ${message}`);
-  process.exit(1);
+  throw new LocalBundleError(`[local-bundle] ${message}`);
 };
 
-const [buildRootArg, resourcesArg] = process.argv.slice(2);
-if (buildRootArg === undefined || resourcesArg === undefined) {
-  fail("usage: install-local-windows-bundle.cjs <build-root> <installed-resources-dir>");
+const [buildRootArg, resourcesArg, linuxCliArchiveArg] = process.argv.slice(2);
+if (buildRootArg === undefined || resourcesArg === undefined || linuxCliArchiveArg === undefined) {
+  fail(
+    "usage: install-local-windows-bundle.cjs <build-root> <installed-resources-dir> <linux-cli-archive>",
+  );
 }
 
 const buildRoot = path.resolve(buildRootArg);
 const resourcesDir = path.resolve(resourcesArg);
+const linuxCliArchive = path.resolve(linuxCliArchiveArg);
 const archivePath = path.join(resourcesDir, "app.asar");
 const serverArchivePath = path.join(resourcesDir, "server.asar");
 const wslRuntimeArchivePath = path.join(resourcesDir, "wsl-runtime.tar.gz");
 const wslRuntimeChecksumPath = `${wslRuntimeArchivePath}.sha256`;
 const desktopBuild = path.join(buildRoot, "apps", "desktop", "dist-electron");
 const serverBuild = path.join(buildRoot, "apps", "server", "dist");
-const legacyServerTarget = path.join(`${archivePath}.unpacked`, "apps", "server", "dist");
-const usesServerArchive = fs.existsSync(serverArchivePath);
-const usesWslRuntimeArchive =
-  fs.existsSync(wslRuntimeArchivePath) && fs.existsSync(wslRuntimeChecksumPath);
-const serverTarget = usesServerArchive ? serverArchivePath : legacyServerTarget;
+const serverTarget = serverArchivePath;
 
-for (const requiredPath of [archivePath, desktopBuild, serverBuild, serverTarget]) {
+for (const requiredPath of [
+  archivePath,
+  serverArchivePath,
+  wslRuntimeArchivePath,
+  linuxCliArchive,
+  desktopBuild,
+  serverBuild,
+]) {
   if (!fs.existsSync(requiredPath)) {
     fail(`required path does not exist: ${requiredPath}`);
   }
@@ -180,22 +187,116 @@ const runTar = (args, options = {}) => {
   return result.stdout;
 };
 
-const rewriteWslRuntimeArchive = ({ sourceArchive, buildDirectory, stagedArchive }) => {
-  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "t3-wsl-runtime-"));
+const sha256File = (filePath) =>
+  crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+
+const T3_CONNECT_MARKERS = ["pk_live_", "t3-relay", "relay.t3.codes", "hzxSgY2cH10sDU2r"];
+const WSL_OVERLAY_MARKERS = [
+  "relay.t3.codes",
+  "hzxSgY2cH10sDU2r",
+  "pi --mode rpc",
+  "MachineService",
+];
+
+const verifyMarkers = (contents, markers, source) => {
+  const combined = contents.join("\n");
+  for (const marker of markers) {
+    if (!combined.includes(marker)) {
+      fail(`${source} is missing marker: ${marker}`);
+    }
+  }
+};
+
+const verifyAsarClientAssets = (candidateArchive, source) => {
+  const assetPaths = asar.listPackage(candidateArchive).filter((entry) => {
+    const normalized = entry.replace(/^\/+/, "");
+    return normalized.startsWith("apps/server/dist/client/assets/") && normalized.endsWith(".js");
+  });
+  if (assetPaths.length === 0) {
+    fail(`${source} has no client/assets/*.js entries`);
+  }
+  verifyMarkers(
+    assetPaths.map((entry) =>
+      asar.extractFile(candidateArchive, entry.replace(/^\/+/, "")).toString("utf8"),
+    ),
+    T3_CONNECT_MARKERS,
+    `${source} client assets`,
+  );
+};
+
+const archiveEntries = (archive) =>
+  runTar(["-tzf", archive])
+    .toString("utf8")
+    .split(/\r?\n/)
+    .map((entry) => entry.trim().replace(/^\.\//, ""))
+    .filter(Boolean);
+
+const validateLinuxCliArchive = (archive) => {
+  const entries = archiveEntries(archive);
+  const topLevelNames = new Set(entries.map((entry) => entry.split("/")[0]).filter(Boolean));
+  if (topLevelNames.size !== 1) {
+    fail("Linux CLI archive must contain exactly one top-level directory");
+  }
+  const [topLevelName] = topLevelNames;
+  if (topLevelName === undefined || !/^t3-.+-linux-x64$/.test(topLevelName)) {
+    fail("Linux CLI archive top-level directory must match t3-*-linux-x64/");
+  }
+  const topLevelDirectory = `${topLevelName}/`;
+  if (!entries.includes(topLevelDirectory)) {
+    fail(`Linux CLI archive is missing its top-level directory: ${topLevelDirectory}`);
+  }
+  if (entries.some((entry) => !entry.startsWith(topLevelDirectory))) {
+    fail("Linux CLI archive contains entries outside its top-level directory");
+  }
+
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "t3-linux-cli-"));
   try {
-    runTar(["-xzf", sourceArchive, "-C", temporaryDirectory]);
-    const runtimeServerBuild = path.join(temporaryDirectory, "apps", "server", "dist");
-    fs.rmSync(runtimeServerBuild, { recursive: true, force: true });
-    fs.mkdirSync(path.dirname(runtimeServerBuild), { recursive: true });
-    fs.cpSync(buildDirectory, runtimeServerBuild, { recursive: true, dereference: false });
-    runTar(["-czf", stagedArchive, "-C", temporaryDirectory, "apps", "node_modules"]);
+    runTar(["-xzf", archive, "-C", temporaryDirectory, "--strip-components=1"]);
+    const executable = path.join(temporaryDirectory, "t3");
+    if (!fs.existsSync(executable) || !fs.statSync(executable).isFile()) {
+      fail("Linux CLI archive is missing its t3 executable");
+    }
+    if ((fs.statSync(executable).mode & 0o111) === 0) {
+      fail("Linux CLI archive t3 is not executable");
+    }
+
+    const version = spawnSync(executable, ["--version"], {
+      cwd: temporaryDirectory,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: 30_000,
+    });
+    if (version.error !== undefined || version.status !== 0) {
+      fail(
+        `Linux CLI archive t3 --version failed: ${version.error?.message ?? version.stderr?.trim() ?? `exit ${version.status}`}`,
+      );
+    }
+
+    const assetsDirectory = path.join(temporaryDirectory, "client", "assets");
+    if (!fs.existsSync(assetsDirectory) || !fs.statSync(assetsDirectory).isDirectory()) {
+      fail("Linux CLI archive is missing client/assets/");
+    }
+    const assetFiles = fs
+      .readdirSync(assetsDirectory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+      .map((entry) => path.join(assetsDirectory, entry.name));
+    if (assetFiles.length === 0) {
+      fail("Linux CLI archive has no client/assets/*.js files");
+    }
+    verifyMarkers(
+      assetFiles.map((file) => fs.readFileSync(file, "utf8")),
+      T3_CONNECT_MARKERS,
+      "Linux CLI archive client assets",
+    );
+    verifyMarkers(
+      [fs.readFileSync(executable, "latin1")],
+      WSL_OVERLAY_MARKERS,
+      "Linux CLI archive t3",
+    );
   } finally {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 };
-
-const sha256File = (filePath) =>
-  crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 
 const nextBackupPath = (target) => {
   const stamp = new Date().toISOString().replaceAll(":", "-");
@@ -259,38 +360,17 @@ const verifyServerArchive = (candidateArchive) => {
   const server = asar.extractFile(candidateArchive, "apps/server/dist/bin.mjs").toString("utf8");
   verifyServerMarkers(server, "candidate server bundle");
   verifyPiMcpExtension(
-    asar.extractFile(candidateArchive, "apps/server/dist/t3McpExtension.mjs").toString("utf8"),
+    asar
+      .extractFile(candidateArchive, "apps/server/dist/provider/pi/t3McpExtension.mjs")
+      .toString("utf8"),
     "candidate server bundle",
   );
-};
-
-const verifyWslRuntimeArchive = (candidateArchive) => {
-  const server = runTar(["-xOf", candidateArchive, "apps/server/dist/bin.mjs"]).toString("utf8");
-  verifyServerMarkers(server, "candidate WSL runtime");
-  verifyPiMcpExtension(
-    runTar(["-xOf", candidateArchive, "apps/server/dist/t3McpExtension.mjs"]).toString("utf8"),
-    "candidate WSL runtime",
-  );
-};
-
-const verifyLegacyServer = (candidateDirectory) => {
-  const serverEntry = path.join(candidateDirectory, "bin.mjs");
-  if (!fs.existsSync(serverEntry) || fs.statSync(serverEntry).size === 0) {
-    fail(`server bundle is missing: ${serverEntry}`);
-  }
-  verifyPiMcpExtension(
-    fs.readFileSync(path.join(candidateDirectory, "t3McpExtension.mjs"), "utf8"),
-    "candidate legacy server bundle",
-  );
+  verifyAsarClientAssets(candidateArchive, "candidate server bundle");
 };
 
 const stagedArchive = path.join(resourcesDir, `.app.asar.local-new-${process.pid}`);
 const stagedServerArchive = path.join(resourcesDir, `.server.asar.local-new-${process.pid}`);
-const stagedLegacyServer = path.join(
-  path.dirname(legacyServerTarget),
-  `.dist.local-new-${process.pid}`,
-);
-const stagedServer = usesServerArchive ? stagedServerArchive : stagedLegacyServer;
+const stagedServer = stagedServerArchive;
 const stagedWslRuntimeArchive = path.join(
   resourcesDir,
   `.wsl-runtime.tar.gz.local-new-${process.pid}`,
@@ -311,8 +391,15 @@ let archiveInstalled = false;
 let serverInstalled = false;
 let wslRuntimeArchiveInstalled = false;
 let wslRuntimeChecksumInstalled = false;
+let archiveBackupMoved = false;
+let serverBackupMoved = false;
+let wslRuntimeArchiveBackupMoved = false;
+let wslRuntimeChecksumBackupMoved = false;
 
 try {
+  console.log("[local-bundle] validating Linux CLI archive");
+  validateLinuxCliArchive(linuxCliArchive);
+
   console.log("[local-bundle] rewriting compiled desktop subtree");
   rewriteArchiveSubtree({
     sourceArchive: archivePath,
@@ -322,93 +409,90 @@ try {
   });
   verifyDesktopArchive(stagedArchive);
 
-  if (usesServerArchive) {
-    console.log("[local-bundle] rewriting compiled server/web archive subtree");
-    rewriteArchiveSubtree({
-      sourceArchive: serverArchivePath,
-      archiveRoot: "apps/server/dist",
-      buildDirectory: serverBuild,
-      stagedArchive: stagedServer,
-    });
-    verifyServerArchive(stagedServer);
-  } else {
-    console.log("[local-bundle] staging legacy compiled server/web directory");
-    fs.cpSync(serverBuild, stagedServer, { recursive: true, dereference: false });
-    verifyLegacyServer(stagedServer);
-  }
+  console.log("[local-bundle] rewriting compiled server/web archive subtree");
+  rewriteArchiveSubtree({
+    sourceArchive: serverArchivePath,
+    archiveRoot: "apps/server/dist",
+    buildDirectory: serverBuild,
+    stagedArchive: stagedServer,
+  });
+  verifyServerArchive(stagedServer);
 
-  if (usesWslRuntimeArchive) {
-    console.log("[local-bundle] rewriting compiled server/web WSL runtime subtree");
-    rewriteWslRuntimeArchive({
-      sourceArchive: wslRuntimeArchivePath,
-      buildDirectory: serverBuild,
-      stagedArchive: stagedWslRuntimeArchive,
-    });
-    verifyWslRuntimeArchive(stagedWslRuntimeArchive);
-    fs.writeFileSync(stagedWslRuntimeChecksum, `${sha256File(stagedWslRuntimeArchive)}\n`);
+  console.log("[local-bundle] staging Linux CLI archive byte-for-byte");
+  fs.copyFileSync(linuxCliArchive, stagedWslRuntimeArchive);
+  if (sha256File(stagedWslRuntimeArchive) !== sha256File(linuxCliArchive)) {
+    fail("staged Linux CLI archive is not byte-for-byte identical to the input archive");
   }
+  validateLinuxCliArchive(stagedWslRuntimeArchive);
+  // DesktopBackendConfiguration parses this sidecar as one bare SHA-256 line.
+  fs.writeFileSync(stagedWslRuntimeChecksum, `${sha256File(stagedWslRuntimeArchive)}\n`);
 
   archiveBackup = nextBackupPath(archivePath);
   serverBackup = nextBackupPath(serverTarget);
-  if (usesWslRuntimeArchive) {
-    wslRuntimeArchiveBackup = nextBackupPath(wslRuntimeArchivePath);
+  wslRuntimeArchiveBackup = nextBackupPath(wslRuntimeArchivePath);
+  if (fs.existsSync(wslRuntimeChecksumPath)) {
     wslRuntimeChecksumBackup = nextBackupPath(wslRuntimeChecksumPath);
   }
   fs.renameSync(archivePath, archiveBackup);
+  archiveBackupMoved = true;
   fs.renameSync(stagedArchive, archivePath);
   archiveInstalled = true;
   fs.renameSync(serverTarget, serverBackup);
+  serverBackupMoved = true;
   fs.renameSync(stagedServer, serverTarget);
   serverInstalled = true;
-  if (
-    usesWslRuntimeArchive &&
-    wslRuntimeArchiveBackup !== undefined &&
-    wslRuntimeChecksumBackup !== undefined
-  ) {
-    fs.renameSync(wslRuntimeArchivePath, wslRuntimeArchiveBackup);
-    fs.renameSync(stagedWslRuntimeArchive, wslRuntimeArchivePath);
-    wslRuntimeArchiveInstalled = true;
+  fs.renameSync(wslRuntimeArchivePath, wslRuntimeArchiveBackup);
+  wslRuntimeArchiveBackupMoved = true;
+  fs.renameSync(stagedWslRuntimeArchive, wslRuntimeArchivePath);
+  wslRuntimeArchiveInstalled = true;
+  if (wslRuntimeChecksumBackup !== undefined) {
     fs.renameSync(wslRuntimeChecksumPath, wslRuntimeChecksumBackup);
-    fs.renameSync(stagedWslRuntimeChecksum, wslRuntimeChecksumPath);
-    wslRuntimeChecksumInstalled = true;
+    wslRuntimeChecksumBackupMoved = true;
   }
+  fs.renameSync(stagedWslRuntimeChecksum, wslRuntimeChecksumPath);
+  wslRuntimeChecksumInstalled = true;
 
   verifyDesktopArchive(archivePath);
-  if (usesServerArchive) {
-    verifyServerArchive(serverTarget);
-  } else {
-    verifyLegacyServer(serverTarget);
-  }
-  if (usesWslRuntimeArchive) {
-    verifyWslRuntimeArchive(wslRuntimeArchivePath);
-    const installedChecksum = fs.readFileSync(wslRuntimeChecksumPath, "utf8").trim();
-    if (installedChecksum !== sha256File(wslRuntimeArchivePath)) {
-      fail("installed WSL runtime checksum does not match its archive");
-    }
+  verifyServerArchive(serverTarget);
+  validateLinuxCliArchive(wslRuntimeArchivePath);
+  const installedChecksum = fs.readFileSync(wslRuntimeChecksumPath, "utf8").trim();
+  if (installedChecksum !== sha256File(wslRuntimeArchivePath)) {
+    fail("installed WSL runtime checksum does not match its archive");
   }
   console.log(`[local-bundle] installed; archive backup: ${archiveBackup}`);
   console.log(`[local-bundle] installed; server backup: ${serverBackup}`);
-  if (usesWslRuntimeArchive) {
-    console.log(`[local-bundle] installed; WSL runtime backup: ${wslRuntimeArchiveBackup}`);
-  }
+  console.log(`[local-bundle] installed; WSL runtime backup: ${wslRuntimeArchiveBackup}`);
 } catch (error) {
-  if (wslRuntimeChecksumInstalled && wslRuntimeChecksumBackup !== undefined) {
+  if (wslRuntimeChecksumInstalled) {
     fs.rmSync(wslRuntimeChecksumPath, { force: true });
+  }
+  if (wslRuntimeChecksumBackupMoved && wslRuntimeChecksumBackup !== undefined) {
     fs.renameSync(wslRuntimeChecksumBackup, wslRuntimeChecksumPath);
   }
-  if (wslRuntimeArchiveInstalled && wslRuntimeArchiveBackup !== undefined) {
+  if (wslRuntimeArchiveInstalled) {
     fs.rmSync(wslRuntimeArchivePath, { force: true });
+  }
+  if (wslRuntimeArchiveBackupMoved && wslRuntimeArchiveBackup !== undefined) {
     fs.renameSync(wslRuntimeArchiveBackup, wslRuntimeArchivePath);
   }
-  if (serverInstalled && serverBackup !== undefined) {
+  if (serverInstalled) {
     fs.rmSync(serverTarget, { recursive: true, force: true });
+  }
+  if (serverBackupMoved && serverBackup !== undefined) {
     fs.renameSync(serverBackup, serverTarget);
   }
-  if (archiveInstalled && archiveBackup !== undefined) {
+  if (archiveInstalled) {
     fs.rmSync(archivePath, { force: true });
+  }
+  if (archiveBackupMoved && archiveBackup !== undefined) {
     fs.renameSync(archiveBackup, archivePath);
   }
-  throw error;
+  if (error instanceof LocalBundleError) {
+    console.error(error.message);
+    process.exitCode = 1;
+  } else {
+    throw error;
+  }
 } finally {
   cleanup();
 }
