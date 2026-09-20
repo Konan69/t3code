@@ -3,6 +3,7 @@ import { RelayEnvironmentWakeScope } from "@t3tools/contracts/relay";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -22,6 +23,7 @@ import {
   credentialMissingError,
   environmentMismatchError,
   mapManagedRelayError,
+  mapRemoteEnvironmentError,
   profileMissingError,
 } from "./errors.ts";
 import {
@@ -40,6 +42,11 @@ import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts"
 import * as ConnectionProfileStore from "./profileStore.ts";
 import { wakeEndpoint } from "./wakeEndpoint.ts";
 import * as WakeIntent from "./wakeIntent.ts";
+import {
+  appendOrchestrationProtocol,
+  orchestrationProtocolCompatibilityError,
+} from "./compatibility.ts";
+import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 
 export class ConnectionResolver extends Context.Service<
   ConnectionResolver,
@@ -273,6 +280,7 @@ export const make = Effect.gen(function* () {
   const bearer = yield* makeBearerBroker();
   const relay = yield* makeRelayBroker();
   const ssh = yield* makeSshBroker();
+  const httpClient = yield* HttpClient.HttpClient;
 
   const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
     entry: ConnectionCatalogEntry,
@@ -282,16 +290,35 @@ export const make = Effect.gen(function* () {
       "connection.environment.id": target.environmentId,
       "connection.target.kind": target._tag,
     });
-    switch (target._tag) {
-      case "PrimaryConnectionTarget":
-        return yield* primary(target);
-      case "BearerConnectionTarget":
-        return yield* bearer({ ...entry, target });
-      case "RelayConnectionTarget":
-        return yield* relay(target);
-      case "SshConnectionTarget":
-        return yield* ssh({ ...entry, target });
+    const prepared = yield* (() => {
+      switch (target._tag) {
+        case "PrimaryConnectionTarget":
+          return primary(target);
+        case "BearerConnectionTarget":
+          return bearer({ ...entry, target });
+        case "RelayConnectionTarget":
+          return relay(target);
+        case "SshConnectionTarget":
+          return ssh({ ...entry, target });
+      }
+    })();
+    const descriptor = yield* fetchRemoteEnvironmentDescriptor({
+      httpBaseUrl: prepared.httpBaseUrl,
+    }).pipe(
+      Effect.mapError(mapRemoteEnvironmentError),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    );
+    if (descriptor.environmentId !== target.environmentId) {
+      return yield* environmentMismatchError({
+        expected: target.environmentId,
+        actual: descriptor.environmentId,
+      });
     }
+    const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
+    if (compatibilityError !== null) {
+      return yield* compatibilityError;
+    }
+    return { ...prepared, socketUrl: appendOrchestrationProtocol(prepared.socketUrl) };
   });
 
   return ConnectionResolver.of({ prepare });

@@ -22,6 +22,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
+import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./AcpStderr.ts";
 import {
   formatProviderChildExitReason,
   logUnexpectedProviderChildExit,
@@ -394,10 +395,13 @@ export const makeWithProcessLauncher = (
     );
     const stoppingRef = yield* Ref.make(false);
     const stderrFailure = yield* Deferred.make<never, EffectAcpErrors.AcpError>();
+    const stderrTailRef = yield* Ref.make("");
+    const stderrDrained = yield* Deferred.make<void>();
     const runtimeClosed = yield* Deferred.make<void>();
     const promptSerializationSemaphore = yield* Semaphore.make(1);
     const promptDispatchSemaphore = yield* Semaphore.make(1);
     const activePromptRef = yield* Ref.make<Option.Option<AcpActivePrompt>>(Option.none());
+    const assistantUpdatesOpenRef = yield* Ref.make(true);
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
 
     const ensureConnected = Effect.gen(function* () {
@@ -413,22 +417,45 @@ export const makeWithProcessLauncher = (
       }
     });
 
+    const enrichProcessExitWithStderr = (
+      error: EffectAcpErrors.AcpError,
+    ): Effect.Effect<EffectAcpErrors.AcpError> =>
+      error._tag !== "AcpProcessExitedError" || (error.stderr?.trim().length ?? 0) > 0
+        ? Effect.succeed(error)
+        : Deferred.await(stderrDrained).pipe(
+            Effect.timeout("250 millis"),
+            Effect.ignore,
+            Effect.andThen(Ref.get(stderrTailRef)),
+            Effect.map((tail) => {
+              const stderr = sanitizeAcpStderrExcerpt(tail);
+              return stderr.length === 0
+                ? error
+                : new EffectAcpErrors.AcpProcessExitedError({
+                    ...(error.code !== undefined ? { code: error.code } : {}),
+                    ...(error.pid !== undefined ? { pid: error.pid } : {}),
+                    stderr,
+                    ...(error.cause !== undefined ? { cause: error.cause } : {}),
+                  });
+            }),
+          );
+
     const recordTermination = Effect.fn("AcpSessionRuntime.recordTermination")(function* (
       error: EffectAcpErrors.AcpError,
     ) {
       if (yield* Ref.get(stoppingRef)) {
         return;
       }
+      const enriched = yield* enrichProcessExitWithStderr(error);
       const firstTermination = yield* Ref.modify(terminationErrorRef, (current) =>
         Option.isSome(current)
           ? ([false, current] as const)
-          : ([true, Option.some(error)] as const),
+          : ([true, Option.some(enriched)] as const),
       );
       if (!firstTermination) {
         return;
       }
       yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
-      yield* Queue.offer(eventQueue, { _tag: "ConnectionTerminated", error });
+      yield* Queue.offer(eventQueue, { _tag: "ConnectionTerminated", error: enriched });
     });
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
@@ -445,6 +472,9 @@ export const makeWithProcessLauncher = (
             ? Effect.raceFirst(effect, Deferred.await(stderrFailure))
             : effect
           ).pipe(
+            Effect.catch((error) =>
+              enrichProcessExitWithStderr(error).pipe(Effect.flatMap(Effect.fail)),
+            ),
             Effect.tap((result) =>
               logRequest({
                 method,
@@ -488,6 +518,9 @@ export const makeWithProcessLauncher = (
       Stream.runForEach((chunk) =>
         Effect.sync(() => stderr.append(chunk)).pipe(
           Effect.andThen(
+            Ref.update(stderrTailRef, (current) => appendAcpStderrTail(current, chunk)),
+          ),
+          Effect.andThen(
             options.onStderr ? options.onStderr(chunk.slice(-maxStderrChunkLength)) : Effect.void,
           ),
           Effect.catch((error) =>
@@ -499,6 +532,7 @@ export const makeWithProcessLauncher = (
           ),
         ),
       ),
+      Effect.ensuring(Deferred.succeed(stderrDrained, undefined)),
       Effect.ignore,
       Effect.forkIn(runtimeScope),
     );
@@ -601,6 +635,13 @@ export const makeWithProcessLauncher = (
           if (
             startState._tag !== "Started" ||
             notification.sessionId !== startState.result.sessionId
+          ) {
+            return;
+          }
+          if (
+            !(yield* Ref.get(assistantUpdatesOpenRef)) &&
+            (notification.update.sessionUpdate === "agent_message_chunk" ||
+              notification.update.sessionUpdate === "agent_thought_chunk")
           ) {
             return;
           }
@@ -962,7 +1003,16 @@ export const makeWithProcessLauncher = (
         return;
       }
       const acknowledge = yield* Deferred.make<void>();
-      yield* Queue.offer(eventQueue, { _tag: "EventStreamBarrier", acknowledge });
+      yield* notificationSemaphore.withPermit(
+        Effect.gen(function* () {
+          // Keep a provider's final flushed chunks together until the adapter settles the turn.
+          if (Option.isNone(yield* Ref.get(activePromptRef))) {
+            yield* Ref.set(assistantUpdatesOpenRef, false);
+            yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
+          }
+          yield* Queue.offer(eventQueue, { _tag: "EventStreamBarrier", acknowledge });
+        }),
+      );
       yield* Effect.raceFirst(Deferred.await(acknowledge), Deferred.await(runtimeClosed));
     });
 
@@ -1041,6 +1091,7 @@ export const makeWithProcessLauncher = (
               Effect.gen(function* () {
                 const started = yield* getStartedState;
                 yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
+                yield* Ref.set(assistantUpdatesOpenRef, true);
                 const requestPayload = {
                   sessionId: started.sessionId,
                   ...payload,
@@ -1057,7 +1108,7 @@ export const makeWithProcessLauncher = (
                   yield* Deferred.succeed(promptOptions.dispatched, undefined);
                 }
                 return active;
-              }),
+              }).pipe(notificationSemaphore.withPermit),
             ),
             (activePrompt) =>
               Fiber.join(activePrompt.fiber).pipe(

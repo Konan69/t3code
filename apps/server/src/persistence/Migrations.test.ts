@@ -47,7 +47,7 @@ for (const legacyTableExists of [false, true]) {
             [],
           );
         }
-      }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 }
 
@@ -91,6 +91,9 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
       [48, "ProjectionThreadBranchPullRequest"],
       [49, "ProjectionThreadsActiveOrderKey"],
       [50, "ProjectionThreadPullRequests"],
+      [51, "ProjectionThreadMessageContext"],
+      [52, "ProjectionThreadTitleState"],
+      [53, "PullRequestFilesViewed"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT default_model_selection_json, auto_pull FROM projection_projects`,
@@ -110,8 +113,8 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
     );
     const counts =
       yield* sql`SELECT COUNT(*) AS total, COUNT(DISTINCT name) AS distinct_names FROM t3_fork_migrations`;
-    assert.deepStrictEqual(counts, [{ total: 53, distinct_names: 53 }]);
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    assert.deepStrictEqual(counts, [{ total: 56, distinct_names: 56 }]);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
 it.effect("runs lower ids after legacy id 905 and after fork tracking has been initialized", () =>
@@ -137,7 +140,7 @@ it.effect("runs lower ids after legacy id 905 and after fork tracking has been i
         [900, "NewFork"],
       ],
     );
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
 for (const [label, entries, message] of [
@@ -171,7 +174,7 @@ for (const [label, entries, message] of [
         yield* sql`SELECT name FROM sqlite_master WHERE name = 't3_fork_migrations'`,
         [],
       );
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 }
 
@@ -194,5 +197,5 @@ it.effect(
       assert.deepStrictEqual(yield* runMigrationsByName([[1, "CreateTable", createTable]]), [
         [1, "CreateTable"],
       ]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

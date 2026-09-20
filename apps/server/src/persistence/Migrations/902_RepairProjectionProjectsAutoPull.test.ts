@@ -19,5 +19,5 @@ it.effect("repairs a missing auto_pull column and preserves an existing preferen
     assert.deepStrictEqual(yield* sql`SELECT auto_pull FROM projection_projects`, [
       { auto_pull: 1 },
     ]);
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

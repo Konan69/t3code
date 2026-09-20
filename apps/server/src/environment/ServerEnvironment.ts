@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
@@ -213,6 +214,7 @@ export const make = Effect.gen(function* () {
       ...(machine === null ? {} : { machine }),
     },
     serverVersion: packageJson.version,
+    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,
@@ -221,8 +223,11 @@ export const make = Effect.gen(function* () {
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       inlineMessageContext: true,
+      requiredWorktreeBootstrap: true,
       threadSettlement: true,
       threadAutoSettlement: true,
+      storageCleanup: true,
+      projectWorktreeCleanup: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       threadSnooze: true,
@@ -238,6 +243,7 @@ export const make = Effect.gen(function* () {
       threadPullRequestLinking: true,
       environmentIcon: true,
       threadMachines: shouldUseIncusMachineService(hostPlatform, process.env),
+      projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? {

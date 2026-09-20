@@ -16,6 +16,7 @@ import {
   RuntimeMode,
   ThreadLinkedPullRequest,
   ThreadMachineState,
+  ThreadTitleState,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -30,6 +31,7 @@ export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
+  titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -98,18 +100,12 @@ export interface ProjectionThreadRepositoryShape {
     input: GetProjectionThreadInput,
   ) => Effect.Effect<Option.Option<ProjectionThread>, ProjectionRepositoryError>;
 
-  /**
-   * List projected threads for a project.
-   *
-   * Returned in deterministic creation order.
-   */
+  /** List projected threads for a project in deterministic creation order. */
   readonly listByProjectId: (
     input: ListProjectionThreadsByProjectInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThread>, ProjectionRepositoryError>;
 
-  /**
-   * Soft-delete a projected thread row by id.
-   */
+  /** Delete a projected thread row by id. */
   readonly deleteById: (
     input: DeleteProjectionThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

@@ -73,6 +73,12 @@ import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
 import * as RelayDb from "../db.ts";
 
+// Delegated thread IDs carry escaped command provenance and exceed the router's
+// default 100-character path parameter limit. Match the environment server.
+export const RELAY_HTTP_ROUTER_CONFIG = {
+  maxParamLength: 512,
+} as const;
+
 const relayCorsAllowedMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"] as const;
 const relayCorsAllowedHeaders = [
   "authorization",
@@ -1185,7 +1191,6 @@ const RelayCommonPersistenceError = Schema.Union([
   Devices.DeviceListPersistenceError,
   LiveActivities.LiveActivityRegistrationPersistenceError,
   EnvironmentLinks.EnvironmentLinkUserListPersistenceError,
-  EnvironmentLinks.EnvironmentPublicKeyListPersistenceError,
   EnvironmentLinks.EnvironmentLinkListPersistenceError,
   EnvironmentLinks.EnvironmentLinkLookupPersistenceError,
   EnvironmentLinks.EnvironmentLinkRevokePersistenceError,

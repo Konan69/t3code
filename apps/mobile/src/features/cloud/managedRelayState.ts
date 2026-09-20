@@ -1,20 +1,21 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   createManagedRelayQueryManager,
+  deregisterManagedRelayEnvironment,
   managedRelaySessionAtom,
   readManagedRelaySnapshotState,
   wakeManagedRelayEnvironmentHost,
 } from "@t3tools/client-runtime/relay";
 import type {
   RelayClientEnvironmentRecord,
-  RelayEnvironmentStatusResponse,
   RelayEnvironmentHostStatusResponse,
+  RelayEnvironmentStatusResponse,
 } from "@t3tools/contracts/relay";
-import type { EnvironmentId } from "@t3tools/contracts";
 import {
   createAtomCommandScheduler,
   createRuntimeCommand,
 } from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect } from "react";
 
@@ -29,6 +30,22 @@ export const managedRelayQueryManager = createManagedRelayQueryManager(managedRe
     cloudDebugLog(`query:${event.operation}:${event.stage}:${event.phase}`, { ...event }),
 });
 
+const managedRelayMutationScheduler = createAtomCommandScheduler();
+
+export const deregisterManagedRelayEnvironmentCommand = createRuntimeCommand(
+  managedRelayAtomRuntime,
+  {
+    label: "mobile:managed-relay:deregister-environment",
+    scheduler: managedRelayMutationScheduler,
+    concurrency: {
+      mode: "serial",
+      key: (input: { readonly accountId: string; readonly environmentId: EnvironmentId }) =>
+        input.accountId,
+    },
+    execute: (input, registry) => deregisterManagedRelayEnvironment(registry, input),
+  },
+);
+
 const EMPTY_ENVIRONMENTS_ATOM = Atom.make(
   AsyncResult.success<ReadonlyArray<RelayClientEnvironmentRecord>>([]),
 ).pipe(Atom.keepAlive, Atom.withLabel("managed-relay:mobile:environments:null"));
@@ -40,8 +57,6 @@ const EMPTY_ENVIRONMENT_STATUS_ATOM = Atom.make(
 const EMPTY_ENVIRONMENT_HOST_STATUS_ATOM = Atom.make(
   AsyncResult.initial<RelayEnvironmentHostStatusResponse, never>(false),
 ).pipe(Atom.keepAlive, Atom.withLabel("managed-relay:mobile:environment-host-status:null"));
-
-const managedRelayMutationScheduler = createAtomCommandScheduler();
 
 export const wakeManagedRelayEnvironmentHostCommand = createRuntimeCommand(
   managedRelayAtomRuntime,

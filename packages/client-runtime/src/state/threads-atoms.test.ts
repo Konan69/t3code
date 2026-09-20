@@ -185,6 +185,7 @@ const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?
     armWake: () => Effect.die("Unexpected environment wake"),
     setWakePolicy: () => Effect.die("Unexpected wake policy change"),
     wakeStatus: () => Effect.die("Unexpected wake status request"),
+    setCompatibility: () => Effect.die("Unexpected compatibility update"),
     state: () => SubscriptionRef.get(supervisor.state),
     stateChanges: () => SubscriptionRef.changes(supervisor.state),
     run: (_environmentId, effect) =>
