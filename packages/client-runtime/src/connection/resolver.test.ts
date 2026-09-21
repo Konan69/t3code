@@ -3,10 +3,6 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
-import {
-  RelayEnvironmentConnectNotAuthorizedError,
-  RelayEnvironmentWakeScope,
-} from "@t3tools/contracts/relay";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -14,12 +10,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Tracer from "effect/Tracer";
-import { afterEach, vi } from "vite-plus/test";
 
 import * as ConnectionResolver from "./resolver.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
-import * as ManagedRelay from "../relay/managedRelay.ts";
 import {
   BearerConnectionCredential,
   BearerConnectionProfile,
@@ -44,17 +38,12 @@ import {
   gitHubRoutingConnectionKey,
   makeGitHubRoutingPermissions,
 } from "./githubRoutingPermissions.ts";
-import * as WakeIntent from "./wakeIntent.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const ENDPOINT = {
   httpBaseUrl: "https://environment.example.test",
   wsBaseUrl: "wss://environment.example.test",
 };
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
 const SSH_TARGET: DesktopSshEnvironmentTarget = {
   alias: "development",
   hostname: "development.example.test",
@@ -87,7 +76,6 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly profiles?: ReadonlyArray<ConnectionProfile>;
   readonly profileStore?: ConnectionProfileStore.ConnectionProfileStore["Service"];
   readonly credentials?: ReadonlyArray<readonly [string, ConnectionCredential]>;
-  readonly wakeEnvironmentHost?: ManagedRelay.ManagedRelayClient["Service"]["wakeEnvironmentHost"];
   readonly authorizeBearer?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeBearer"];
   readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
   readonly primaryBearerToken?: string;
@@ -193,21 +181,9 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     ),
     Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, remote),
     Layer.succeed(ClientCapabilities.SshEnvironmentGateway, ssh),
-    Layer.mock(ManagedRelay.ManagedRelayClient, {
-      relayUrl: "https://relay.example.test",
-      wakeEnvironmentHost: options?.wakeEnvironmentHost ?? (() => Effect.die("unused")),
-    }),
-    Layer.mock(ClientCapabilities.CloudSession, {
-      clerkToken: Effect.succeed("clerk-session"),
-    }),
   );
 
-  return Effect.succeed(
-    ConnectionResolver.layer.pipe(
-      Layer.provideMerge(WakeIntent.layer),
-      Layer.provide(dependencies),
-    ),
-  );
+  return Effect.succeed(ConnectionResolver.layer.pipe(Layer.provide(dependencies)));
 });
 
 describe("ConnectionResolver", () => {
@@ -357,130 +333,6 @@ describe("ConnectionResolver", () => {
         },
         target,
       });
-    }),
-  );
-
-  it.effect("wakes once for an armed relay connect and never for a plain retry", () =>
-    Effect.gen(function* () {
-      const request = vi.fn().mockResolvedValue({ status: 202 });
-      vi.stubGlobal("fetch", request);
-      const authorizeDpop = vi.fn<
-        RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"]
-      >((input) => {
-        expect(request).toHaveBeenCalledTimes(1);
-        return Effect.succeed({
-          environmentId: input.expectedEnvironmentId,
-          label: "Cloud",
-          httpBaseUrl: ENDPOINT.httpBaseUrl,
-          socketUrl: "wss://authorized.example.test/ws?wsTicket=dpop",
-          httpAuthorization: {
-            _tag: "Dpop",
-            accessToken: "dpop-access-token",
-            expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-          },
-        });
-      });
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-        wakePolicy: {
-          endpoint: "https://wake.example.test",
-          name: "cloudbox",
-          secret: "wake-secret",
-          mode: "explicit-intent",
-        },
-      });
-      const brokerLayer = yield* makeDependencies({ authorizeDpop });
-
-      yield* Effect.gen(function* () {
-        const broker = yield* ConnectionResolver.ConnectionResolver;
-        const wakeIntent = yield* WakeIntent.WakeIntent;
-        yield* wakeIntent.arm(ENVIRONMENT_ID);
-
-        yield* broker.prepare(catalogEntry(target));
-        yield* broker.prepare(catalogEntry(target));
-
-        expect(request).toHaveBeenCalledTimes(1);
-        expect(request).toHaveBeenCalledWith(
-          "https://wake.example.test/wake/cloudbox",
-          expect.objectContaining({
-            method: "POST",
-            headers: { Authorization: "Bearer wake-secret" },
-          }),
-        );
-        expect(authorizeDpop).toHaveBeenCalledTimes(2);
-      }).pipe(Effect.provide(brokerLayer));
-    }),
-  );
-
-  it.effect("uses the account relay wake once for an armed relay without a local secret", () =>
-    Effect.gen(function* () {
-      const wakeInputs = yield* Ref.make<ReadonlyArray<Record<string, unknown>>>([]);
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const brokerLayer = yield* makeDependencies({
-        wakeEnvironmentHost: (input) =>
-          Ref.update(wakeInputs, (values) => [...values, input]).pipe(
-            Effect.as({
-              environmentId: input.environmentId,
-              provider: "gcp" as const,
-              state: "resuming" as const,
-              requestedAt: "2026-06-06T00:00:00.000Z",
-            }),
-          ),
-      });
-
-      yield* Effect.gen(function* () {
-        const broker = yield* ConnectionResolver.ConnectionResolver;
-        const wakeIntent = yield* WakeIntent.WakeIntent;
-        yield* wakeIntent.arm(ENVIRONMENT_ID);
-
-        yield* broker.prepare(catalogEntry(target));
-        yield* broker.prepare(catalogEntry(target));
-
-        expect(yield* Ref.get(wakeInputs)).toEqual([
-          {
-            clerkToken: "clerk-session",
-            scopes: [RelayEnvironmentWakeScope],
-            environmentId: ENVIRONMENT_ID,
-          },
-        ]);
-      }).pipe(Effect.provide(brokerLayer));
-    }),
-  );
-
-  it.effect("still connects when an armed relay has no account wake configuration", () =>
-    Effect.gen(function* () {
-      const relayError = new RelayEnvironmentConnectNotAuthorizedError({
-        code: "environment_connect_not_authorized",
-        reason: "host_lifecycle_not_configured",
-        traceId: "trace-no-host-lifecycle",
-      });
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const brokerLayer = yield* makeDependencies({
-        wakeEnvironmentHost: () =>
-          Effect.fail(
-            new ManagedRelay.ManagedRelayRequestFailedError({
-              action: "wake relay environment host",
-              cause: relayError,
-              relayError,
-              traceId: relayError.traceId,
-            }),
-          ),
-      });
-
-      yield* Effect.gen(function* () {
-        const broker = yield* ConnectionResolver.ConnectionResolver;
-        const wakeIntent = yield* WakeIntent.WakeIntent;
-        yield* wakeIntent.arm(ENVIRONMENT_ID);
-
-        expect((yield* broker.prepare(catalogEntry(target))).environmentId).toBe(ENVIRONMENT_ID);
-      }).pipe(Effect.provide(brokerLayer));
     }),
   );
 

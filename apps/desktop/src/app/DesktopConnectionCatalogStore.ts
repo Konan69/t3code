@@ -367,7 +367,7 @@ const migrateSavedEnvironmentRecords = Effect.fn(
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 1,
     targets,
     profiles,
     credentials,

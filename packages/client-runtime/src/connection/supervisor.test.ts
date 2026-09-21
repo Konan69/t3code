@@ -1260,10 +1260,6 @@ describe("EnvironmentSupervisor", () => {
         linkEnvironment: unused,
         unlinkEnvironment: unused,
         getEnvironmentStatus: unused,
-        configureEnvironmentHostLifecycle: unused,
-        removeEnvironmentHostLifecycle: unused,
-        getEnvironmentHostStatus: unused,
-        wakeEnvironmentHost: unused,
         connectEnvironment: Effect.fn("TestConnectionHttp.connectEnvironment")(function* () {
           yield* Ref.update(bootstrapCalls, (count) => count + 1);
           if (yield* Ref.get(bootstrapFails)) {

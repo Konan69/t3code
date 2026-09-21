@@ -1,12 +1,10 @@
 import { findErrorTraceId } from "@t3tools/client-runtime/errors";
-import { useAtomValue } from "@effect/atom-react";
 import {
   type EnvironmentConnectionPresentation,
   RelayConnectionRegistration,
   RelayConnectionTarget,
   orchestrationProtocolCompatibilityError,
 } from "@t3tools/client-runtime/connection";
-import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -26,7 +24,6 @@ import { type ReactNode, useCallback, useEffect, useEffectEvent, useState } from
 import { environmentCatalog } from "~/connection/catalog";
 import { cn } from "~/lib/utils";
 import { relayEnvironmentDiscovery } from "~/state/relay";
-import { configureManagedRelayHostLifecycleCommand } from "~/cloud/managedRelayState";
 import { useRelayEnvironmentDiscovery } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
@@ -101,13 +98,6 @@ export function CloudEnvironmentConnectRows({
   const registerEnvironment = useAtomCommand(environmentCatalog.register, {
     reportFailure: false,
   });
-  const armWakeEnvironment = useAtomCommand(environmentCatalog.armWake, {
-    reportFailure: false,
-  });
-  const configureHostLifecycle = useAtomCommand(configureManagedRelayHostLifecycleCommand, {
-    reportFailure: false,
-  });
-  const relaySession = useAtomValue(managedRelaySessionAtom);
   const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
     reportFailure: false,
   });
@@ -116,57 +106,16 @@ export function CloudEnvironmentConnectRows({
     await refreshRelayEnvironments();
   });
   const connectRelayEnvironment = useCallback(
-    async (environment: RelayClientEnvironmentRecord) => {
-      const readWakeConfig = window.desktopBridge?.getCloudboxWakeConfig;
-      const wakeConfig =
-        readWakeConfig === undefined
-          ? null
-          : await readWakeConfig().catch(() => {
-              console.warn(
-                "[cloudbox-wake] Could not read the desktop wake configuration; continuing without it.",
-              );
-              return null;
-            });
-      const wakePolicy =
-        wakeConfig !== null &&
-        (wakeConfig.environmentId !== null
-          ? wakeConfig.environmentId === environment.environmentId
-          : wakeConfig.name === environment.label)
-          ? {
-              endpoint: wakeConfig.endpoint,
-              name: wakeConfig.name,
-              secret: wakeConfig.secret,
-              mode: "explicit-intent" as const,
-            }
-          : undefined;
-      if (wakePolicy !== undefined && relaySession !== null) {
-        const synced = await configureHostLifecycle({
-          accountId: relaySession.accountId,
-          environmentId: environment.environmentId,
-          config: {
-            provider: "gcp",
-            endpoint: wakePolicy.endpoint,
-            name: wakePolicy.name,
-            secret: wakePolicy.secret,
-          },
-        });
-        if (synced._tag !== "Success") return synced;
-      }
-      const result = await registerEnvironment(
+    (environment: RelayClientEnvironmentRecord) =>
+      registerEnvironment(
         new RelayConnectionRegistration({
           target: new RelayConnectionTarget({
             environmentId: environment.environmentId,
             label: environment.label,
-            ...(wakePolicy === undefined ? {} : { wakePolicy }),
           }),
         }),
-      );
-      if (result._tag === "Success") {
-        await armWakeEnvironment(environment.environmentId);
-      }
-      return result;
-    },
-    [armWakeEnvironment, configureHostLifecycle, registerEnvironment, relaySession],
+      ),
+    [registerEnvironment],
   );
   const [connectingEnvironmentIds, setConnectingEnvironmentIds] = useState<
     ReadonlySet<EnvironmentId>

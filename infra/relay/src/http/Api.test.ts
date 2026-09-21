@@ -323,8 +323,6 @@ function relayUnlinkTestLayer(input?: {
         listForUser: () => Effect.die("unused listForUser"),
         getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
-        configureHostLifecycleForUser: () => Effect.die("unused configureHostLifecycleForUser"),
-        removeHostLifecycleForUser: () => Effect.die("unused removeHostLifecycleForUser"),
       }),
     ),
     Layer.succeed(

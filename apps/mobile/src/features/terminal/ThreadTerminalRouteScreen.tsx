@@ -247,7 +247,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const clearTerminal = useAtomCommand(terminalEnvironment.clear, "terminal clear");
   const closeTerminal = useAtomCommand(terminalEnvironment.close, "terminal close");
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
-  const retryEnvironment = useAtomCommand(environmentCatalog.armWake, "environment retry");
+  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, "environment retry");
   const { state: workspaceState } = useWorkspaceState();
   const params = props.route.params;
   const { selectedThread, selectedThreadProject, selectedEnvironmentConnection } =

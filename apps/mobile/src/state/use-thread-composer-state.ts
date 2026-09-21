@@ -75,7 +75,6 @@ import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
 } from "./composer-attachment-uploads";
-import { environmentCatalog } from "../connection/catalog";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -158,9 +157,6 @@ export function useThreadComposerState() {
     },
     [],
   );
-  const armEnvironmentWake = useAtomCommand(environmentCatalog.armWake, {
-    reportFailure: false,
-  });
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -388,9 +384,6 @@ export function useThreadComposerState() {
       );
       return null;
     }
-    if (selectedEnvironmentRuntime?.connectionState !== "connected") {
-      await armEnvironmentWake(selectedThreadShell.environmentId);
-    }
     const provider = serverConfig?.providers.find(
       (entry) => entry.instanceId === modelSelection.instanceId,
     );
@@ -485,7 +478,6 @@ export function useThreadComposerState() {
     );
     return messageId;
   }, [
-    armEnvironmentWake,
     selectedEnvironmentRuntime?.connectionState,
     selectedEnvironmentRuntime?.serverConfig,
     selectedThreadCreation,

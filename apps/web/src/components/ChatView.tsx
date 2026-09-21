@@ -1536,7 +1536,7 @@ export default function ChatView(props: ChatViewProps) {
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
-  const retryEnvironment = useAtomCommand(environmentCatalog.armWake, { reportFailure: false });
+  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const setEnvironmentEnabled = useAtomCommand(environmentCatalog.setEnabled, {
     reportFailure: false,
   });
@@ -1811,15 +1811,6 @@ export default function ChatView(props: ChatViewProps) {
   multipleModelSelectionsRef.current = multipleModelSelections;
   const uncertainMultipleSubmissionsRef = fanoutState.uncertainSubmissions;
   const environmentUnavailableSendToastSlotRef = useRef(0);
-  const pendingWakeSubmissionRef = useRef<{
-    readonly routeThreadKey: string;
-    readonly submissionIntent: ComposerSubmissionIntent;
-    readonly directAnnotation?: {
-      readonly annotation: PreviewAnnotationPayload;
-      readonly image: ComposerImageAttachment | null;
-    };
-    readonly queuedMessage?: QueuedComposerMessage;
-  } | null>(null);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
@@ -7347,18 +7338,11 @@ export default function ChatView(props: ChatViewProps) {
       const toastSlot = environmentUnavailableSendToastSlotRef.current;
       environmentUnavailableSendToastSlotRef.current =
         (toastSlot + 1) % ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE;
-      pendingWakeSubmissionRef.current = {
-        routeThreadKey,
-        submissionIntent,
-        ...(directAnnotation === undefined ? {} : { directAnnotation }),
-        ...(queuedMessage === undefined ? {} : { queuedMessage }),
-      };
-      await handleReconnectActiveEnvironment(activeThread.environmentId);
       toastManager.add({
         ...stackedThreadToast({
-          type: "info",
-          title: "Waking the environment",
-          description: "Your prompt will send automatically once T3 Code reconnects.",
+          type: "warning",
+          title: "Not connected: message not sent",
+          description: "Reconnecting to the environment. Try again once it is connected.",
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
@@ -8617,23 +8601,6 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  useEffect(() => {
-    const pending = pendingWakeSubmissionRef.current;
-    if (pending === null) return;
-    if (pending.routeThreadKey !== routeThreadKey) {
-      pendingWakeSubmissionRef.current = null;
-      return;
-    }
-    if (activeEnvironmentUnavailable || isConnecting || isSendBusy || threadDetailLoading) return;
-    pendingWakeSubmissionRef.current = null;
-    void onSend(
-      undefined,
-      pending.submissionIntent,
-      pending.directAnnotation,
-      pending.queuedMessage,
-    );
-  }, [activeEnvironmentUnavailable, isConnecting, isSendBusy, routeThreadKey, threadDetailLoading]);
-
   // Sends the oldest queued message once it is due: a tool call finished
   // after it was queued, or the turn ended. Only one leaves per boundary; the
   // take inside onSend re-anchors the rest.
@@ -8706,10 +8673,6 @@ export default function ChatView(props: ChatViewProps) {
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
       if (!activeThreadId) return;
-      if (activeEnvironmentUnavailable) {
-        await handleReconnectActiveEnvironment(environmentId);
-        return;
-      }
 
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
@@ -8732,25 +8695,12 @@ export default function ChatView(props: ChatViewProps) {
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [
-      activeEnvironmentUnavailable,
-      activeThreadId,
-      environmentId,
-      handleReconnectActiveEnvironment,
-      respondToThreadApproval,
-      setThreadError,
-    ],
+    [activeThreadId, environmentId, respondToThreadApproval, setThreadError],
   );
 
   const onRespondToUserInput = useCallback(
     async (requestId: ApprovalRequestId, answers: Record<string, unknown>) => {
-      if (!activeThreadId) return;
-      if (activeEnvironmentUnavailable) {
-        await handleReconnectActiveEnvironment(environmentId);
-        return;
-      }
-
-      if (!activePendingUserInput || activePendingIsResponding) return;
+      if (!activeThreadId || !activePendingUserInput || activePendingIsResponding) return;
       const responseKey = JSON.stringify([environmentId, activeThreadId, requestId]);
       if (userInputResponsesInFlight.current.has(responseKey)) return;
       const attachmentsByQuestionId = new Map<
@@ -8808,8 +8758,6 @@ export default function ChatView(props: ChatViewProps) {
       return result;
     },
     [
-      activeEnvironmentUnavailable,
-      handleReconnectActiveEnvironment,
       activeThreadId,
       activePendingUserInput,
       activePendingIsResponding,
@@ -9000,10 +8948,6 @@ export default function ChatView(props: ChatViewProps) {
       ) {
         return false;
       }
-      if (activeEnvironmentUnavailable) {
-        await handleReconnectActiveEnvironment(activeThread.environmentId);
-        return false;
-      }
 
       const trimmed = text.trim();
       if (!trimmed) {
@@ -9133,14 +9077,12 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
-      activeEnvironmentUnavailable,
       activeProposedPlan,
       acknowledgeActiveThreadWoke,
       beginLocalDispatch,
       isConnecting,
       isSendBusy,
       isServerThread,
-      handleReconnectActiveEnvironment,
       localCheckoutBranchMismatch,
       persistThreadSettingsForNextTurn,
       resetLocalDispatch,
@@ -9157,10 +9099,6 @@ export default function ChatView(props: ChatViewProps) {
   );
 
   const onImplementPlanInNewThread = useCallback(async () => {
-    if (activeThread && activeEnvironmentUnavailable) {
-      await handleReconnectActiveEnvironment(activeThread.environmentId);
-      return;
-    }
     if (
       !activeThread ||
       !activeProject ||
@@ -9317,7 +9255,6 @@ export default function ChatView(props: ChatViewProps) {
     defaultRuntimeMode,
     startThreadTurn,
     environmentId,
-    handleReconnectActiveEnvironment,
     composerRef,
   ]);
 

@@ -48,7 +48,6 @@ export const ACKNOWLEDGE_SNAP_SHOT_CHANNEL = "desktop:acknowledge-snap-shot";
 export const GET_CONNECTION_CATALOG_CHANNEL = "desktop:get-connection-catalog";
 export const SET_CONNECTION_CATALOG_CHANNEL = "desktop:set-connection-catalog";
 export const CLEAR_CONNECTION_CATALOG_CHANNEL = "desktop:clear-connection-catalog";
-export const GET_CLOUDBOX_WAKE_CONFIG_CHANNEL = "desktop:get-cloudbox-wake-config";
 export const DISCOVER_SSH_HOSTS_CHANNEL = "desktop:discover-ssh-hosts";
 export const RESOLVE_SSH_HOST_CHANNEL = "desktop:resolve-ssh-host";
 export const ENSURE_SSH_ENVIRONMENT_CHANNEL = "desktop:ensure-ssh-environment";

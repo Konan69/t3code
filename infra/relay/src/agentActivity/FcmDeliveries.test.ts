@@ -178,8 +178,6 @@ function harness() {
         ),
       listForUser: () => Effect.succeed([]),
       revokeForUser: () => Effect.succeed(false),
-      configureHostLifecycleForUser: () => Effect.succeed(false),
-      removeHostLifecycleForUser: () => Effect.succeed(false),
       getForUser: (input) =>
         Effect.sync(() =>
           current.linked && !current.revokedEnvironments.includes(input.environmentId)

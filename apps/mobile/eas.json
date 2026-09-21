@@ -15,28 +15,6 @@
       "developmentClient": true,
       "distribution": "internal"
     },
-    "cloudbox:dev": {
-      "corepack": true,
-      "env": {
-        "APP_VARIANT": "development",
-        "MOBILE_VERSION_POLICY": "fingerprint",
-        "NODE_OPTIONS": "--max-old-space-size=4096",
-        "T3CODE_CLERK_JWT_TEMPLATE": "t3-relay",
-        "T3CODE_CLERK_PUBLISHABLE_KEY": "pk_live_Y2xlcmsudDMuY29kZXMk",
-        "T3CODE_IOS_PERSONAL_TEAM": "1",
-        "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID": "com.myproxi.t3code.dev",
-        "T3CODE_RELAY_URL": "https://relay.t3.codes"
-      },
-      "channel": "development",
-      "developmentClient": true,
-      "distribution": "internal"
-    },
-    "cloudbox:testflight": {
-      "extends": "cloudbox:dev",
-      "autoIncrement": true,
-      "developmentClient": false,
-      "distribution": "store"
-    },
     "preview": {
       "corepack": true,
       "env": {
@@ -82,7 +60,6 @@
     }
   },
   "submit": {
-    "cloudbox:testflight": {},
     "v2-preview": {
       "extends": "production",
       "android": {
