@@ -326,8 +326,7 @@ describe("EnvironmentConnector", () => {
     const execute = () =>
       Effect.sync(() => {
         requestCount += 1;
-        throw new Error("unexpected request");
-      });
+      }).pipe(Effect.andThen(Effect.die(new Error("unexpected request"))));
 
     return Effect.gen(function* () {
       const connector = yield* EnvironmentConnector.EnvironmentConnector;
@@ -377,8 +376,7 @@ describe("EnvironmentConnector", () => {
     const execute = () =>
       Effect.sync(() => {
         requestCount += 1;
-        throw new Error("unexpected request");
-      });
+      }).pipe(Effect.andThen(Effect.die(new Error("unexpected request"))));
 
     return Effect.gen(function* () {
       const connector = yield* EnvironmentConnector.EnvironmentConnector;
@@ -435,8 +433,7 @@ describe("EnvironmentConnector", () => {
     const execute = () =>
       Effect.sync(() => {
         requestCount += 1;
-        throw new Error("unexpected request");
-      });
+      }).pipe(Effect.andThen(Effect.die(new Error("unexpected request"))));
 
     return Effect.gen(function* () {
       const connector = yield* EnvironmentConnector.EnvironmentConnector;
