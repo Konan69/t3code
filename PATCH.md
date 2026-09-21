@@ -1,356 +1,66 @@
-# T3 Code local Windows/WSL patch overlay
+# T3 Code local boat overlay
 
-## Current build — 2026-09-14
+## Current base
 
-- Upstream tag: `v0.0.41-nightly.20260914.1707`
-- Upstream source base: `9375c779707f`
-- Combined local branch:
-  `local/main-20260914-nightly-1707-cloudbox-patched`
-- Pre-update backup: `backup/pre-1707-overlay-20260914` at `34ef3097e`
-- Previous source branch:
-  `local/main-20260905-nightly-1289-cloudbox-patched`
-- Overlay move: the backup's 108 non-merge overlay commits were brought onto
-  nightly 1707 with one `git merge --no-ff`; no overlay commits were replayed.
-- Merge conflicts resolved in 28 files:
-  - `apps/desktop/src/preview/BrowserSession.test.ts`
-  - `apps/desktop/src/wsl/DesktopWslEnvironment.ts`
-  - `apps/mobile/src/features/connection/CloudEnvironmentRows.tsx`
-  - `apps/mobile/src/features/connection/useConnectionController.ts`
-  - `apps/mobile/src/state/use-thread-composer-state.ts`
-  - `apps/server/package.json`
-  - `apps/server/src/git/GitWorkflowService.ts`
-  - `apps/server/src/mcp/toolkits/preview/handlers.ts`
-  - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
-  - `apps/server/src/persistence/Migrations.ts`
-  - `apps/server/src/provider/Layers/ClaudeAdapter.test.ts`
-  - `apps/server/src/provider/Layers/ClaudeAdapter.ts`
-  - `apps/server/src/provider/Layers/CodexSessionRuntime.ts`
-  - `apps/server/src/vcs/GitVcsDriverCore.ts`
-  - `apps/server/src/ws.ts`
-  - `apps/web/src/components/ChatView.tsx`
-  - `apps/web/src/components/settings/ConnectionsSettings.tsx`
-  - `apps/web/src/components/settings/ProjectSettingsPanel.tsx`
-  - `apps/web/src/components/settings/ProviderModelsSection.tsx`
-  - `docs/internals/remote.md`
-  - `packages/client-runtime/src/connection/registry.test.ts`
-  - `packages/client-runtime/src/connection/registry.ts`
-  - `packages/client-runtime/src/connection/resolver.test.ts`
-  - `packages/client-runtime/src/connection/resolver.ts`
-  - `packages/client-runtime/src/platform/storageDocument.test.ts`
-  - `packages/client-runtime/src/platform/storageDocument.ts`
-  - `packages/client-runtime/src/state/connections.ts`
-  - `packages/client-runtime/src/state/threads-atoms.test.ts`
-- Migration validation: upstream `51_ProjectionThreadMessageContext` is
-  registered under its permanent name alongside fork ids 900–902, with no id
-  or name collision under `NameBasedMigrator`.
-- Dependency/build manifest: upstream's Node-only server dependencies,
-  `build:exe`, and plain `vp pack` command are retained. The pi MCP extension's
-  `@modelcontextprotocol/sdk` and `typebox` dependencies remain, and its entry
-  moved into `apps/server/vite.config.ts` so plain `vp pack` still emits it.
-  `@t3tools/ssh` is retained from upstream. `libsecret-1` 0.21.4 is present.
-- Validation: source conflict-marker and whitespace checks passed. Dependency
-  installation, lockfile regeneration, typecheck, focused tests, and desktop
-  build were not run in this merge session because the orchestrator owns those
-  gates under the task's hard rule. The orchestrator must regenerate the lock
-  only with `vp install --no-frozen-lockfile`, then run the requested gates.
+- Working branch: `local/boat`
+- Starting commit: `099287af0f0d1d28805942ffc977e669d98a98b0`
+- Upstream release in that merge: `v0.0.43-nightly.20260920.2031`
 
-Automatic official updates replace the overlay. After each official update:
-install the signed official shell first, merge this manifest onto the new
-source, rebuild, and rerun the overlay installer.
+## Remote-host decision
 
-## Important shell/update lesson from 2026-08-28
+The previous GCP cloud-host design is retired. This fork now uses one boat.dev sandbox as a normal T3 SSH environment.
 
-The `.1194` source rebase was initially overlaid onto an older `.1151` Windows
-shell. The compiled server/web code was current, but the executable still
-reported:
+The target is T3's stock remote model:
+
+- one remote machine;
+- one T3 server on that machine;
+- threads represented by worktrees on that server;
+- the desktop SSH environment installs and runs the release archive, then tunnels to the server.
+
+There is no per-thread machine provisioning and no cloud wake service. Stock T3 connection, relay, SSH, worktree, and provider behavior remains intact.
+
+## Active overlay
+
+The active product overlay is now:
+
+1. **Native pi driver** — `pi --mode rpc`, live model discovery, T3 MCP tools, and the pi web/provider surfaces.
+2. **Provider fixes** — the pi stdin queue writer, provider exit/stderr diagnostics, OpenCode fixes, and the plain host `ProcessLauncher` route shared by provider children.
+3. **WSL hardening** — native-ext4 runtime staging, isolated shell startup, stable backend discovery, and content-addressed runtime handling.
+4. **Fork SSH releases** — production SSH environments fetch the matching server archive from:
+
+   ```text
+   https://github.com/Konan69/t3code/releases/download/v$VERSION/
+   ```
+
+   The runner downloads `SHA256SUMS` and the platform archive from that tag. There is no fallback to the official release host.
+
+## Removed overlay behavior
+
+- Per-thread host-local and container-backed machines, provisioning, process routing, workspace bindings, identity mounts, settings, and UI labels.
+- GCP wake configuration, wake intent and policy state, host lifecycle relay APIs, desktop/web controls, and mobile queued-work wake recovery.
+- Fork-specific mobile build channels and the personal sideload workflow that belonged to the retired cloud-host setup.
+
+## Migration compatibility
+
+Keep these migrations registered at their existing ids and names:
 
 ```text
-FileVersion=0.0.34-nightly.20260821.1151
+900 ProjectionMachineBindings
+901 ProjectionMachineProjectWorkspaceRoot
+902 RepairProjectionProjectsAutoPull
 ```
 
-That is why T3 Code correctly kept offering `.1194`. The updater cache also
-contained the old `.1151` installer (146,191,400 bytes), so it could not finish
-the upgrade by itself.
+Existing fork databases may already record them as applied. Do not remove, rename, or renumber them. Their tables and columns may remain unused.
 
-The fix was:
+## Release archive contract
 
-1. Fetch the actual latest release (`.1210`, not `.1194`).
-2. Download the official x64 installer from GitHub Releases.
-3. Verify Authenticode before execution.
-4. Install the official shell silently.
-5. Verify the executable `FileVersion`.
-6. Reapply the local overlay.
-
-`.1210` installer evidence:
+For version `0.0.43-nightly.20260920.2031` on Linux x64, the SSH runner requests:
 
 ```text
-Size:   142525176
-Signer: CN=T3 Tools Inc, O=T3 Tools Inc, L=San Fransisco, S=California, C=US
-Status: Valid
-SHA256: DF6C0005CDCCF3182B147F7B29FC63885CB4F47ADF4B853A84C2F00F0A0B1383
+v0.0.43-nightly.20260920.2031/SHA256SUMS
+v0.0.43-nightly.20260920.2031/t3-0.0.43-nightly.20260920.2031-linux-x64.tar.gz
 ```
 
-`T3CODE_DISABLE_AUTO_UPDATE=1` was temporarily set while diagnosing the stale
-prompt. It was removed after the official `.1210` shell was installed.
-Official auto-updates are enabled again.
+Build a replacement archive from `local/boat`; the earlier archive was built from the starting commit and still contains the retired implementation.
 
-**Do not declare an update complete from source/version text alone. Always
-verify the Windows executable's `FileVersion`.**
-
-## Rebase audit — `.1194` to `.1210`
-
-`a3a8cbd6..9257bd86` contains 26 upstream commits. None absorbed the functional
-local patches:
-
-| Area                       | Upstream signal                                         | Verdict |
-| -------------------------- | ------------------------------------------------------- | ------- |
-| WSL ext4 staging           | no `wsl-runtime` marker                                 | keep    |
-| Preview cookie set IPC     | no `desktop:preview-set-cookie` marker                  | keep    |
-| Activity append/index perf | no `activityAffectsShellSummary` marker                 | keep    |
-| Settings hydration race    | no equivalent fix                                       | keep    |
-| Provider settings UI       | upstream split list/editor; local pi UI applied cleanly | keep    |
-| Superseded docs history    | represented by this file                                | drop    |
-
-The `.1210` rebase applied without conflicts.
-
-## Patch set
-
-| Area                    | Commits (current hashes)           | Result                                                                                                      |
-| ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| WSL startup             | `c61483da`, `0c11a1eb`             | Native-ext4 staging, 60-second probe, isolated non-login shell, stable Codex cwd, mirrored-network loopback |
-| Preview cookies         | `af53e72e`, `f026864a`             | Typed cookie set IPC/tool/UI; writes skip unrelated preview-session sync                                    |
-| Server activity writes  | `d6beaada`                         | Incremental append path avoids full-history shell-summary reloads                                           |
-| Client activity updates | `ff6a5272`, `28d79d85`, `26e18098` | Indexed append/replacement and stable-ID updates                                                            |
-| Provider settings race  | `c4f00dc3`                         | Subscribe before settings watcher hydration                                                                 |
-| Regression coverage     | `50ca779c`                         | Local regression tests                                                                                      |
-| Packaging tooling       | `1075bb49`                         | Local Windows ASAR overlay installer with dedicated `server.asar` support                                   |
-| pi provider             | `f5f0c955`                         | Native `pi --mode rpc` server driver                                                                        |
-| pi web surfaces         | `da4659dd`                         | Provider settings row, picker option, model placeholder, and `PiAgentIcon`                                  |
-| pi model catalog        | `2f07fc33`                         | Live RPC discovery, provenance, exact provider exclusions, order-independent search, and provider filters   |
-
-### Complete reapply manifest
-
-Apply in this order after each future upstream rebase:
-
-```text
-c61483da fix(desktop): stabilize WSL startup
-af53e72e feat(preview): add cookie setting
-f026864a fix(preview): cookie writes skip session sync
-0c11a1eb fix(desktop): isolate WSL backend shell
-d6beaada perf: make streaming projection and activity appends incremental
-ff6a5272 perf: index activity ids so streamed appends stop rescanning history
-28d79d85 fix: gate the activity append fast path on reducer-produced ordering
-26e18098 perf(client): update stable activities incrementally
-c4f00dc3 fix(server): subscribe before provider settings hydration
-50ca779c test: reconcile local regressions with nightly 1151
-1075bb49 chore(desktop): restore local Windows bundle installer
-f5f0c955 feat(provider): add native pi driver over pi --mode rpc
-da4659dd feat(web): surface pi in provider settings, picker, and icons
-2f07fc33 feat(provider): discover pi models and filter by upstream provider
-```
-
-`20d1459a` (dedicated server archive support) is consolidated into
-`1075bb49`. The installer script is local tooling and does not exist upstream.
-
-## pi provider driver
-
-`f5f0c955` adds a first-class `pi` provider alongside Codex, Claude, Cursor,
-Grok, and OpenCode. One `pi --mode rpc` child runs per thread. The adapter uses
-strict LF JSONL framing, correlated command IDs, and maps pi events into T3's
-canonical content, reasoning, tool, usage, compaction, retry, turn-complete,
-and turn-abort events.
-
-`da4659dd` makes pi visible in:
-
-- Settings → Providers
-- provider/model picker
-- provider icon maps (`PiAgentIcon`)
-- custom-model placeholder UI
-
-`2f07fc33` replaces the original three-model stub with live
-`get_available_models` + `get_state` discovery. It preserves extension-backed
-providers (including the user's Claude subscription via `claude-bridge`), marks
-the active default model, and stamps `subProvider` provenance. The configured
-exact exclusions are:
-
-```text
-google, openai, anthropic, opencode-go
-```
-
-Exact matching preserves `openai-codex`, `claude-bridge`, `opencode`, and
-`openrouter`. The current live catalog is 458 visible models across those four
-providers. Both the model picker and Settings model list support provider
-dropdowns plus AND-across-token, order-independent searches over model name,
-provider, and full slug (`open 5.4`, `5.4 open`, etc.). OpenCode uses the same
-provenance/search/filter UI.
-
-Pi sessions receive T3's per-thread built-in MCP through a T3-owned pi
-extension. `ProviderService` keeps issuing the scoped credential; `PiAdapter`
-resolves a host-reachable endpoint, passes the bearer only through child
-environment variables, and atomically installs the standalone bundled extension
-under `~/.pi/agent/extensions/`. The extension discovers and registers the T3
-preview tools, forwards cancellation, preserves text/image results, and closes
-the MCP transport at session shutdown. This also works in thread machines
-because the pi extensions identity directory is mounted into them.
-
-Remaining V1 limitations: extension UI dialogs auto-cancel; historical
-`readThread` replay and `rollbackThread` are not implemented yet.
-
-## Cloudbox and thread-machine overlay
-
-The `.1280` branch includes the full prior Windows/WSL/pi overlay plus the
-complete `local/cloudbox` line:
-
-- host-local and Incus-backed machine service boundaries
-- per-thread golden machines, ZFS lifecycle, workspace and identity mounts
-- provider launch routing inside thread machines, including pi stdin handling
-- relay wake policies, host lifecycle APIs, explicit wake-on-interaction
-- desktop/web Connections controls and thread-machine workspace labels
-- mobile queued-work wake recovery
-- Cloudbox EAS channels and personal iOS sideload workflow
-
-The recovered live deployment is GCP instance `cloudbox-test` in
-`europe-west2-b`, environment `8ba54bb4-ad1f-4bcc-b1f3-bfa1671e3daf`. The
-ignored `~/cloudbox/cloudbox.json` targets the combined overlay branch.
-Windows user-level wake URL/name/secret/environment variables are set
-from the retained Alchemy state without logging the bearer. The authenticated
-wake service successfully resumed the VM and reported `RUNNING`.
-
-The move preserves upstream `.1280` refactors, including the new Antigravity
-provider, while retaining WSL runtime-archive hardening, OpenCode
-password/version support, machine process launch, and provider exit diagnostics.
-Current reapply order is the first-parent sequence from:
-
-```bash
-git log --first-parent --reverse --oneline origin/main..HEAD
-```
-
-## Build and install
-
-```bash
-vp install --frozen-lockfile
-vp run build:desktop
-node scripts/install-local-windows-bundle.cjs \
-  /home/kixey/t3code-wsl-fix \
-  '/mnt/c/Users/kixey/AppData/Local/Programs/t3code/resources'
-```
-
-Close every T3 Code process first. Windows file locks otherwise make the atomic
-resource swap fail with `EACCES`. The script rewrites the compiled desktop and
-server/web ASAR subtrees. On archive-based WSL builds it also rewrites
-`wsl-runtime.tar.gz`, regenerates its SHA-256 sidecar, and validates the same
-pi/Cloudbox markers inside the runtime. This gives the patched runtime a new
-content-addressed ID instead of silently reusing the official cached backend.
-All resources are swapped atomically with timestamped backups.
-
-Most recent validated `.1253` backups:
-
-```text
-app.asar.pre-local-2026-09-02T15-36-47.032Z
-server.asar.pre-local-2026-09-02T15-36-47.036Z
-wsl-runtime.tar.gz.pre-local-2026-09-02T15-36-47.039Z
-```
-
-Older `.1151` through `.1244` backups remain in the resources directory.
-
-## Validation — `.1280`
-
-- Merge resolution and source-marker verification: completed.
-- Workspace typecheck was attempted without installing the `.1280` dependency
-  set. It remains blocked by the pre-existing `.1253` `node_modules` tree.
-- Focused server machine/orchestration/migration tests: 92/92 passed; mobile
-  DPoP/outbox tests: 47/47 passed; desktop WSL/backend tests: 165/165 passed.
-- Provider tests: 1052 passed. Five Antigravity suites could not load the
-  missing new `yauzl` dependency, and one unchanged ACP test returned
-  `ProcessExited` instead of its expected `ConnectionTerminated` event.
-- Desktop build: pending and intentionally not run during merge resolution.
-- Overlay install and Windows executable verification: pending and intentionally
-  not run during merge resolution.
-
-## Historical validation — `.1253`
-
-- Exact release-tag rebase completed across 106 steps.
-- Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
-- All 15 workspace typechecks: passed.
-- Focused conflict and overlay tests: 121/121 server, 59/59 client-runtime,
-  and 6/6 mobile DPoP.
-- `vp run build:desktop`: passed.
-- Overlay installer: passed against the official `.1253` shell with WSL,
-  preview-cookie, pi, Claude Bridge, and machine-service markers.
-- Official executable after install:
-  `0.0.39-nightly.20260902.1253`.
-- Relaunched backend: listening on WSL port `3773`.
-- Live backend path uses patched runtime ID
-  `sha256-703b5c81371fadf057c5278a1b452951466497c5652926ea37162ddd2fe9a336`;
-  live `bin.mjs` contains pi, Claude Bridge, MachineService, and cookie markers.
-- Cloudbox relay publishes returned HTTP 200 after restart.
-
-## Historical validation — `.1244`
-
-- Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
-- Official executable after install:
-  `0.0.38-nightly.20260901.1244`.
-- All 15 workspace typechecks: passed.
-- Targeted rebase/conflict suites: passed, including 62/62 server projection
-  and Incus tests, 809/809 client-runtime tests, 51/51 WSL runtime tests, and
-  71/71 lint-plugin tests.
-- `vp run build:desktop`: passed.
-- Overlay installer: passed against the official `.1244` shell with WSL,
-  preview-cookie, pi, Claude Bridge, and machine-service markers.
-- Relaunched backend: listening on WSL port `3773`.
-
-## Historical validation — `.1210`
-
-- Official installer Authenticode: `Valid`, signed by `T3 Tools Inc`.
-- Official executable after install:
-  `0.0.36-nightly.20260828.1210`.
-- Typecheck: 0 errors in contracts, client-runtime, server, web, desktop.
-- Tests: server provider/orchestration 72/72; client reducer 32/32; contracts
-  settings/provider 69/69; pi/OpenCode/provider registry 56/56; model search 9/9.
-- `vp run build:desktop`: passed.
-- Overlay installer: passed against the official `.1210` shell.
-- Installed raw-marker checks:
-  - `wsl-runtime` in `app.asar` ✔
-  - `noprofile` isolated-shell flag in `app.asar` ✔
-  - `desktop:preview-set-cookie` in `app.asar` ✔
-  - `activityAffectsShellSummary` in `server.asar` ✔
-  - `pi --mode rpc` in `server.asar` ✔
-  - `PiAgentIcon` / pi settings UI in `server.asar` ✔
-
-Live relaunch still needs one UI confirmation: Settings → Providers contains the
-pi row, then start one pi thread and verify end-to-end streaming.
-
-## Resource-churn incident — 2026-08-28
-
-The sustained memory/CPU churn was not T3's ASAR staging. A stale user service
-was running:
-
-```text
-~/.supermemory/bin/supermemory-server
-CPU: ~104% for 7+ hours
-RSS: ~2.3 GiB
-```
-
-Actions taken:
-
-- force-killed `supermemory-server` and its Rivet sidecar;
-- disabled `supermemory.service` and `supermemory-retry-batches.service`;
-- added systemd user drop-ins with `ExecStart=/bin/false`;
-- reloaded the user systemd manager;
-- verified `supermemory.service` reports `masked` and no process is running.
-
-Observed memory after cleanup: about 2.5 GiB used / 9.4 GiB available (12 GiB
-WSL allocation). Do not re-enable these units unless Supermemory is explicitly
-wanted again.
-
-## Historical notes
-
-The `.1026`–`.1194` history is preserved on backup branches:
-
-```text
-backup/pre-1194-rebase-20260826
-backup/pre-1210-rebase-20260828
-```
-
-The original slow-write measurements reduced server append mean from 813.9 ms
-to 9.29 ms and client stable-ID update p95 from 5.3–8.1 ms to 0.20 ms.
+Do not publish or install local artifacts as part of source maintenance. In particular, do not modify the currently installed Windows application while preparing this branch.
