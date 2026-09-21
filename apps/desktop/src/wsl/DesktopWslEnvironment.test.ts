@@ -169,7 +169,7 @@ describe("formatNodePtyProbeFailureReason", () => {
     const reason = formatNodePtyProbeFailureReason(4);
 
     expect(reason).toContain("packaged Linux node-pty binary was not included");
-    expect(reason).toContain("--wsl-prebuild");
+    expect(reason).toContain("Install a build that includes WSL support");
   });
 
   it("leaves other node-pty load failures to the compatibility diagnostic", () => {
