@@ -98,7 +98,10 @@ const resolveDesktopSshCliRunner = (
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
-  return { archiveVersion: environment.appVersion };
+  return {
+    archiveVersion: environment.appVersion,
+    releaseBaseUrl: "https://github.com/Konan69/t3code/releases/download",
+  };
 };
 
 const desktopSshEnvironmentLayer = Layer.unwrap(
