@@ -4,14 +4,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
-  GitCommandError,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
-  type ThreadMachineBinding,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
@@ -32,8 +30,8 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as PubSub from "effect/PubSub";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -64,7 +62,6 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
-  mapProviderCwdForMachine,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
@@ -77,10 +74,6 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
-import {
-  ThreadMachineService,
-  ThreadMachineServiceError,
-} from "../../machine/ThreadMachineService.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -194,13 +187,6 @@ describe("ProviderCommandReactor", () => {
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
-    readonly onEnsureMachine?: () => void;
-    readonly onStartSession?: () => void;
-    readonly ensureMachineEffect?: () => Effect.Effect<
-      Option.Option<ThreadMachineBinding>,
-      ThreadMachineServiceError
-    >;
-    readonly ensuredMachine?: ThreadMachineBinding;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -219,9 +205,7 @@ describe("ProviderCommandReactor", () => {
       model: "gpt-5-codex",
     };
     const startSessionEffect = input?.startSessionEffect;
-    const onStartSession = input?.onStartSession;
     const startSession = vi.fn((_: unknown, input: unknown) => {
-      onStartSession?.();
       const sessionIndex = nextSessionIndex++;
       const resumeCursor =
         typeof input === "object" && input !== null && "resumeCursor" in input
@@ -507,23 +491,6 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
-      Layer.provideMerge(
-        Layer.succeed(
-          ThreadMachineService,
-          ThreadMachineService.of({
-            ensureForThread: () => {
-              input?.onEnsureMachine?.();
-              return (
-                input?.ensureMachineEffect?.() ??
-                Effect.succeed(
-                  input?.ensuredMachine ? Option.some(input.ensuredMachine) : Option.none(),
-                )
-              );
-            },
-            runSetupForThread: () => Effect.succeed({ status: "no-script" }),
-          }),
-        ),
-      ),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -662,8 +629,6 @@ describe("ProviderCommandReactor", () => {
       drain,
       startReactor,
       runEffect,
-      mapProviderCwd: (binding: ThreadMachineBinding, hostCwd: string) =>
-        runEffect(mapProviderCwdForMachine(binding, hostCwd)),
       get titleRegenerationCompletionDispatchAttempts() {
         return titleRegenerationCompletionDispatchAttempts;
       },
@@ -883,179 +848,6 @@ describe("ProviderCommandReactor", () => {
       );
     }),
   );
-
-  it("ensures the thread machine before provider session start", async () => {
-    const order: string[] = [];
-    const harness = await createHarness({
-      onEnsureMachine: () => order.push("ensure-machine"),
-      onStartSession: () => order.push("start-session"),
-    });
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-machine-order"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-machine-order"),
-          role: "user",
-          text: "hello machine",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    expect(order.at(-1)).toBe("start-session");
-    expect(order.slice(0, -1).every((entry) => entry === "ensure-machine")).toBe(true);
-    expect(order.length).toBeGreaterThan(1);
-  });
-
-  it("surfaces thread machine binding failures as failed turn starts", async () => {
-    const gitDetail = "fatal: could not create work tree dir: Permission denied";
-    const gitError = new GitCommandError({
-      operation: "GitVcsDriver.createWorktree",
-      command: "git worktree add",
-      cwd: "/tmp/provider-project",
-      detail: gitDetail,
-    });
-    const harness = await createHarness({
-      ensureMachineEffect: () =>
-        Effect.fail(
-          new ThreadMachineServiceError({
-            operation: "ensure",
-            threadId: ThreadId.make("thread-1"),
-            detail: gitError.message,
-            cause: gitError,
-          }),
-        ),
-    });
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-machine-failure"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-machine-failure"),
-          role: "user",
-          text: "hello machine",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      return thread?.session?.status === "error";
-    });
-
-    expect(harness.startSession).not.toHaveBeenCalled();
-    expect(harness.sendTurn).not.toHaveBeenCalled();
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.session).toMatchObject({
-      status: "error",
-      activeTurnId: null,
-      lastError: expect.stringContaining(gitDetail),
-    });
-    expect(
-      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
-    ).toMatchObject({
-      summary: "Provider turn start failed",
-      payload: {
-        detail: expect.stringContaining(`Could not start the thread machine: ${gitError.message}`),
-      },
-    });
-  });
-
-  it("uses guest workspace paths for machine-bound provider sessions and generation", async () => {
-    const machine = {
-      machineId: "thread-thread-1",
-      machineName: "thread-thread-1",
-      state: "running",
-      hostWorkspaceRoot: "/tank/threads/thread-1/ws",
-      guestWorkspaceRoot: "/home/kixey/ws",
-    } satisfies ThreadMachineBinding;
-    const harness = await createHarness({
-      threadModelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-sonnet-4-6",
-      },
-      ensuredMachine: machine,
-    });
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-claude-machine"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-claude-machine"),
-          role: "user",
-          text: "hello machine",
-          attachments: [],
-        },
-        titleSeed: "Thread",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-      provider: "claudeAgent",
-      cwd: machine.guestWorkspaceRoot,
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-sonnet-4-6",
-      },
-    });
-    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
-      cwd: machine.guestWorkspaceRoot,
-    });
-    await expect(
-      harness.mapProviderCwd(machine, `${machine.hostWorkspaceRoot}/packages/app`),
-    ).resolves.toBe(`${machine.guestWorkspaceRoot}/packages/app`);
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-claude-machine-follow-up"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-claude-machine-follow-up"),
-          role: "user",
-          text: "continue in the machine",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-    expect(harness.startSession).toHaveBeenCalledTimes(1);
-
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(
-      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
-    ).toBeUndefined();
-  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();

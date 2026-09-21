@@ -9,7 +9,6 @@ import * as Struct from "effect/Struct";
 import { ModelSelection, ProjectIconOverride, ProjectScript } from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
-  DeleteProjectionProjectInput,
   GetProjectionProjectInput,
   ProjectionProject,
   ProjectionProjectRepository,
@@ -39,7 +38,6 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json,
           default_thread_env_mode,
           auto_pull,
-          machine_mode,
           favicon_path,
           project_icon_json,
           scripts_json,
@@ -54,7 +52,6 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
           ${row.defaultThreadEnvMode},
           ${row.autoPull ? 1 : 0},
-          ${row.machineMode},
           ${row.faviconPath ?? null},
           ${row.projectIcon ? JSON.stringify(row.projectIcon) : null},
           ${JSON.stringify(row.scripts)},
@@ -69,7 +66,6 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json = excluded.default_model_selection_json,
           default_thread_env_mode = excluded.default_thread_env_mode,
           auto_pull = excluded.auto_pull,
-          machine_mode = excluded.machine_mode,
           favicon_path = excluded.favicon_path,
           project_icon_json = excluded.project_icon_json,
           scripts_json = excluded.scripts_json,
@@ -91,7 +87,6 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           auto_pull AS "autoPull",
-          machine_mode AS "machineMode",
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
@@ -99,39 +94,6 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
         FROM projection_projects
-        WHERE project_id = ${projectId}
-      `,
-  });
-
-  const listProjectionProjectRows = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: ProjectionProjectDbRow,
-    execute: () =>
-      sql`
-        SELECT
-          project_id AS "projectId",
-          title,
-          workspace_root AS "workspaceRoot",
-          default_model_selection_json AS "defaultModelSelection",
-          default_thread_env_mode AS "defaultThreadEnvMode",
-          auto_pull AS "autoPull",
-          machine_mode AS "machineMode",
-          favicon_path AS "faviconPath",
-          project_icon_json AS "projectIcon",
-          scripts_json AS "scripts",
-          created_at AS "createdAt",
-          updated_at AS "updatedAt",
-          deleted_at AS "deletedAt"
-        FROM projection_projects
-        ORDER BY created_at ASC, project_id ASC
-      `,
-  });
-
-  const deleteProjectionProjectRow = SqlSchema.void({
-    Request: DeleteProjectionProjectInput,
-    execute: ({ projectId }) =>
-      sql`
-        DELETE FROM projection_projects
         WHERE project_id = ${projectId}
       `,
   });
@@ -147,22 +109,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.getById:query")),
     );
 
-  const listAll: ProjectionProjectRepositoryShape["listAll"] = () =>
-    listProjectionProjectRows().pipe(
-      Effect.map((rows) => rows.map((row) => ({ ...row, autoPull: row.autoPull === 1 }))),
-      Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.listAll:query")),
-    );
-
-  const deleteById: ProjectionProjectRepositoryShape["deleteById"] = (input) =>
-    deleteProjectionProjectRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.deleteById:query")),
-    );
-
   return {
     upsert,
     getById,
-    listAll,
-    deleteById,
   } satisfies ProjectionProjectRepositoryShape;
 });
 

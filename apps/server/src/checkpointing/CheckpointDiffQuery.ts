@@ -130,10 +130,7 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      const workspaceCwd =
-        threadContext.value.machineHostWorkspaceRoot ??
-        threadContext.value.worktreePath ??
-        threadContext.value.workspaceRoot;
+      const workspaceCwd = threadContext.value.worktreePath ?? threadContext.value.workspaceRoot;
       if (!workspaceCwd) {
         return yield* new CheckpointWorkspacePathMissingError({
           operation,
@@ -241,10 +238,7 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    const workspaceCwd =
-      threadContext.value.machineHostWorkspaceRoot ??
-      threadContext.value.worktreePath ??
-      threadContext.value.workspaceRoot;
+    const workspaceCwd = threadContext.value.worktreePath ?? threadContext.value.workspaceRoot;
     if (!workspaceCwd) {
       return yield* new CheckpointWorkspacePathMissingError({
         operation,

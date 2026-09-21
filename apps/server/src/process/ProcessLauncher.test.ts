@@ -196,6 +196,7 @@ describe("HostProcessLauncher", () => {
           }),
           ChildProcess.make("cursor-agent", ["acp"], {
             cwd: "/tank/cursor-project",
+            extendEnv: true,
             shell: false,
           }),
           ChildProcess.make(

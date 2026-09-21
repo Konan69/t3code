@@ -7,8 +7,6 @@ import type * as PlatformError from "effect/PlatformError";
 import type * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import type { MachineServiceError } from "../machine/MachineService.ts";
-
 export interface ProcessLaunchInput {
   readonly threadId?: ThreadId | undefined;
   readonly command: string;
@@ -32,17 +30,11 @@ export function processLaunchLogFields(input: ProcessLaunchInput) {
 }
 
 export interface ProcessLauncherShape {
-  readonly hostReachableUrl?:
-    | ((input: {
-        readonly threadId?: ThreadId | undefined;
-        readonly url: string;
-      }) => Effect.Effect<string, MachineServiceError>)
-    | undefined;
   readonly launch: (
     input: ProcessLaunchInput,
   ) => Effect.Effect<
     ChildProcessSpawner.ChildProcessHandle,
-    PlatformError.PlatformError | MachineServiceError,
+    PlatformError.PlatformError,
     Scope.Scope
   >;
 }
@@ -55,7 +47,6 @@ export const makeHostProcessLauncher = (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ): ProcessLauncherShape =>
   ProcessLauncher.of({
-    hostReachableUrl: (input) => Effect.succeed(input.url),
     launch: (input) =>
       Effect.logDebug("Launching provider child process.", processLaunchLogFields(input)).pipe(
         Effect.andThen(

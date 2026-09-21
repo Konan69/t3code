@@ -1,10 +1,4 @@
-import {
-  ContainerIcon,
-  FolderGit2Icon,
-  FolderGitIcon,
-  FolderIcon,
-  HistoryIcon,
-} from "lucide-react";
+import { FolderGit2Icon, FolderGitIcon, FolderIcon, HistoryIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 
 import {
@@ -32,8 +26,6 @@ interface BranchToolbarEnvModeSelectorProps {
   envLocked: boolean;
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
-  /** The thread runs (or will run) inside its own thread machine; the workspace is fixed. */
-  inThreadMachine?: boolean;
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel?: string | null;
   onUsePreviousWorktree?: () => void;
@@ -44,7 +36,6 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   envLocked,
   effectiveEnvMode,
   activeWorktreePath,
-  inThreadMachine = false,
   onEnvModeChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
@@ -72,8 +63,6 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         >
           {forceNewWorktree ? (
             <FolderGit2Icon className="size-3 shrink-0" />
-          ) : inThreadMachine ? (
-            <ContainerIcon className="size-3 shrink-0" />
           ) : activeWorktreePath ? (
             <FolderGitIcon className="size-3 shrink-0" />
           ) : (
@@ -89,14 +78,14 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             >
               {forceNewWorktree
                 ? resolveEnvModeLabel("worktree")
-                : resolveLockedWorkspaceLabel(activeWorktreePath, inThreadMachine)}
+                : resolveLockedWorkspaceLabel(activeWorktreePath)}
             </span>
           </span>
         </TooltipTrigger>
         <TooltipPopup>
           {forceNewWorktree
             ? "Each model starts in its own worktree."
-            : resolveLockedWorkspaceLabel(activeWorktreePath, inThreadMachine)}
+            : resolveLockedWorkspaceLabel(activeWorktreePath)}
         </TooltipPopup>
       </Tooltip>
     );

@@ -699,8 +699,6 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
     assert.strictEqual(thread.settledAt, null);
     assert.strictEqual(shell.settledOverride, null);
     assert.strictEqual(shell.settledAt, null);
-    assert.strictEqual(thread.machine, undefined);
-    assert.strictEqual(shell.machine, undefined);
     // Pre-link servers omit the array entirely.
     assert.deepStrictEqual(thread.pullRequests, []);
     assert.deepStrictEqual(shell.pullRequests, []);
@@ -811,80 +809,6 @@ it.effect("decodes thread pull request links with snapshot and stack", () =>
     assert.strictEqual(shell.pullRequests.length, 2);
     assert.strictEqual(shell.pullRequests[1]?.stack?.layers.length, 2);
     assert.strictEqual(shell.pullRequests[1]?.snapshot?.state, "open");
-  }),
-);
-
-it.effect("keeps machine lifecycle commands internal and decodes bindings", () =>
-  Effect.gen(function* () {
-    const command = {
-      type: "thread.machine.bind",
-      commandId: "cmd-machine-bind-1",
-      threadId: "thread-1",
-      binding: {
-        machineId: "thread-1",
-        machineName: "thread-thread-1",
-        state: "running",
-        projectWorkspaceRoot: "/home/kixey/project",
-        hostWorkspaceRoot: "/tank/threads/thread-1/ws",
-        guestWorkspaceRoot: "/home/kixey/ws",
-      },
-    };
-
-    const internal = yield* decodeOrchestrationCommand(command);
-    if (internal.type !== "thread.machine.bind") {
-      return yield* Effect.die("Expected thread.machine.bind command.");
-    }
-    assert.strictEqual(internal.binding.projectWorkspaceRoot, "/home/kixey/project");
-
-    const legacy = yield* decodeOrchestrationCommand({
-      ...command,
-      commandId: "cmd-machine-bind-legacy",
-      binding: {
-        machineId: "thread-legacy",
-        machineName: "thread-thread-legacy",
-        state: "running",
-        hostWorkspaceRoot: "/tank/threads/thread-legacy/ws",
-        guestWorkspaceRoot: "/home/kixey/ws",
-      },
-    });
-    if (legacy.type !== "thread.machine.bind") {
-      return yield* Effect.die("Expected legacy thread.machine.bind command.");
-    }
-    assert.strictEqual(legacy.binding.projectWorkspaceRoot, undefined);
-    assert.ok(Exit.isFailure(yield* Effect.exit(decodeClientOrchestrationCommand(command))));
-  }),
-);
-
-it.effect("decodes project machine mode without widening thread environment mode", () =>
-  Effect.gen(function* () {
-    const created = yield* decodeClientOrchestrationCommand({
-      type: "project.create",
-      commandId: "cmd-machine-project-create",
-      projectId: "project-1",
-      title: "Machine project",
-      workspaceRoot: "/workspace/project-1",
-      machineMode: "thread",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    if (created.type !== "project.create") {
-      return yield* Effect.die("Expected project.create command.");
-    }
-    assert.strictEqual(created.machineMode, "thread");
-
-    const project = yield* decodeProjectMetaUpdatedPayload({
-      projectId: "project-1",
-      machineMode: "thread",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.strictEqual(project.machineMode, "thread");
-
-    const invalidThreadMode = yield* decodeClientOrchestrationCommand({
-      type: "project.meta.update",
-      commandId: "cmd-machine-mode-1",
-      projectId: "project-1",
-      defaultThreadEnvMode: "machine",
-    }).pipe(Effect.exit);
-    assert.ok(Exit.isFailure(invalidThreadMode));
   }),
 );
 

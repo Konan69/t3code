@@ -99,14 +99,3 @@ On mobile, use **Settings → Source control** to change selected environment de
 T3 Code only pulls when it can fast-forward and the checkout has no changed files, untracked files,
 or local commits. It skips checkouts on another branch or without an upstream. If a checkout has
 local work, resolve it yourself before automatic pulls can resume.
-
-Pull failures do not prevent the server from starting.
-
-## Thread machines
-
-When an environment supports isolated thread machines, projects added to that environment start
-with **Thread machines** enabled. New threads then run inside their own machine instead of falling
-back to the environment host.
-
-To change this for a project, open **Settings**, select **Projects**, choose the project, and change
-**Thread machines**. The setting applies to threads created after the change.

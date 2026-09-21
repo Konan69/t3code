@@ -59,7 +59,6 @@ const configLayer = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =
         otlpServiceName: "t3-server",
         cwd: baseDir,
         baseDir,
-        machineIdentityManifest: undefined,
         ...derivedPaths,
         mode: "web",
         autoBootstrapProjectFromCwd: false,

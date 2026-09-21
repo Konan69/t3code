@@ -11,7 +11,6 @@ import {
   ModelSelection,
   ProjectIconOverride,
   ProjectId,
-  ProjectMachineMode,
   ProjectScript,
   ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -29,7 +28,6 @@ export const ProjectionProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
   autoPull: Schema.Boolean,
-  machineMode: ProjectMachineMode,
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
@@ -43,11 +41,6 @@ export const GetProjectionProjectInput = Schema.Struct({
   projectId: ProjectId,
 });
 export type GetProjectionProjectInput = typeof GetProjectionProjectInput.Type;
-
-export const DeleteProjectionProjectInput = Schema.Struct({
-  projectId: ProjectId,
-});
-export type DeleteProjectionProjectInput = typeof DeleteProjectionProjectInput.Type;
 
 /**
  * ProjectionProjectRepositoryShape - Service API for projected project records.
@@ -66,17 +59,6 @@ export interface ProjectionProjectRepositoryShape {
   readonly getById: (
     input: GetProjectionProjectInput,
   ) => Effect.Effect<Option.Option<ProjectionProject>, ProjectionRepositoryError>;
-
-  /** List all projected projects in deterministic creation order. */
-  readonly listAll: () => Effect.Effect<
-    ReadonlyArray<ProjectionProject>,
-    ProjectionRepositoryError
-  >;
-
-  /** Delete a projected project row by id. */
-  readonly deleteById: (
-    input: DeleteProjectionProjectInput,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 /**

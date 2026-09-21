@@ -15,7 +15,6 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadLinkedPullRequest,
-  ThreadMachineState,
   ThreadTitleState,
   ThreadId,
   TurnId,
@@ -37,12 +36,6 @@ export const ProjectionThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
-  machineId: Schema.NullOr(Schema.String),
-  machineName: Schema.NullOr(Schema.String),
-  machineState: Schema.NullOr(ThreadMachineState),
-  machineProjectWorkspaceRoot: Schema.NullOr(Schema.String),
-  machineHostWorkspaceRoot: Schema.NullOr(Schema.String),
-  machineGuestWorkspaceRoot: Schema.NullOr(Schema.String),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurnId: Schema.NullOr(TurnId),
@@ -72,16 +65,6 @@ export const GetProjectionThreadInput = Schema.Struct({
 });
 export type GetProjectionThreadInput = typeof GetProjectionThreadInput.Type;
 
-export const DeleteProjectionThreadInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type DeleteProjectionThreadInput = typeof DeleteProjectionThreadInput.Type;
-
-export const ListProjectionThreadsByProjectInput = Schema.Struct({
-  projectId: ProjectId,
-});
-export type ListProjectionThreadsByProjectInput = typeof ListProjectionThreadsByProjectInput.Type;
-
 /**
  * ProjectionThreadRepositoryShape - Service API for projected thread records.
  */
@@ -99,16 +82,6 @@ export interface ProjectionThreadRepositoryShape {
   readonly getById: (
     input: GetProjectionThreadInput,
   ) => Effect.Effect<Option.Option<ProjectionThread>, ProjectionRepositoryError>;
-
-  /** List projected threads for a project in deterministic creation order. */
-  readonly listByProjectId: (
-    input: ListProjectionThreadsByProjectInput,
-  ) => Effect.Effect<ReadonlyArray<ProjectionThread>, ProjectionRepositoryError>;
-
-  /** Delete a projected thread row by id. */
-  readonly deleteById: (
-    input: DeleteProjectionThreadInput,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 /**

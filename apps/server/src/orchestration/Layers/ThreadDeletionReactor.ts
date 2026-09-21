@@ -6,8 +6,6 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { MachineService } from "../../machine/MachineService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -40,52 +38,8 @@ export const logCleanupCauseUnlessInterrupted = <R, E>({
     }),
   );
 
-export const cleanupMachineWorktree = (input: {
-  readonly machine: ThreadDeletedEvent["payload"]["machine"];
-  readonly projectWorkspaceRoot: ThreadDeletedEvent["payload"]["projectWorkspaceRoot"];
-  readonly gitWorkflow: Pick<GitWorkflowService["Service"], "removeWorktree" | "pruneWorktrees">;
-  readonly machines: Pick<MachineService["Service"], "destroy">;
-}) => {
-  const machine = input.machine;
-  const projectWorkspaceRoot = input.projectWorkspaceRoot;
-  if (!machine || !projectWorkspaceRoot) {
-    return Effect.void;
-  }
-  const removeWorktree = input.gitWorkflow
-    .removeWorktree({
-      cwd: projectWorkspaceRoot,
-      path: machine.hostWorkspaceRoot,
-      force: true,
-    })
-    .pipe(
-      Effect.as(false),
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
-        }
-        return Effect.logWarning(
-          "machine cleanup could not remove Git worktree; destroying machine resources anyway",
-          {
-            machineName: machine.machineName,
-            worktreePath: machine.hostWorkspaceRoot,
-            cause: Cause.pretty(cause),
-          },
-        ).pipe(Effect.as(true));
-      }),
-    );
-  return Effect.gen(function* () {
-    const worktreeRemovalFailed = yield* removeWorktree;
-    yield* input.machines.destroy(machine);
-    if (worktreeRemovalFailed) {
-      yield* input.gitWorkflow.pruneWorktrees({ cwd: projectWorkspaceRoot });
-    }
-  });
-};
-
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
-  const gitWorkflow = yield* GitWorkflowService;
-  const machines = yield* MachineService;
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager.TerminalManager;
 
@@ -109,12 +63,6 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* stopProviderSession(threadId);
     yield* closeThreadTerminals(threadId);
-    yield* cleanupMachineWorktree({
-      machine: event.payload.machine,
-      projectWorkspaceRoot: event.payload.projectWorkspaceRoot,
-      gitWorkflow,
-      machines,
-    });
   });
 
   const processThreadDeletedSafely = (event: ThreadDeletedEvent) =>

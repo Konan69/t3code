@@ -140,8 +140,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server supports legacy linkedPullRequest updates through thread.meta.update.
       Independent of threadPullRequests; servers supporting both advertise both. */
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
-  /** Native Linux server can provision per-thread Incus machines. */
-  threadMachines: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pull-request.link / .unlink, exposes `pullRequests` on
       threads, and routes PullRequestRef.host across projects on the same host. Same
       version-skew contract as threadSettlement. */

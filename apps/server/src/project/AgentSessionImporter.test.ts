@@ -27,7 +27,6 @@ import * as TestClock from "effect/testing/TestClock";
 import { makeTestProviderAdapterHarness } from "../../integration/TestProviderAdapter.integration.ts";
 import { ServerConfig } from "../config.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
-import { ThreadMachineService } from "../machine/ThreadMachineService.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -906,11 +905,6 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           Layer.provide(AnalyticsService.layerTest),
         );
         const reactorLayer = ProviderCommandReactorLive.pipe(
-          Layer.provide(
-            Layer.mock(ThreadMachineService, {
-              ensureForThread: () => Effect.succeed(Option.none()),
-            }),
-          ),
           Layer.provideMerge(providerLayer),
           Layer.provide(
             Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {

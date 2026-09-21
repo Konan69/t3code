@@ -4,7 +4,6 @@ import type {
   EnvironmentId,
   OrchestrationCommand,
   ProjectId,
-  ProjectMachineMode,
   SourceControlDiscoveryResult,
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
@@ -34,12 +33,6 @@ export function canCreateProjectInEnvironment(
   connectionPhase: EnvironmentConnectionPhase | null | undefined,
 ): boolean {
   return connectionPhase === "connected";
-}
-
-export function resolveNewProjectMachineMode(
-  threadMachines: boolean | undefined,
-): ProjectMachineMode {
-  return threadMachines === true ? "thread" : "off";
 }
 
 export type AddProjectRemoteSourceReadiness = Record<
@@ -316,7 +309,6 @@ export function buildProjectCreateCommand(input: {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
-  readonly machineMode: ProjectMachineMode;
   readonly createdAt: string;
 }): Extract<OrchestrationCommand, { type: "project.create" }> {
   return {
@@ -327,7 +319,6 @@ export function buildProjectCreateCommand(input: {
     workspaceRoot: input.workspaceRoot,
     createWorkspaceRootIfMissing: true,
     defaultModelSelection: null,
-    machineMode: input.machineMode,
     createdAt: input.createdAt,
   };
 }

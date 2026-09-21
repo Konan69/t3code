@@ -90,14 +90,7 @@ export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null):
   return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
 }
 
-/** Shown when the thread's agent runs inside its own thread machine (project Thread machines = on). */
-export const THREAD_MACHINE_WORKSPACE_LABEL = "Thread machine";
-
-export function resolveLockedWorkspaceLabel(
-  activeWorktreePath: string | null,
-  inThreadMachine = false,
-): string {
-  if (inThreadMachine) return THREAD_MACHINE_WORKSPACE_LABEL;
+export function resolveLockedWorkspaceLabel(activeWorktreePath: string | null): string {
   return activeWorktreePath ? "Worktree" : "Local checkout";
 }
 

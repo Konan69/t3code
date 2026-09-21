@@ -17,7 +17,6 @@ import {
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
-  resolveNewProjectMachineMode,
   sortAddProjectProviderSources,
   type AddProjectRemoteSource,
 } from "@t3tools/client-runtime/operations/projects";
@@ -81,7 +80,6 @@ interface EnvironmentOption {
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
   readonly connectionErrorTraceId: string | null;
-  readonly threadMachines: boolean;
   /** Server runs clones in the background and streams progress; older servers block. */
   readonly supportsCloneTracking: boolean;
 }
@@ -404,7 +402,6 @@ function useEnvironmentOptions(): ReadonlyArray<EnvironmentOption> {
         connectionState: runtime?.connectionState ?? "available",
         connectionError: runtime?.connectionError ?? null,
         connectionErrorTraceId: runtime?.connectionErrorTraceId ?? null,
-        threadMachines: config?.environment.capabilities.threadMachines === true,
         supportsCloneTracking: config?.environment.capabilities.projectCloneTracking === true,
       };
     });
@@ -672,7 +669,6 @@ function useCreateProject(environment: EnvironmentOption | null) {
         commandId: CommandId.make(uuidv4()),
         projectId,
         workspaceRoot,
-        machineMode: resolveNewProjectMachineMode(environment.threadMachines),
         createdAt: new Date().toISOString(),
       });
       const result = await createProject({

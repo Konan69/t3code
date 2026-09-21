@@ -1102,24 +1102,7 @@ export function makePiAdapter(
         const launchArgs =
           piConfig.launchArgs.trim().length > 0 ? piConfig.launchArgs.trim().split(/\s+/) : [];
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const mcpEndpoint = mcpSession
-          ? yield* (
-              processLauncher.hostReachableUrl?.({
-                threadId: input.threadId,
-                url: mcpSession.endpoint,
-              }) ?? Effect.succeed(mcpSession.endpoint)
-            ).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterProcessError({
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    detail: "Failed to resolve the T3 MCP endpoint for the pi process.",
-                    cause,
-                  }),
-              ),
-            )
-          : undefined;
+        const mcpEndpoint = mcpSession?.endpoint;
         let mcpLaunchConfig: ReturnType<typeof makePiMcpLaunchConfig> = undefined;
         if (mcpSession && mcpEndpoint) {
           const extensionSourcePath =

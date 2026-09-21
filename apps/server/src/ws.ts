@@ -73,7 +73,6 @@ import {
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
-  type ThreadMachineBinding,
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
@@ -141,7 +140,6 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
-import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -613,7 +611,6 @@ const makeWsRpcLayer = (
       });
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
-      const threadMachines = yield* ThreadMachineService.ThreadMachineService;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -1060,7 +1057,6 @@ const makeWsRpcLayer = (
           // The setup script's terminal, once started. Cancel closes only this
           // one so terminals the user opened meanwhile survive.
           let setupTerminalId: string | null = null;
-          let targetMachineBinding: ThreadMachineBinding | undefined;
 
           // Set once the checkout starts; see the session.set below.
           let preparingSessionSet = false;
@@ -1195,68 +1191,6 @@ const makeWsRpcLayer = (
               const worktreePath = targetWorktreePath;
               const requestedAt = yield* nowIso;
               yield* track(worktreeSetupTracker.stageStatus(threadId, "setup-script", "running"));
-              const machineBinding = targetMachineBinding;
-              if (machineBinding && targetProjectId) {
-                yield* threadMachines
-                  .runSetupForThread({
-                    threadId: command.threadId,
-                    projectId: targetProjectId,
-                    binding: machineBinding,
-                  })
-                  .pipe(
-                    Effect.matchEffect({
-                      onFailure: (error) =>
-                        appendSetupScriptActivity({
-                          threadId: command.threadId,
-                          kind: "setup-script.failed",
-                          summary: "Setup script failed",
-                          createdAt: requestedAt,
-                          payload: { detail: error.detail, worktreePath },
-                          tone: "error",
-                        }).pipe(
-                          Effect.andThen(
-                            track(
-                              worktreeSetupTracker.stageStatus(
-                                threadId,
-                                "setup-script",
-                                "failed",
-                                error.detail,
-                              ),
-                            ),
-                          ),
-                          Effect.asVoid,
-                        ),
-                      onSuccess: (setupResult) =>
-                        setupResult.status === "no-script"
-                          ? track(
-                              worktreeSetupTracker.stageStatus(
-                                threadId,
-                                "setup-script",
-                                "skipped",
-                                "no setup script",
-                              ),
-                            )
-                          : recordSetupScriptStarted({
-                              requestedAt,
-                              worktreePath,
-                              scriptId: setupResult.scriptId,
-                              scriptName: setupResult.scriptName,
-                              terminalId: `machine:${machineBinding.machineName}:setup`,
-                            }).pipe(
-                              Effect.andThen(
-                                track(
-                                  worktreeSetupTracker.stageStatus(
-                                    threadId,
-                                    "setup-script",
-                                    "done",
-                                  ),
-                                ),
-                              ),
-                            ),
-                    }),
-                  );
-                return null;
-              }
               const setupResult = yield* projectSetupScriptRunner
                 .runForThread({
                   threadId,
@@ -1499,67 +1433,33 @@ const makeWsRpcLayer = (
               }
             }
 
-            if (
-              prepareWorktree &&
-              shouldPrepareWorktree &&
-              worktreeBaseRef &&
-              bootstrap?.createThread &&
-              createdThread
-            ) {
-              // Worktree checkout and thread-machine provisioning can take
-              // minutes. Project a starting session so every client keeps the
-              // new thread visible while either workspace is prepared.
-              const preparingAt = yield* nowIso;
-              yield* dispatchFromClient({
-                type: "thread.session.set",
-                commandId: yield* serverCommandId("bootstrap-thread-preparing"),
-                threadId,
-                session: {
+            if (prepareWorktree && shouldPrepareWorktree && worktreeBaseRef) {
+              if (bootstrap?.createThread && createdThread) {
+                // The checkout and setup script can run for minutes before the
+                // turn starts, and the created thread carries no message or
+                // turn until then. Project a starting session now so every
+                // client lists the thread as working and a reopened thread
+                // knows to follow the setup stream. A failed or cancelled setup
+                // deletes the thread, so nothing lingers.
+                const preparingAt = yield* nowIso;
+                yield* dispatchFromClient({
+                  type: "thread.session.set",
+                  commandId: yield* serverCommandId("bootstrap-thread-preparing"),
                   threadId,
-                  status: "starting",
-                  providerName: null,
-                  providerInstanceId: bootstrap.createThread.modelSelection.instanceId,
-                  runtimeMode: command.runtimeMode,
-                  activeTurnId: null,
-                  lastError: null,
-                  updatedAt: preparingAt,
-                },
-                createdAt: preparingAt,
-              });
-              preparingSessionSet = true;
-            }
-
-            const machineBinding = yield* threadMachines.ensureForThread(
-              command.threadId,
-              prepareWorktree,
-            );
-            targetMachineBinding = Option.getOrUndefined(machineBinding);
-            const threadMachineBinding = targetMachineBinding;
-            if (threadMachineBinding) {
-              targetWorktreePath = threadMachineBinding.hostWorkspaceRoot;
-              if (!targetProjectId) {
-                const thread = yield* projectionSnapshotQuery.getThreadShellById(command.threadId);
-                targetProjectId = Option.getOrUndefined(thread)?.projectId;
+                  session: {
+                    threadId,
+                    status: "starting",
+                    providerName: null,
+                    providerInstanceId: bootstrap.createThread.modelSelection.instanceId,
+                    runtimeMode: command.runtimeMode,
+                    activeTurnId: null,
+                    lastError: null,
+                    updatedAt: preparingAt,
+                  },
+                  createdAt: preparingAt,
+                });
+                preparingSessionSet = true;
               }
-              yield* track(
-                worktreeSetupTracker.update(threadId, (snapshot) => ({
-                  ...snapshot,
-                  worktreePath: threadMachineBinding.hostWorkspaceRoot,
-                  stages: snapshot.stages.map((stage) =>
-                    stage.id === "checkout" || stage.id === "submodules"
-                      ? { ...stage, status: "skipped", detail: "thread machine workspace" }
-                      : stage,
-                  ),
-                })),
-              );
-            }
-
-            if (
-              prepareWorktree &&
-              shouldPrepareWorktree &&
-              worktreeBaseRef &&
-              !targetMachineBinding
-            ) {
               yield* worktreeSetupTracker.stageStatus(threadId, "checkout", "running");
               let checkoutTotal: number | null = null;
               const worktree = yield* gitWorkflow.createWorktree(
@@ -1747,10 +1647,7 @@ const makeWsRpcLayer = (
                     })
                   : Effect.void;
                 const removeCreatedWorktree =
-                  tracked &&
-                  targetWorktreePath &&
-                  bootstrap?.prepareWorktree &&
-                  !targetMachineBinding
+                  tracked && targetWorktreePath && bootstrap?.prepareWorktree
                     ? closeSetupTerminal.pipe(
                         Effect.ignoreCause({ log: true }),
                         Effect.andThen(
@@ -3290,10 +3187,7 @@ const makeWsRpcLayer = (
               }
               return yield* issueAssetUrl({
                 resource: input.resource,
-                workspaceRoot:
-                  thread.value.machine?.hostWorkspaceRoot ??
-                  thread.value.worktreePath ??
-                  project.value.workspaceRoot,
+                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
               });
             }),
             { "rpc.aggregate": "workspace" },

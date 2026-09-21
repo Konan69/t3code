@@ -33,9 +33,7 @@ import {
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
-import * as MachineServiceLive from "./machine/MachineServiceLive.ts";
-import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
-import * as MachineProcessLauncher from "./process/MachineProcessLauncher.ts";
+import * as ProcessLauncher from "./process/ProcessLauncher.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
@@ -82,16 +80,12 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery.ts";
-import * as ThreadBackgroundLiveness from "./orchestration/ThreadBackgroundLiveness.ts";
-import * as ThreadPlanProgress from "./orchestration/ThreadPlanProgress.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "./orchestration/ThreadSettlementReactor.ts";
-import { MachineReactorLive } from "./orchestration/Layers/MachineReactor.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReactor.ts";
@@ -250,11 +244,6 @@ const HttpServerLive = Layer.unwrap(
 
 const PlatformServicesLive = NodeServices.layer;
 
-const MachineServiceLayerLive = MachineServiceLive.layer;
-const ThreadMachineServiceLayerLive = ThreadMachineService.layer.pipe(
-  Layer.provide(MachineServiceLayerLive),
-);
-
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
@@ -263,9 +252,6 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(StorageCleanup.layer),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ThreadSettlementReactor.layer),
-  Layer.provideMerge(MachineReactorLive),
-  Layer.provideMerge(MachineServiceLayerLive),
-  Layer.provideMerge(ThreadMachineServiceLayerLive),
   Layer.provideMerge(PullRequestSyncReactor.layer),
   Layer.provideMerge(ThreadPullRequestReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
@@ -276,20 +262,12 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
   Layer.provide(ProviderSessionRuntime.layer),
 );
 
-const MachineProcessLauncherSnapshotLayerLive = OrchestrationProjectionSnapshotQueryLive.pipe(
-  Layer.provideMerge(ThreadBackgroundLiveness.layer),
-  Layer.provideMerge(ThreadPlanProgress.layer),
-);
-const MachineProcessLauncherLayerLive = MachineProcessLauncher.layer.pipe(
-  Layer.provide(MachineServiceLayerLive),
-  Layer.provide(MachineProcessLauncherSnapshotLayerLive),
-);
 const OpenCodeRuntimeLayerLive = OpenCodeRuntime.OpenCodeRuntimeProcessLauncher.pipe(
-  Layer.provide(MachineProcessLauncherLayerLive),
+  Layer.provide(ProcessLauncher.HostProcessLauncherLive),
 );
 const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationProcessLauncherLive.pipe(
   Layer.provide(OpenCodeRuntimeLayerLive),
-  Layer.provide(MachineProcessLauncherLayerLive),
+  Layer.provide(ProcessLauncher.HostProcessLauncherLive),
 );
 const ProviderProcessRuntimeLayerLive = ProviderInstanceRegistryLayerLive.pipe(
   Layer.provideMerge(OpenCodeRuntimeLayerLive),
@@ -522,7 +500,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(AntigravityInstallationRefreshLive),
   Layer.provideMerge(ProviderAuthServiceLive),
   // Core Services
-  Layer.provideMerge(Layer.mergeAll(ServerSettingsLayerLive, MachineServiceLayerLive)),
+  Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
   // `GitHubCli` is the registry's own instance, exposed because the asset route fetches
   // GitHub-hosted pull request media with the repository's credential.

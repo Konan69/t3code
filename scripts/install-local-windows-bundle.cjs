@@ -191,12 +191,7 @@ const sha256File = (filePath) =>
   crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 
 const T3_CONNECT_MARKERS = ["pk_live_", "t3-relay", "relay.t3.codes", "hzxSgY2cH10sDU2r"];
-const WSL_OVERLAY_MARKERS = [
-  "relay.t3.codes",
-  "hzxSgY2cH10sDU2r",
-  "pi --mode rpc",
-  "MachineService",
-];
+const WSL_OVERLAY_MARKERS = ["relay.t3.codes", "hzxSgY2cH10sDU2r", "pi --mode rpc"];
 
 const verifyMarkers = (contents, markers, source) => {
   const combined = contents.join("\n");
@@ -336,7 +331,6 @@ const serverMarkers = [
   "preview_set_cookie",
   "subscribeChanges",
   "pi --mode rpc",
-  "MachineService",
   "claude-bridge",
 ];
 

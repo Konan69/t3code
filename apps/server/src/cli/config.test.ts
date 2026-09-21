@@ -57,7 +57,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
     devAllowedOrigins: [],
-    machineIdentityManifest: undefined,
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
@@ -202,7 +201,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_PORT: "4001",
                   T3CODE_HOST: "0.0.0.0",
                   T3CODE_HOME: baseDir,
-                  T3_MACHINE_IDENTITY_MANIFEST: "/etc/t3/machine-identity.json",
                   VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
                   T3CODE_DEV_ALLOWED_ORIGINS:
                     "https://host.example.ts.net, https://phone.example.ts.net ",
@@ -232,7 +230,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
-        machineIdentityManifest: "/etc/t3/machine-identity.json",
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
