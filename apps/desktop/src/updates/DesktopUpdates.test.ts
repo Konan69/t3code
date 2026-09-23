@@ -42,6 +42,11 @@ const makeForkReleaseReady = (alreadyBuilt: boolean) => ({
   alreadyBuilt,
 });
 
+const forkUpdateAvailable = Effect.succeed({
+  isUpdateAvailable: true,
+  version: forkNightlyVersion,
+});
+
 describe("DesktopUpdates", () => {
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
@@ -114,6 +119,7 @@ describe("DesktopUpdates", () => {
     () => {
       const upstreamTags: string[] = [];
       const harness = makeHarness({
+        checkForUpdates: forkUpdateAvailable,
         forkRelease: configuredForkRelease((input) =>
           Effect.sync(() => {
             upstreamTags.push(input.upstreamTag);
@@ -158,9 +164,66 @@ describe("DesktopUpdates", () => {
     },
   );
 
+  it.effect("rejects a fork feed result that is not an available update", () => {
+    const harness = makeHarness({
+      checkForUpdates: Effect.succeed({
+        isUpdateAvailable: false,
+        version: forkNightlyVersion,
+      }),
+      forkRelease: configuredForkRelease(() => Effect.succeed(makeForkReleaseReady(true))),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+
+        assert.isTrue(result.accepted);
+        assert.isFalse(result.completed);
+        assert.equal(result.state.status, "error");
+        assert.equal(result.state.errorContext, "build");
+        assert.equal(result.state.buildError, "fork-release-update-unavailable");
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("rejects a fork feed result for a different version", () => {
+    const harness = makeHarness({
+      checkForUpdates: Effect.succeed({
+        isUpdateAvailable: true,
+        version: "1.2.4-nightly.20260709.765.1",
+      }),
+      forkRelease: configuredForkRelease(() => Effect.succeed(makeForkReleaseReady(true))),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+
+        assert.isFalse(result.completed);
+        assert.equal(result.state.buildError, "fork-release-update-unavailable");
+        assert.include(result.state.message ?? "", "instead of");
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("reports the dispatched run while building, then downloads", () => {
     const runUrl = "https://github.com/Konan69/t3code/actions/runs/123";
     const harness = makeHarness({
+      checkForUpdates: forkUpdateAvailable,
       forkRelease: configuredForkRelease((input) =>
         input.onRunStarted(runUrl).pipe(Effect.as(makeForkReleaseReady(false))),
       ),

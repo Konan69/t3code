@@ -93,7 +93,8 @@ export type DesktopUpdateChannel = "latest" | "nightly";
 export type DesktopUpdateBuildError =
   | "fork-release-token-missing"
   | "fork-release-dispatch-failed"
-  | "fork-release-run-failed";
+  | "fork-release-run-failed"
+  | "fork-release-update-unavailable";
 export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly";
 
 export const DesktopUpdateStatusSchema = Schema.Literals([
@@ -114,6 +115,7 @@ export const DesktopUpdateBuildErrorSchema = Schema.Literals([
   "fork-release-token-missing",
   "fork-release-dispatch-failed",
   "fork-release-run-failed",
+  "fork-release-update-unavailable",
 ]);
 export const DesktopAppStageLabelSchema = Schema.Literals(["Alpha", "Dev", "Nightly"]);
 

@@ -22,7 +22,7 @@ export const flushCallbacks = Effect.yieldNow;
 
 export interface UpdatesHarnessOptions {
   readonly checkForUpdates?: Effect.Effect<
-    void,
+    ElectronUpdater.ElectronUpdaterCheckResult | null | void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
   >;
   readonly beforeSetUpdateChannel?: Effect.Effect<void>;
@@ -89,7 +89,10 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     setDisableDifferentialDownload: () => options.setDisableDifferentialDownload ?? Effect.void,
     checkForUpdates: Effect.sync(() => {
       checkCount += 1;
-    }).pipe(Effect.andThen(options.checkForUpdates ?? Effect.void)),
+    }).pipe(
+      Effect.andThen(options.checkForUpdates ?? Effect.succeed(null)),
+      Effect.map((result) => result ?? null),
+    ),
     downloadUpdate: Effect.sync(() => {
       downloadCount += 1;
     }).pipe(Effect.andThen(options.downloadUpdate ?? Effect.void)),

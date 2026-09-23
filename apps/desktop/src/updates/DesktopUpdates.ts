@@ -153,6 +153,20 @@ export class DesktopUpdateUnexpectedActionError extends Schema.TaggedError<Deskt
   }
 }
 
+export class DesktopForkUpdateUnavailableError extends Schema.TaggedError<DesktopForkUpdateUnavailableError>()(
+  "DesktopForkUpdateUnavailableError",
+  {
+    expectedVersion: Schema.String,
+    actualVersion: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    return this.actualVersion === null
+      ? `The fork update feed did not offer ${this.expectedVersion}.`
+      : `The fork update feed offered ${this.actualVersion} instead of ${this.expectedVersion}.`;
+  }
+}
+
 export type DesktopUpdateConfigureError = never;
 
 export const DesktopUpdateSetChannelError = Schema.Union([
@@ -543,7 +557,17 @@ export const make = Effect.gen(function* () {
           forkVersion: prepared.value.version,
           alreadyBuilt: prepared.value.alreadyBuilt,
         });
-        yield* electronUpdater.checkForUpdates;
+        const forkUpdate = yield* electronUpdater.checkForUpdates;
+        if (
+          forkUpdate === null ||
+          !forkUpdate.isUpdateAvailable ||
+          forkUpdate.version !== prepared.value.version
+        ) {
+          return yield* new DesktopForkUpdateUnavailableError({
+            expectedVersion: prepared.value.version,
+            actualVersion: forkUpdate?.version ?? null,
+          });
+        }
         const checkedAt = yield* currentIsoTimestamp;
         const current = yield* Ref.get(updateStateRef);
         downloadState = reduceDesktopUpdateStateOnUpdateAvailable(
@@ -565,6 +589,24 @@ export const make = Effect.gen(function* () {
       return { accepted: true, completed: true };
     }).pipe(
       Effect.catchTags({
+        DesktopForkUpdateUnavailableError: Effect.fn("desktop.updates.handleForkUpdateUnavailable")(
+          function* (error) {
+            yield* updateState((current) =>
+              reduceDesktopUpdateStateOnBuildFailure(
+                current,
+                "fork-release-update-unavailable",
+                error.message,
+                current.runUrl,
+              ),
+            );
+            yield* logUpdaterError(error.message, {
+              errorTag: error._tag,
+              expectedVersion: error.expectedVersion,
+              actualVersion: error.actualVersion,
+            });
+            return { accepted: true, completed: false };
+          },
+        ),
         ElectronUpdaterCheckForUpdatesError: Effect.fn(
           "desktop.updates.handleForkFeedCheckFailure",
         )(function* (error) {

@@ -11,7 +11,12 @@ const { autoUpdaterMock } = vi.hoisted(() => ({
     channel: "latest",
     disableDifferentialDownload: false,
     fullChangelog: false,
-    checkForUpdates: vi.fn(() => Promise.resolve(null)),
+    checkForUpdates: vi.fn<
+      () => Promise<{
+        readonly isUpdateAvailable: boolean;
+        readonly updateInfo: { readonly version: string };
+      } | null>
+    >(() => Promise.resolve(null)),
     downloadUpdate: vi.fn(() => Promise.resolve([])),
     on: vi.fn(),
     quitAndInstall: vi.fn(),
@@ -58,6 +63,25 @@ describe("ElectronUpdater", () => {
 
       assert.deepEqual(autoUpdaterMock.on.mock.calls, [["update-available", listener]]);
       assert.deepEqual(autoUpdaterMock.removeListener.mock.calls, [["update-available", listener]]);
+    }).pipe(Effect.provide(ElectronUpdater.layer)),
+  );
+
+  it.effect("returns update availability and version from update checks", () =>
+    Effect.gen(function* () {
+      autoUpdaterMock.checkForUpdates.mockImplementationOnce(() =>
+        Promise.resolve({
+          isUpdateAvailable: true,
+          updateInfo: { version: "1.2.4-nightly.20260709.766.1" },
+        }),
+      );
+      const updater = yield* ElectronUpdater.ElectronUpdater;
+
+      const result = yield* updater.checkForUpdates;
+
+      assert.deepEqual(result, {
+        isUpdateAvailable: true,
+        version: "1.2.4-nightly.20260709.766.1",
+      });
     }).pipe(Effect.provide(ElectronUpdater.layer)),
   );
 
