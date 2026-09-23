@@ -425,6 +425,16 @@ jobs:
 
           vp run dist:desktop:artifact "${args[@]}"
 
+      - name: Build resource monitor for a CLI-only archive
+        if: inputs.cli_archive && !inputs.desktop_artifact && steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cargo build \
+            --locked \
+            --release \
+            --manifest-path native/resource-monitor/Cargo.toml \
+            --target "${{ inputs.rust_target }}"
+
       # The single-executable is built with a Node that supports --build-sea
       # (25.7+); the repo itself stays on the engines.node version. It always
       # injects into the runner's own Node: tsdown's cross-target download path
