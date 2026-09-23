@@ -21,6 +21,41 @@ it("parses migration ids and permanent names from the static table", () => {
   );
 });
 
+it("parses migration tuples reformatted across multiple lines", () => {
+  const reformatted = `
+const migrationEntries = [
+  [
+    44,
+    "UpstreamMigration",
+    Migration0044,
+  ],
+  [
+    900,
+    "ForkMigration",
+    Migration0900,
+  ],
+] as const satisfies ReadonlyArray<MigrationEntry>;
+`;
+
+  assert.deepStrictEqual(parseMigrationManifest(reformatted), [
+    { id: 44, name: "UpstreamMigration" },
+    { id: 900, name: "ForkMigration" },
+  ]);
+});
+
+it("rejects any migration entry that is not a static identity tuple", () => {
+  assert.throws(
+    () =>
+      parseMigrationManifest(`
+const migrationEntries = [
+  [44, "UpstreamMigration", Migration0044],
+  makeMigrationEntry(900, "ForkMigration"),
+] as const;
+`),
+    /Migration entry 2 is not a static tuple/,
+  );
+});
+
 it("reports a fork-only migration that reuses an upstream id", () => {
   const upstream = parseMigrationManifest(manifest([44, "UpstreamMigration"]));
   const merged = parseMigrationManifest(
@@ -46,6 +81,6 @@ it("allows shared upstream identities and fork migrations with reserved ids", ()
 it("hard-fails when a migration table cannot be parsed", () => {
   assert.throws(
     () => parseMigrationManifest("export const migrationManifest = [];"),
-    /No migration entries were found in the migration table/,
+    /No migrationEntries table was found/,
   );
 });
