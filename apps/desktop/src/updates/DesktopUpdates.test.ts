@@ -114,6 +114,31 @@ describe("DesktopUpdates", () => {
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  it.effect("keeps fork builds on nightly when latest is requested", () => {
+    const harness = makeHarness({
+      beforeSetUpdateChannel: Effect.void,
+      forkRelease: configuredForkRelease(() => Effect.die("unexpected fork release request")),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        assert.equal((yield* updates.getState).channel, "nightly");
+        assert.deepEqual(harness.channels(), ["nightly"]);
+
+        const state = yield* updates.setChannel("latest");
+        const persisted = yield* settings.get;
+        assert.equal(state.channel, "nightly");
+        assert.deepEqual(harness.channels(), ["nightly"]);
+        assert.equal(persisted.updateChannel, "latest");
+        assert.equal(persisted.updateChannelConfiguredByUser, false);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect(
     "passes the detected upstream version before downloading an existing fork release",
     () => {

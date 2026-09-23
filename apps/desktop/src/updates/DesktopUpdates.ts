@@ -493,7 +493,7 @@ export const make = Effect.gen(function* () {
     let switchedToForkFeed = false;
     return yield* Effect.gen(function* () {
       let downloadState = state;
-      if (Option.isSome(forkRelease.configuration) && state.channel === "nightly") {
+      if (Option.isSome(forkRelease.configuration)) {
         const availableVersion = state.availableVersion;
         if (availableVersion === null) {
           return { accepted: false, completed: false };
@@ -1044,8 +1044,11 @@ export const make = Effect.gen(function* () {
       }
 
       const settings = yield* desktopSettings.get;
+      const updateChannel = Option.isSome(forkRelease.configuration)
+        ? "nightly"
+        : settings.updateChannel;
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+      yield* setState(createBaseUpdateState(updateChannel, enabled, environment));
       if (!enabled) {
         return;
       }
@@ -1053,7 +1056,7 @@ export const make = Effect.gen(function* () {
 
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
-      yield* applyAutoUpdaterChannel(settings.updateChannel);
+      yield* applyAutoUpdaterChannel(updateChannel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
@@ -1090,14 +1093,15 @@ export const make = Effect.gen(function* () {
       yield* startUpdatePollers;
     }).pipe(Effect.withSpan("desktop.updates.configure")),
     setChannel: Effect.fn("desktop.updates.setChannel")(function* (
-      nextChannel: DesktopUpdateChannel,
+      requestedChannel: DesktopUpdateChannel,
     ) {
-      yield* Effect.annotateCurrentSpan({ channel: nextChannel });
+      const nextChannel = Option.isSome(forkRelease.configuration) ? "nightly" : requestedChannel;
+      yield* Effect.annotateCurrentSpan({ channel: nextChannel, requestedChannel });
       const activeAction = yield* tryStartChannelChange;
       if (Option.isSome(activeAction)) {
         return yield* new DesktopUpdateActionInProgressError({
           action: activeAction.value === "install-recovery" ? "install" : activeAction.value,
-          requestedChannel: nextChannel,
+          requestedChannel,
         });
       }
 
