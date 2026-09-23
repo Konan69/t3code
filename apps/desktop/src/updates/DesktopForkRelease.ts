@@ -13,8 +13,8 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { resolveForkReleaseMetadata } from "@t3tools/shared/forkRelease";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
-declare const __T3CODE_BUILD_DESKTOP_UPDATE_REPOSITORY__: string | undefined;
-declare const __T3CODE_BUILD_DESKTOP_UPDATE_BRANCH__: string | undefined;
+declare const __T3CODE_BUILD_DESKTOP_FORK_REPOSITORY__: string | undefined;
+declare const __T3CODE_BUILD_DESKTOP_FORK_BRANCH__: string | undefined;
 
 const GITHUB_API_URL = "https://api.github.com";
 const GITHUB_USER = "Konan69";
@@ -48,7 +48,7 @@ export function resolveForkReleaseConfiguration(
   if (!normalizedRepository && !normalizedBranch) return Option.none();
   if (!normalizedRepository || !normalizedBranch) {
     throw new Error(
-      "Fork desktop updates require both T3CODE_DESKTOP_UPDATE_REPOSITORY and T3CODE_DESKTOP_UPDATE_BRANCH at build time.",
+      "Fork desktop updates require both T3CODE_DESKTOP_FORK_REPOSITORY and T3CODE_DESKTOP_FORK_BRANCH at build time.",
     );
   }
   const [owner, repo, ...rest] = normalizedRepository.split("/");
@@ -395,12 +395,12 @@ export const makeWithConfiguration = (configuration: Option.Option<ForkReleaseCo
 
 export const make = makeWithConfiguration(
   resolveForkReleaseConfiguration(
-    typeof __T3CODE_BUILD_DESKTOP_UPDATE_REPOSITORY__ === "undefined"
+    typeof __T3CODE_BUILD_DESKTOP_FORK_REPOSITORY__ === "undefined"
       ? undefined
-      : __T3CODE_BUILD_DESKTOP_UPDATE_REPOSITORY__,
-    typeof __T3CODE_BUILD_DESKTOP_UPDATE_BRANCH__ === "undefined"
+      : __T3CODE_BUILD_DESKTOP_FORK_REPOSITORY__,
+    typeof __T3CODE_BUILD_DESKTOP_FORK_BRANCH__ === "undefined"
       ? undefined
-      : __T3CODE_BUILD_DESKTOP_UPDATE_BRANCH__,
+      : __T3CODE_BUILD_DESKTOP_FORK_BRANCH__,
   ),
 );
 

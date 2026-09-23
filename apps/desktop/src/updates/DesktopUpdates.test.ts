@@ -21,7 +21,7 @@ import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 const upstreamNightlyVersion = "1.2.4-nightly.20260709.766";
 const upstreamNightlyTag = `v${upstreamNightlyVersion}`;
-const forkNightlyVersion = "1.2.4-nightly.20260709.766001";
+const forkNightlyVersion = "1.2.4-nightly.20260709.766.1";
 const forkReleaseConfiguration = {
   owner: "Konan69",
   repo: "t3code",
@@ -109,51 +109,54 @@ describe("DesktopUpdates", () => {
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("downloads an already-built fork release only after the click", () => {
-    const upstreamTags: string[] = [];
-    const harness = makeHarness({
-      forkRelease: configuredForkRelease((input) =>
-        Effect.sync(() => {
-          upstreamTags.push(input.upstreamTag);
-          return makeForkReleaseReady(true);
+  it.effect(
+    "passes the detected upstream version before downloading an existing fork release",
+    () => {
+      const upstreamTags: string[] = [];
+      const harness = makeHarness({
+        forkRelease: configuredForkRelease((input) =>
+          Effect.sync(() => {
+            upstreamTags.push(input.upstreamTag);
+            return makeForkReleaseReady(true);
+          }),
+        ),
+      });
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          assert.deepEqual(harness.autoDownloadValues(), [false]);
+          yield* updates.setChannel("nightly");
+          harness.emit("update-available", { version: upstreamNightlyVersion });
+          yield* flushCallbacks;
+          assert.equal(harness.downloadCount(), 0);
+
+          const result = yield* updates.download;
+
+          assert.isTrue(result.accepted);
+          assert.isTrue(result.completed);
+          assert.deepEqual(upstreamTags, [upstreamNightlyTag]);
+          assert.deepEqual(harness.feedUrls().at(-2), {
+            provider: "github",
+            owner: "Konan69",
+            repo: "t3code",
+            releaseType: "prerelease",
+            channel: "nightly",
+          });
+          assert.deepEqual(harness.feedUrls().at(-1), {
+            provider: "generic",
+            url: "http://localhost:4141",
+          });
+          assert.equal(harness.downloadCount(), 1);
+          assert.include(
+            harness.sentStates.map((state) => state.status),
+            "building",
+          );
         }),
-      ),
-    });
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-        assert.deepEqual(harness.autoDownloadValues(), [false]);
-        yield* updates.setChannel("nightly");
-        harness.emit("update-available", { version: upstreamNightlyVersion });
-        yield* flushCallbacks;
-        assert.equal(harness.downloadCount(), 0);
-
-        const result = yield* updates.download;
-
-        assert.isTrue(result.accepted);
-        assert.isTrue(result.completed);
-        assert.deepEqual(upstreamTags, [upstreamNightlyTag]);
-        assert.deepEqual(harness.feedUrls().at(-2), {
-          provider: "github",
-          owner: "Konan69",
-          repo: "t3code",
-          releaseType: "prerelease",
-          channel: "nightly",
-        });
-        assert.deepEqual(harness.feedUrls().at(-1), {
-          provider: "generic",
-          url: "http://localhost:4141",
-        });
-        assert.equal(harness.downloadCount(), 1);
-        assert.include(
-          harness.sentStates.map((state) => state.status),
-          "building",
-        );
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
 
   it.effect("reports the dispatched run while building, then downloads", () => {
     const runUrl = "https://github.com/Konan69/t3code/actions/runs/123";

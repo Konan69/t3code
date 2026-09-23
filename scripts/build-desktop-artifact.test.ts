@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
+import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -93,6 +94,14 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
+
+interface AppUpdateRewriteHook {
+  readonly rewriteAppUpdateFile: (resourcesDir: string, repository: string) => Promise<void>;
+}
+
+const appUpdateRewriteHook = NodeModule.createRequire(import.meta.url)(
+  "./rewrite-desktop-app-update.cjs",
+) as AppUpdateRewriteHook;
 
 // A minimal stand-in for the Linux CLI release archive: one top-level
 // directory named after the archive stem holding the executable, the web
@@ -250,12 +259,14 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
+    assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42.1"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42.1"), "T3 Code (Nightly)");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -270,11 +281,17 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
       windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
     });
+    assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17-nightly.20260413.42.1"), {
+      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
+    });
   });
 
   it("switches the bundled splash and favicon branding for nightly versions", () => {
     assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "production");
     assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
+    assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42.1"), "nightly");
   });
 
   it.effect("resolves GitHub desktop publish config from Effect config", () =>
@@ -284,7 +301,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
+                T3CODE_DESKTOP_PUBLISH_REPOSITORY: "pingdotgg/t3code",
               },
             }),
           ),
@@ -1903,18 +1920,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const config = yield* createBuildConfig(
         "win",
         "nsis",
-        "1.2.3-nightly.20260923.1",
+        "1.2.3-nightly.20260923.1.1",
         false,
         false,
         undefined,
         undefined,
+        false,
+        "x64",
+        "/repo/scripts/rewrite-desktop-app-update.cjs",
       );
 
       const win = config.win as Record<string, unknown>;
-      const [publish] = config.publish as ReadonlyArray<Record<string, unknown>>;
+      const publish = (config.publish as ReadonlyArray<Record<string, unknown>>)[0]!;
       assert.equal(win.icon, "icon.ico");
       assert.equal(win.signAndEditExecutable, true);
       assert.notProperty(win, "azureSignOptions");
+      assert.equal(config.afterPack, "/repo/scripts/rewrite-desktop-app-update.cjs");
+      assert.equal(publish.owner, "Konan69");
+      assert.equal(publish.repo, "t3code");
       assert.notProperty(publish, "publisherName");
     }).pipe(
       Effect.provide(
@@ -1922,6 +1945,46 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "Konan69/t3code" } }),
         ),
       ),
+    ),
+  );
+
+  it.effect("rewrites the embedded app-update.yml to the upstream detection feed", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const resourcesDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-app-update-rewrite-",
+        });
+        const appUpdatePath = path.join(resourcesDir, "app-update.yml");
+        yield* fs.writeFileString(
+          appUpdatePath,
+          [
+            "owner: Konan69",
+            "repo: t3code",
+            "provider: github",
+            "releaseType: prerelease",
+            "channel: nightly",
+            "publisherName:",
+            "  - T3 Code",
+            "updaterCacheDirName: t3code-updater",
+            "",
+          ].join("\n"),
+        );
+
+        yield* Effect.promise(() =>
+          appUpdateRewriteHook.rewriteAppUpdateFile(resourcesDir, "pingdotgg/t3code"),
+        );
+        const embedded = yield* fs.readFileString(appUpdatePath);
+
+        assert.include(embedded, "owner: pingdotgg\n");
+        assert.include(embedded, "repo: t3code\n");
+        assert.include(embedded, "provider: github\n");
+        assert.include(embedded, "releaseType: prerelease\n");
+        assert.include(embedded, "channel: nightly\n");
+        assert.notInclude(embedded, "publisherName");
+        assert.notInclude(embedded, "T3 Code");
+      }),
     ),
   );
 

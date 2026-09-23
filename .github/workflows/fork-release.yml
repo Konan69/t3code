@@ -244,8 +244,8 @@ jobs:
       T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.prepare.outputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ needs.prepare.outputs.relay_url }}
-      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
-      T3CODE_DESKTOP_UPDATE_BRANCH: ${{ inputs.branch || 'local/fork-feed' }}
+      T3CODE_DESKTOP_FORK_REPOSITORY: ${{ github.repository }}
+      T3CODE_DESKTOP_FORK_BRANCH: ${{ inputs.branch || 'local/fork-feed' }}
     steps:
       - name: Checkout merged build
         uses: actions/checkout@v6
@@ -302,7 +302,8 @@ jobs:
       release_channel: nightly
       relay_client_tracing: false
       copy_example_env: true
-      update_repository: ${{ github.repository }}
+      publish_repository: ${{ github.repository }}
+      detection_repository: pingdotgg/t3code
       clerk_publishable_key: ${{ needs.prepare.outputs.clerk_publishable_key }}
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
@@ -330,7 +331,8 @@ jobs:
       release_channel: nightly
       relay_client_tracing: false
       copy_example_env: true
-      update_repository: pingdotgg/t3code
+      publish_repository: ${{ github.repository }}
+      detection_repository: pingdotgg/t3code
       clerk_publishable_key: ${{ needs.prepare.outputs.clerk_publishable_key }}
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
@@ -396,7 +398,7 @@ jobs:
           cat > release-notes.md <<EOF
           Fork desktop build with the local overlay, merged from upstream \`$UPSTREAM_TAG\`.
 
-          Version \`$FORK_VERSION\` scales the upstream nightly sequence by 1000 and adds 1. This keeps the required \`-nightly.YYYYMMDD.N\` channel shape, sorts strictly above its source nightly under electron-updater's semver comparison, and deterministically identifies an already-published source build.
+          Version \`$FORK_VERSION\` appends a numeric fork identifier to the upstream nightly version. This keeps the nightly channel shape, sorts above its source nightly and below the next upstream nightly under electron-updater's semver comparison, and deterministically identifies an already-published source build.
 
           Built from \`$BUILD_SHA\`. This Windows build is intentionally unsigned.
           EOF

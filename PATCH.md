@@ -67,17 +67,17 @@ Do not publish or install local artifacts as part of source maintenance. In part
 
 ## Fork desktop update feed
 
-The fork's `.github/workflows/fork-release.yml` runs daily and can also be dispatched manually. It merges the selected `pingdotgg/t3code` nightly tag into the overlay branch, rejects upstream/fork migration-id collisions, and reuses the upstream desktop release workflow to publish only:
+The fork's `.github/workflows/fork-release.yml` has no schedule. The desktop app dispatches it after the user clicks Update for a detected upstream nightly; maintainers can also dispatch it manually with a required upstream tag. It merges that `pingdotgg/t3code` nightly tag into `local/fork-feed`, rejects upstream/fork migration-id collisions, and reuses the upstream desktop release workflow to publish only:
 
 - the unsigned Windows x64 NSIS installer, blockmap, and `nightly.yml` updater manifest;
 - the Linux x64 CLI archive embedded as the Windows WSL runtime;
 - `SHA256SUMS` for the CLI archive.
 
-The build sets its update repository to `Konan69/t3code`, so its packaged `app-update.yml` follows the fork's prereleases. A source tag ending in nightly sequence `N` maps deterministically to fork sequence `N * 1000 + 1`. For example, upstream `0.0.43-nightly.20260923.2150` becomes `0.0.43-nightly.20260923.2150001`. This preserves the nightly channel pattern and sorts strictly above the source build under electron-updater's semver comparison.
+The packaged `app-update.yml` follows `pingdotgg/t3code`, so checks detect upstream nightlies without building or downloading. On Update, the app uses `gh auth token --user Konan69` inside WSL, dispatches the fork workflow when needed, waits for its prerelease, and temporarily switches electron-updater to `Konan69/t3code` for download. A source version ending in nightly sequence `N` maps to `<core>-nightly.<date>.<N>.1`; it sorts above source nightly `N` and below upstream nightly `N+1` under electron-updater's semver comparison.
 
 ### One-time bootstrap
 
-An existing stock installation still follows `pingdotgg/t3code`; its Update button cannot discover this fork feed. Download and install the first fork Windows `.exe` manually from the [Konan69/t3code prereleases](https://github.com/Konan69/t3code/releases). After that one install, the in-app Update button follows fork builds.
+A stock installation does not contain the click-triggered fork build logic. Download and install the first fork Windows `.exe` manually from the [Konan69/t3code prereleases](https://github.com/Konan69/t3code/releases). After that one install, the fork app detects upstream nightlies and builds the matching fork release when Update is clicked.
 
 ### Merge-conflict issue
 

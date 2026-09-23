@@ -10,7 +10,7 @@ import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopForkRelease from "./DesktopForkRelease.ts";
 
 const upstreamTag = "v1.2.4-nightly.20260709.766";
-const forkTag = "v1.2.4-nightly.20260709.766001";
+const forkTag = "v1.2.4-nightly.20260709.766.1";
 const configuration = Option.some({
   owner: "Konan69",
   repo: "t3code",
@@ -83,7 +83,7 @@ describe("DesktopForkRelease", () => {
       const result = yield* service.ensureRelease(ensureInput([]));
 
       assert.deepEqual(result, {
-        version: "1.2.4-nightly.20260709.766001",
+        version: "1.2.4-nightly.20260709.766.1",
         tag: forkTag,
         alreadyBuilt: true,
       });

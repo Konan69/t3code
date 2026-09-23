@@ -267,9 +267,10 @@ available.
   - No automatic download or install.
   - The desktop UI shows a rocket update button when an update is available; click once to download, click again after download to restart/install.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
-- Repository slug source:
-  - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
+- Publish repository slug source:
+  - `T3CODE_DESKTOP_PUBLISH_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
+- `T3CODE_DESKTOP_DETECTION_REPOSITORY` optionally rewrites the packaged `app-update.yml` to a separate GitHub repository without changing the electron-builder publish target.
 - Required release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases

@@ -18,11 +18,11 @@ const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
-  __T3CODE_BUILD_DESKTOP_UPDATE_REPOSITORY__: JSON.stringify(
-    process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ?? "",
+  __T3CODE_BUILD_DESKTOP_FORK_REPOSITORY__: JSON.stringify(
+    process.env.T3CODE_DESKTOP_FORK_REPOSITORY?.trim() ?? "",
   ),
-  __T3CODE_BUILD_DESKTOP_UPDATE_BRANCH__: JSON.stringify(
-    process.env.T3CODE_DESKTOP_UPDATE_BRANCH?.trim() ?? "",
+  __T3CODE_BUILD_DESKTOP_FORK_BRANCH__: JSON.stringify(
+    process.env.T3CODE_DESKTOP_FORK_BRANCH?.trim() ?? "",
   ),
 };
 

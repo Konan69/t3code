@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 const UPSTREAM_NIGHTLY_TAG = /^v(?<core>\d+\.\d+\.\d+)-nightly\.(?<date>\d{8})\.(?<sequence>\d+)$/;
 const UpstreamNightlyTag = Schema.String.check(Schema.isPattern(UPSTREAM_NIGHTLY_TAG));
 const decodeUpstreamNightlyTag = Schema.decodeUnknownSync(UpstreamNightlyTag);
-const FORK_SEQUENCE_SCALE = 1000n;
+const FORK_BUILD_IDENTIFIER = 1;
 
 export interface ForkReleaseMetadata {
   readonly upstreamTag: string;
@@ -22,8 +22,7 @@ export function resolveForkReleaseMetadata(upstreamTag: string): ForkReleaseMeta
     throw new Error(`Could not decode upstream nightly tag: ${upstreamTag}`);
   }
 
-  const forkSequence = BigInt(sequence) * FORK_SEQUENCE_SCALE + 1n;
-  const version = `${core}-nightly.${date}.${forkSequence}`;
+  const version = `${core}-nightly.${date}.${sequence}.${FORK_BUILD_IDENTIFIER}`;
   return {
     upstreamTag,
     version,
