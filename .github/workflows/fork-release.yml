@@ -91,10 +91,11 @@ jobs:
         run: node scripts/resolve-fork-release.ts "${{ steps.upstream.outputs.tag }}" --github-output
 
       - id: existing
-        name: Skip an already published upstream build
+        name: Check for a complete fork release
         uses: actions/github-script@v8
         env:
           FORK_TAG: ${{ steps.metadata.outputs.tag }}
+          FORK_VERSION: ${{ steps.metadata.outputs.version }}
         with:
           script: |
             try {
@@ -103,8 +104,22 @@ jobs:
                 repo: context.repo.repo,
                 tag: process.env.FORK_TAG,
               });
-              core.notice(`Fork release already exists: ${release.data.html_url}`);
-              core.setOutput('should_build', 'false');
+              const installer = `T3-Code-${process.env.FORK_VERSION}-x64.exe`;
+              const requiredAssets = [
+                'nightly.yml',
+                installer,
+                `${installer}.blockmap`,
+                `t3-${process.env.FORK_VERSION}-linux-x64.tar.gz`,
+              ];
+              const publishedAssets = new Set(release.data.assets.map((asset) => asset.name));
+              const missingAssets = requiredAssets.filter((asset) => !publishedAssets.has(asset));
+              if (missingAssets.length === 0) {
+                core.notice(`Complete fork release already exists: ${release.data.html_url}`);
+                core.setOutput('should_build', 'false');
+              } else {
+                core.warning(`Fork release is incomplete; rebuilding missing assets: ${missingAssets.join(', ')}`);
+                core.setOutput('should_build', 'true');
+              }
             } catch (error) {
               if (error.status !== 404) throw error;
               core.setOutput('should_build', 'true');
@@ -346,6 +361,7 @@ jobs:
       rust_target: x86_64-pc-windows-msvc
       resource_key: win32-x64
       cli_archive: false
+      unsigned: true
 
   release:
     name: Publish fork prerelease
