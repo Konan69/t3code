@@ -153,7 +153,23 @@ const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .filter((entry) => entry.length > 0);
 const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
+  // Fork: a production build without these ships with T3 Connect (and the
+  // Cloudbox controls behind it) silently missing. The values are public and
+  // live in `.env.example`; `cp .env.example .env` before building.
+  if (command === "build") {
+    const missing = [
+      ["VITE_T3CODE_RELAY_URL", configuredRelayUrl],
+      ["VITE_CLERK_PUBLISHABLE_KEY", configuredClerkPublishableKey],
+      ["VITE_CLERK_JWT_TEMPLATE", configuredClerkJwtTemplate],
+      ["VITE_CLERK_CLI_OAUTH_CLIENT_ID", configuredClerkCliOAuthClientId],
+    ].flatMap(([name, value]) => (value ? [] : [name]));
+    if (missing.length > 0) {
+      throw new Error(
+        `T3 Connect public config missing (${missing.join(", ")}). Run \`cp .env.example .env\` in the repo root.`,
+      );
+    }
+  }
   return {
     assetsInclude: ["**/*.wasm"],
     plugins: [
