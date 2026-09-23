@@ -114,6 +114,34 @@ describe("updateMachine", () => {
     expect(state.downloadPercent).toBe(100);
   });
 
+  it("keeps the staged installer when the restored feed offers another version", () => {
+    const releaseNotes = [
+      { version: "1.1.0-nightly.20260911.4.1", items: ["fork changes"], totalItems: 1 },
+    ];
+    const state = reduceDesktopUpdateStateOnUpdateAvailable(
+      {
+        ...createInitialDesktopUpdateState("1.0.0", runtimeInfo, "nightly"),
+        enabled: true,
+        status: "downloaded",
+        availableVersion: "1.1.0-nightly.20260911.4.1",
+        downloadedVersion: "1.1.0-nightly.20260911.4.1",
+        releaseNotes,
+        omittedReleaseCount: 2,
+        downloadPercent: 100,
+      },
+      "1.1.0-nightly.20260911.5",
+      "2026-03-04T00:00:00.000Z",
+      [{ version: "1.1.0-nightly.20260911.5", items: ["upstream"], totalItems: 1 }],
+    );
+
+    expect(state.status).toBe("downloaded");
+    expect(state.availableVersion).toBe("1.1.0-nightly.20260911.4.1");
+    expect(state.downloadedVersion).toBe("1.1.0-nightly.20260911.4.1");
+    expect(state.releaseNotes).toBe(releaseNotes);
+    expect(state.omittedReleaseCount).toBe(2);
+    expect(state.downloadPercent).toBe(100);
+  });
+
   it("tracks fork build start, run URL, and typed failure", () => {
     const available = {
       ...createInitialDesktopUpdateState("1.0.0", runtimeInfo, "nightly"),

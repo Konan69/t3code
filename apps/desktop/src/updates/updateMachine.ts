@@ -106,23 +106,37 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
   releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote> = [],
   omittedReleaseCount = 0,
 ): DesktopUpdateState {
-  const isDownloadedVersion = state.downloadedVersion === version;
-  const preserveReleaseNotes = isDownloadedVersion && releaseNotes.length === 0;
+  if (state.downloadedVersion !== null) {
+    return {
+      ...state,
+      status: "downloaded",
+      availableVersion: state.downloadedVersion,
+      downloadPercent: 100,
+      checkedAt,
+      runUrl: null,
+      startedAt: null,
+      message: null,
+      errorContext: null,
+      buildError: null,
+      canRetry: true,
+    };
+  }
+
   return {
     ...state,
-    status: isDownloadedVersion ? "downloaded" : "available",
+    status: "available",
     availableVersion: version,
-    downloadedVersion: isDownloadedVersion ? version : null,
-    releaseNotes: preserveReleaseNotes ? state.releaseNotes : releaseNotes,
-    omittedReleaseCount: preserveReleaseNotes ? state.omittedReleaseCount : omittedReleaseCount,
-    downloadPercent: isDownloadedVersion ? 100 : null,
+    downloadedVersion: null,
+    releaseNotes,
+    omittedReleaseCount,
+    downloadPercent: null,
     checkedAt,
     runUrl: null,
     startedAt: null,
     message: null,
     errorContext: null,
     buildError: null,
-    canRetry: isDownloadedVersion,
+    canRetry: false,
   };
 }
 

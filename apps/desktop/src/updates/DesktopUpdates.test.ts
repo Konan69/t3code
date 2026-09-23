@@ -164,6 +164,38 @@ describe("DesktopUpdates", () => {
     },
   );
 
+  it.effect("keeps a staged fork installable after a periodic upstream check", () => {
+    const harness = makeHarness({
+      checkForUpdates: forkUpdateAvailable,
+      forkRelease: configuredForkRelease(() => Effect.succeed(makeForkReleaseReady(true))),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+        yield* updates.download;
+        harness.emit("update-downloaded", { version: forkNightlyVersion });
+        yield* flushCallbacks;
+
+        const check = yield* updates.check("poll");
+        assert.isTrue(check.checked);
+        harness.emit("update-available", { version: "1.2.4-nightly.20260709.767" });
+        yield* flushCallbacks;
+
+        const staged = yield* updates.getState;
+        assert.equal(staged.status, "downloaded");
+        assert.equal(staged.downloadedVersion, forkNightlyVersion);
+        const install = yield* updates.install;
+        assert.isTrue(install.accepted);
+        assert.equal(harness.quitAndInstalls(), 1);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("rejects a fork feed result that is not an available update", () => {
     const harness = makeHarness({
       checkForUpdates: Effect.succeed({
@@ -448,7 +480,7 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("checks for newer releases after an update has been downloaded", () => {
+  it.effect("checks without replacing an update that has already been downloaded", () => {
     const harness = makeHarness();
 
     return Effect.scoped(
@@ -485,9 +517,9 @@ describe("DesktopUpdates", () => {
         yield* flushCallbacks;
 
         const state = yield* updates.getState;
-        assert.equal(state.status, "available");
-        assert.equal(state.availableVersion, "1.2.5");
-        assert.isNull(state.downloadedVersion);
+        assert.equal(state.status, "downloaded");
+        assert.equal(state.availableVersion, "1.2.4");
+        assert.equal(state.downloadedVersion, "1.2.4");
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
