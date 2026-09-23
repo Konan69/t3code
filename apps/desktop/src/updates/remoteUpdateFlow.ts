@@ -60,7 +60,11 @@ export function nextRemoteDesktopUpdateStep(
   if (isInstallableDesktopUpdateState(state)) {
     return { action: "install" };
   }
-  if (state.status === "downloading" || state.status === "checking") {
+  if (
+    state.status === "building" ||
+    state.status === "downloading" ||
+    state.status === "checking"
+  ) {
     return { action: "wait" };
   }
   if (state.status === "available") {

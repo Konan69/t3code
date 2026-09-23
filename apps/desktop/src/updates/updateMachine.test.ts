@@ -2,6 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createInitialDesktopUpdateState,
+  reduceDesktopUpdateStateOnBuildFailure,
+  reduceDesktopUpdateStateOnBuildRunStarted,
+  reduceDesktopUpdateStateOnBuildStart,
   reduceDesktopUpdateStateOnCheckFailure,
   reduceDesktopUpdateStateOnCheckStart,
   reduceDesktopUpdateStateOnDownloadComplete,
@@ -109,6 +112,34 @@ describe("updateMachine", () => {
     expect(state.releaseNotes).toEqual(releaseNotes);
     expect(state.omittedReleaseCount).toBe(2);
     expect(state.downloadPercent).toBe(100);
+  });
+
+  it("tracks fork build start, run URL, and typed failure", () => {
+    const available = {
+      ...createInitialDesktopUpdateState("1.0.0", runtimeInfo, "nightly"),
+      enabled: true,
+      status: "available" as const,
+      availableVersion: "1.1.0-nightly.123",
+    };
+    const building = reduceDesktopUpdateStateOnBuildStart(available, "2026-03-04T00:00:00.000Z");
+    const withRun = reduceDesktopUpdateStateOnBuildRunStarted(
+      building,
+      "https://github.com/Konan69/t3code/actions/runs/123",
+    );
+    const failed = reduceDesktopUpdateStateOnBuildFailure(
+      withRun,
+      "fork-release-run-failed",
+      "build failed",
+      withRun.runUrl,
+    );
+
+    expect(building.status).toBe("building");
+    expect(building.startedAt).toBe("2026-03-04T00:00:00.000Z");
+    expect(withRun.runUrl).toBe("https://github.com/Konan69/t3code/actions/runs/123");
+    expect(failed.status).toBe("error");
+    expect(failed.errorContext).toBe("build");
+    expect(failed.buildError).toBe("fork-release-run-failed");
+    expect(failed.canRetry).toBe(true);
   });
 
   it("preserves available version on download failure for retry", () => {

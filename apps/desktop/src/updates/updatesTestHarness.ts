@@ -11,6 +11,7 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopForkRelease from "./DesktopForkRelease.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 /** Shared DesktopUpdates test harness: a fully stubbed updater layer whose
@@ -32,6 +33,7 @@ export interface UpdatesHarnessOptions {
   readonly stopBackend?: Effect.Effect<void>;
   readonly startBackend?: Effect.Effect<void>;
   readonly env?: Record<string, string | undefined>;
+  readonly forkRelease?: DesktopForkRelease.DesktopForkRelease["Service"];
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -40,6 +42,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let downloadCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
+  const autoDownloadValues: boolean[] = [];
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
@@ -67,7 +70,10 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         feedUrls.push(options);
       }),
-    setAutoDownload: () => Effect.void,
+    setAutoDownload: (value) =>
+      Effect.sync(() => {
+        autoDownloadValues.push(value);
+      }),
     setAutoInstallOnAppQuit: () => Effect.void,
     setChannel: () => Effect.void,
     setAllowPrerelease: () => Effect.void,
@@ -203,8 +209,18 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
       : DesktopAppSettings.layer;
 
+  const forkReleaseLayer = Layer.succeed(
+    DesktopForkRelease.DesktopForkRelease,
+    options.forkRelease ??
+      DesktopForkRelease.DesktopForkRelease.of({
+        configuration: Option.none(),
+        ensureRelease: () => Effect.die("unexpected fork release request"),
+      }),
+  );
+
   const layer = DesktopUpdates.layer.pipe(
     Layer.provideMerge(updaterLayer),
+    Layer.provideMerge(forkReleaseLayer),
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
     Layer.provideMerge(DesktopState.layer),
@@ -228,6 +244,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     installSteps,
     downloadCount: () => downloadCount,
     feedUrls: () => feedUrls,
+    autoDownloadValues: () => autoDownloadValues,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(

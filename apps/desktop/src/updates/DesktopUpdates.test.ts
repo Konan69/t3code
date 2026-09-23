@@ -15,8 +15,32 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopForkRelease from "./DesktopForkRelease.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
+
+const upstreamNightlyVersion = "1.2.4-nightly.20260709.766";
+const upstreamNightlyTag = `v${upstreamNightlyVersion}`;
+const forkNightlyVersion = "1.2.4-nightly.20260709.766001";
+const forkReleaseConfiguration = {
+  owner: "Konan69",
+  repo: "t3code",
+  branch: "local/fork-feed",
+};
+
+const configuredForkRelease = (
+  ensureRelease: DesktopForkRelease.DesktopForkRelease["Service"]["ensureRelease"],
+) =>
+  DesktopForkRelease.DesktopForkRelease.of({
+    configuration: Option.some(forkReleaseConfiguration),
+    ensureRelease,
+  });
+
+const makeForkReleaseReady = (alreadyBuilt: boolean) => ({
+  version: forkNightlyVersion,
+  tag: `v${forkNightlyVersion}`,
+  alreadyBuilt,
+});
 
 describe("DesktopUpdates", () => {
   it("preserves complete causes for update poller and event failures", () => {
@@ -83,6 +107,180 @@ describe("DesktopUpdates", () => {
 
       assert.equal(harness.listenerCount(), 0);
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("downloads an already-built fork release only after the click", () => {
+    const upstreamTags: string[] = [];
+    const harness = makeHarness({
+      forkRelease: configuredForkRelease((input) =>
+        Effect.sync(() => {
+          upstreamTags.push(input.upstreamTag);
+          return makeForkReleaseReady(true);
+        }),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        assert.deepEqual(harness.autoDownloadValues(), [false]);
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+        assert.equal(harness.downloadCount(), 0);
+
+        const result = yield* updates.download;
+
+        assert.isTrue(result.accepted);
+        assert.isTrue(result.completed);
+        assert.deepEqual(upstreamTags, [upstreamNightlyTag]);
+        assert.deepEqual(harness.feedUrls().at(-2), {
+          provider: "github",
+          owner: "Konan69",
+          repo: "t3code",
+          releaseType: "prerelease",
+          channel: "nightly",
+        });
+        assert.deepEqual(harness.feedUrls().at(-1), {
+          provider: "generic",
+          url: "http://localhost:4141",
+        });
+        assert.equal(harness.downloadCount(), 1);
+        assert.include(
+          harness.sentStates.map((state) => state.status),
+          "building",
+        );
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("reports the dispatched run while building, then downloads", () => {
+    const runUrl = "https://github.com/Konan69/t3code/actions/runs/123";
+    const harness = makeHarness({
+      forkRelease: configuredForkRelease((input) =>
+        input.onRunStarted(runUrl).pipe(Effect.as(makeForkReleaseReady(false))),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+
+        assert.isTrue(result.completed);
+        const building = harness.sentStates.find(
+          (state) => state.status === "building" && state.runUrl === runUrl,
+        );
+        assert.isDefined(building);
+        assert.isNotNull(building?.startedAt);
+        assert.equal(harness.downloadCount(), 1);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("reports a typed build error when the WSL GitHub token is missing", () => {
+    const harness = makeHarness({
+      forkRelease: configuredForkRelease(() =>
+        Effect.fail(
+          new DesktopForkRelease.DesktopForkReleaseTokenMissingError({
+            upstreamTag: upstreamNightlyTag,
+            runUrl: null,
+          }),
+        ),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+
+        assert.isFalse(result.completed);
+        assert.equal(result.state.status, "error");
+        assert.equal(result.state.errorContext, "build");
+        assert.equal(result.state.buildError, "fork-release-token-missing");
+        assert.isNull(result.state.runUrl);
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("reports a typed build error when workflow dispatch fails", () => {
+    const harness = makeHarness({
+      forkRelease: configuredForkRelease(() =>
+        Effect.fail(
+          new DesktopForkRelease.DesktopForkReleaseDispatchFailedError({
+            upstreamTag: upstreamNightlyTag,
+            runUrl: null,
+            cause: new Error("dispatch rejected"),
+          }),
+        ),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+
+        assert.equal(result.state.status, "error");
+        assert.equal(result.state.buildError, "fork-release-dispatch-failed");
+        assert.isNull(result.state.runUrl);
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("reports the run URL when the fork release workflow fails", () => {
+    const runUrl = "https://github.com/Konan69/t3code/actions/runs/456";
+    const harness = makeHarness({
+      forkRelease: configuredForkRelease((input) =>
+        input.onRunStarted(runUrl).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new DesktopForkRelease.DesktopForkReleaseRunFailedError({
+                upstreamTag: upstreamNightlyTag,
+                runUrl,
+                cause: new Error("build failed"),
+              }),
+            ),
+          ),
+        ),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.setChannel("nightly");
+        harness.emit("update-available", { version: upstreamNightlyVersion });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+
+        assert.equal(result.state.status, "error");
+        assert.equal(result.state.buildError, "fork-release-run-failed");
+        assert.equal(result.state.runUrl, runUrl);
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
   it.effect("subscribe delivers the latest state plus subsequent changes", () => {

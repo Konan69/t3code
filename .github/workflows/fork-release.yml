@@ -1,18 +1,21 @@
 name: Fork release
+run-name: Fork release ${{ inputs.upstream_tag }} (${{ inputs.request_id || 'manual' }})
 
 on:
-  schedule:
-    - cron: "17 7 * * *"
   workflow_dispatch:
     inputs:
       upstream_tag:
-        description: "Optional upstream nightly tag (for example v0.0.43-nightly.20260923.2150)"
-        required: false
+        description: "Upstream nightly tag (for example v0.0.43-nightly.20260923.2150)"
+        required: true
         type: string
       branch:
         description: "Fork overlay branch to merge and build"
         required: false
-        default: local/boat
+        default: local/fork-feed
+        type: string
+      request_id:
+        description: "Optional dispatch correlation id"
+        required: false
         type: string
 
 concurrency:
@@ -46,7 +49,7 @@ jobs:
       - name: Checkout overlay branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.branch || 'local/boat' }}
+          ref: ${{ inputs.branch || 'local/fork-feed' }}
           fetch-depth: 0
 
       - name: Setup release scripts
@@ -66,34 +69,19 @@ jobs:
         with:
           script: |
             const pattern = /^v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
-            const requested = process.env.REQUESTED_TAG?.trim();
-            let tag;
-            if (requested) {
-              if (!pattern.test(requested)) {
-                core.setFailed(`Invalid upstream nightly tag: ${requested}`);
-                return;
-              }
-              const release = await github.rest.repos.getReleaseByTag({
-                owner: 'pingdotgg',
-                repo: 't3code',
-                tag: requested,
-              });
-              if (!release.data.prerelease) {
-                core.setFailed(`Upstream tag is not a prerelease: ${requested}`);
-                return;
-              }
-              tag = requested;
-            } else {
-              const releases = await github.paginate(github.rest.repos.listReleases, {
-                owner: 'pingdotgg',
-                repo: 't3code',
-                per_page: 100,
-              });
-              tag = releases.find((release) => release.prerelease && pattern.test(release.tag_name))?.tag_name;
-              if (!tag) {
-                core.setFailed('No upstream nightly release was found.');
-                return;
-              }
+            const tag = process.env.REQUESTED_TAG?.trim();
+            if (!tag || !pattern.test(tag)) {
+              core.setFailed(`Invalid upstream nightly tag: ${tag || '<empty>'}`);
+              return;
+            }
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: 'pingdotgg',
+              repo: 't3code',
+              tag,
+            });
+            if (!release.data.prerelease) {
+              core.setFailed(`Upstream tag is not a prerelease: ${tag}`);
+              return;
             }
             core.setOutput('tag', tag);
             core.notice(`Resolved upstream nightly ${tag}.`);
@@ -256,6 +244,8 @@ jobs:
       T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.prepare.outputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ needs.prepare.outputs.relay_url }}
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+      T3CODE_DESKTOP_UPDATE_BRANCH: ${{ inputs.branch || 'local/fork-feed' }}
     steps:
       - name: Checkout merged build
         uses: actions/checkout@v6
@@ -340,7 +330,7 @@ jobs:
       release_channel: nightly
       relay_client_tracing: false
       copy_example_env: true
-      update_repository: ${{ github.repository }}
+      update_repository: pingdotgg/t3code
       clerk_publishable_key: ${{ needs.prepare.outputs.clerk_publishable_key }}
       clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}

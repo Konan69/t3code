@@ -82,6 +82,7 @@ export type DesktopUpdateStatus =
   | "checking"
   | "up-to-date"
   | "available"
+  | "building"
   | "downloading"
   | "downloaded"
   | "error";
@@ -89,6 +90,10 @@ export type DesktopUpdateStatus =
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
 export type DesktopUpdateChannel = "latest" | "nightly";
+export type DesktopUpdateBuildError =
+  | "fork-release-token-missing"
+  | "fork-release-dispatch-failed"
+  | "fork-release-run-failed";
 export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly";
 
 export const DesktopUpdateStatusSchema = Schema.Literals([
@@ -97,6 +102,7 @@ export const DesktopUpdateStatusSchema = Schema.Literals([
   "checking",
   "up-to-date",
   "available",
+  "building",
   "downloading",
   "downloaded",
   "error",
@@ -104,6 +110,11 @@ export const DesktopUpdateStatusSchema = Schema.Literals([
 export const DesktopRuntimeArchSchema = Schema.Literals(["arm64", "x64", "other"]);
 export const DesktopThemeSchema = Schema.Literals(["light", "dark", "system"]);
 export const DesktopUpdateChannelSchema = Schema.Literals(["latest", "nightly"]);
+export const DesktopUpdateBuildErrorSchema = Schema.Literals([
+  "fork-release-token-missing",
+  "fork-release-dispatch-failed",
+  "fork-release-run-failed",
+]);
 export const DesktopAppStageLabelSchema = Schema.Literals(["Alpha", "Dev", "Nightly"]);
 
 export interface DesktopAppBranding {
@@ -289,8 +300,11 @@ export interface DesktopUpdateState {
   omittedReleaseCount: number;
   downloadPercent: number | null;
   checkedAt: string | null;
+  runUrl: string | null;
+  startedAt: string | null;
   message: string | null;
-  errorContext: "check" | "download" | "install" | null;
+  errorContext: "check" | "build" | "download" | "install" | null;
+  buildError: DesktopUpdateBuildError | null;
   canRetry: boolean;
 }
 
@@ -320,8 +334,11 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   omittedReleaseCount: Schema.Number,
   downloadPercent: Schema.NullOr(Schema.Number),
   checkedAt: Schema.NullOr(Schema.String),
+  runUrl: Schema.NullOr(Schema.String),
+  startedAt: Schema.NullOr(Schema.String),
   message: Schema.NullOr(Schema.String),
-  errorContext: Schema.NullOr(Schema.Literals(["check", "download", "install"])),
+  errorContext: Schema.NullOr(Schema.Literals(["check", "build", "download", "install"])),
+  buildError: Schema.NullOr(DesktopUpdateBuildErrorSchema),
   canRetry: Schema.Boolean,
 });
 

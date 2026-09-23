@@ -75,6 +75,10 @@
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"
     },
+    "./forkRelease": {
+      "types": "./src/forkRelease.ts",
+      "import": "./src/forkRelease.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
