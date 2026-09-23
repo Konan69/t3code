@@ -1898,12 +1898,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it.effect("keeps executable resource editing enabled for unsigned Windows builds", () =>
+  it.effect("omits signing config and publisherName for unsigned Windows builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(
         "win",
         "nsis",
-        "1.2.3",
+        "1.2.3-nightly.20260923.1",
         false,
         false,
         undefined,
@@ -1911,10 +1911,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       const win = config.win as Record<string, unknown>;
+      const [publish] = config.publish as ReadonlyArray<Record<string, unknown>>;
       assert.equal(win.icon, "icon.ico");
       assert.equal(win.signAndEditExecutable, true);
       assert.notProperty(win, "azureSignOptions");
-    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+      assert.notProperty(publish, "publisherName");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "Konan69/t3code" } }),
+        ),
+      ),
+    ),
   );
 
   it("stages the resource monitor as an external executable resource", () => {

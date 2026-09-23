@@ -1,0 +1,430 @@
+name: Fork release
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Optional upstream nightly tag (for example v0.0.43-nightly.20260923.2150)"
+        required: false
+        type: string
+      branch:
+        description: "Fork overlay branch to merge and build"
+        required: false
+        default: local/boat
+        type: string
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  id-token: none
+
+jobs:
+  prepare:
+    name: Resolve and merge upstream nightly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      should_build: ${{ steps.existing.outputs.should_build }}
+      upstream_tag: ${{ steps.metadata.outputs.upstream_tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      release_name: ${{ steps.metadata.outputs.name }}
+      build_ref: ${{ steps.push.outputs.build_ref }}
+      build_sha: ${{ steps.push.outputs.build_sha }}
+      clerk_publishable_key: ${{ steps.public_config.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ steps.public_config.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ steps.public_config.outputs.relay_url }}
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || 'local/boat' }}
+          fetch-depth: 0
+
+      - name: Setup release scripts
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+
+      - id: upstream
+        name: Resolve upstream nightly
+        uses: actions/github-script@v8
+        env:
+          REQUESTED_TAG: ${{ inputs.upstream_tag }}
+        with:
+          script: |
+            const pattern = /^v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
+            const requested = process.env.REQUESTED_TAG?.trim();
+            let tag;
+            if (requested) {
+              if (!pattern.test(requested)) {
+                core.setFailed(`Invalid upstream nightly tag: ${requested}`);
+                return;
+              }
+              const release = await github.rest.repos.getReleaseByTag({
+                owner: 'pingdotgg',
+                repo: 't3code',
+                tag: requested,
+              });
+              if (!release.data.prerelease) {
+                core.setFailed(`Upstream tag is not a prerelease: ${requested}`);
+                return;
+              }
+              tag = requested;
+            } else {
+              const releases = await github.paginate(github.rest.repos.listReleases, {
+                owner: 'pingdotgg',
+                repo: 't3code',
+                per_page: 100,
+              });
+              tag = releases.find((release) => release.prerelease && pattern.test(release.tag_name))?.tag_name;
+              if (!tag) {
+                core.setFailed('No upstream nightly release was found.');
+                return;
+              }
+            }
+            core.setOutput('tag', tag);
+            core.notice(`Resolved upstream nightly ${tag}.`);
+
+      - id: metadata
+        name: Resolve fork release version
+        run: node scripts/resolve-fork-release.ts "${{ steps.upstream.outputs.tag }}" --github-output
+
+      - id: existing
+        name: Skip an already published upstream build
+        uses: actions/github-script@v8
+        env:
+          FORK_TAG: ${{ steps.metadata.outputs.tag }}
+        with:
+          script: |
+            try {
+              const release = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: process.env.FORK_TAG,
+              });
+              core.notice(`Fork release already exists: ${release.data.html_url}`);
+              core.setOutput('should_build', 'false');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput('should_build', 'true');
+            }
+
+      - name: Fetch upstream tag
+        if: steps.existing.outputs.should_build == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.metadata.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags upstream "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
+
+      - id: merge
+        name: Merge upstream tag
+        if: steps.existing.outputs.should_build == 'true'
+        continue-on-error: true
+        env:
+          UPSTREAM_TAG: ${{ steps.metadata.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          message="$(printf 'chore(fork-release): merge %s\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>' "$UPSTREAM_TAG")"
+          if ! git merge --no-ff "$UPSTREAM_TAG" -m "$message"; then
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/fork-release-conflicts.txt"
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Open or refresh merge-conflict issue
+        if: always() && steps.merge.outcome == 'failure'
+        uses: actions/github-script@v8
+        env:
+          UPSTREAM_TAG: ${{ steps.metadata.outputs.upstream_tag }}
+          CONFLICTS_PATH: ${{ runner.temp }}/fork-release-conflicts.txt
+        with:
+          script: |
+            const fs = require('node:fs');
+            const tag = process.env.UPSTREAM_TAG;
+            const title = `fork-release: merge conflict on ${tag}`;
+            const conflicts = fs.readFileSync(process.env.CONFLICTS_PATH, 'utf8')
+              .split(/\r?\n/)
+              .filter(Boolean);
+            const body = [
+              `The automated fork release could not merge upstream \`${tag}\`.`,
+              '',
+              'Conflicted files:',
+              ...conflicts.map((file) => `- \`${file}\``),
+              '',
+              `Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              'Resolve these conflicts on the overlay branch, preserve the fork changes, and rerun this workflow. Do not auto-resolve them.',
+            ].join('\n');
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              per_page: 100,
+            });
+            const existing = issues.find((issue) => !issue.pull_request && issue.title === title);
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                state: 'open',
+                title,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
+
+      - name: Fail after reporting merge conflicts
+        if: always() && steps.merge.outcome == 'failure'
+        run: exit 1
+
+      - name: Guard fork migration ids
+        if: steps.existing.outputs.should_build == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.metadata.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          git show "$UPSTREAM_TAG:apps/server/src/persistence/Migrations.ts" > "$RUNNER_TEMP/upstream-Migrations.ts"
+          node scripts/check-migration-id-collisions.ts \
+            "$RUNNER_TEMP/upstream-Migrations.ts" \
+            apps/server/src/persistence/Migrations.ts
+
+      - id: public_config
+        name: Read public source-build configuration
+        if: steps.existing.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          read_value() {
+            local name="$1"
+            local value
+            value="$(sed -n "s/^${name}=//p" .env.example)"
+            if [[ -z "$value" || "$value" == *$'\n'* ]]; then
+              echo ".env.example must define exactly one non-empty $name." >&2
+              exit 1
+            fi
+            printf '%s' "$value"
+          }
+          echo "clerk_publishable_key=$(read_value T3CODE_CLERK_PUBLISHABLE_KEY)" >> "$GITHUB_OUTPUT"
+          echo "clerk_jwt_template=$(read_value T3CODE_CLERK_JWT_TEMPLATE)" >> "$GITHUB_OUTPUT"
+          echo "clerk_cli_oauth_client_id=$(read_value T3CODE_CLERK_CLI_OAUTH_CLIENT_ID)" >> "$GITHUB_OUTPUT"
+          echo "relay_url=$(read_value T3CODE_RELAY_URL)" >> "$GITHUB_OUTPUT"
+
+      - id: push
+        name: Publish merged build ref
+        if: steps.existing.outputs.should_build == 'true'
+        env:
+          FORK_TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          build_ref="fork-release-build/$FORK_TAG"
+          git push --force origin "HEAD:refs/heads/$build_ref"
+          echo "build_ref=$build_ref" >> "$GITHUB_OUTPUT"
+          echo "build_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build_bundle:
+    name: Build JS bundle
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.prepare.outputs.clerk_publishable_key }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.prepare.outputs.clerk_jwt_template }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
+      T3CODE_RELAY_URL: ${{ needs.prepare.outputs.relay_url }}
+    steps:
+      - name: Checkout merged build
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.build_ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Load public source-build configuration
+        run: cp .env.example .env
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install bundle dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Align package versions to fork release
+        run: node scripts/update-release-package-versions.ts "${{ needs.prepare.outputs.version }}"
+
+      - uses: ./.github/actions/setup-apt-mirrors
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Build JS bundle
+        run: vp run build:desktop
+
+      - name: Upload JS bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+  linux_cli_x64:
+    name: Linux x64 CLI for WSL
+    needs: [prepare, build_bundle]
+    if: needs.prepare.outputs.should_build == 'true' && needs.build_bundle.result == 'success'
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.build_ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      copy_example_env: true
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ needs.prepare.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ needs.prepare.outputs.relay_url }}
+      label: Linux x64 CLI for WSL
+      runner: ubuntu-24.04
+      timeout_minutes: 60
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+      desktop_artifact: false
+
+  desktop_win_x64:
+    name: Desktop Windows x64
+    needs: [prepare, build_bundle, linux_cli_x64]
+    if: needs.prepare.outputs.should_build == 'true' && needs.build_bundle.result == 'success' && needs.linux_cli_x64.result == 'success'
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.build_ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      copy_example_env: true
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ needs.prepare.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ needs.prepare.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ needs.prepare.outputs.relay_url }}
+      label: Windows x64 fork
+      runner: windows-2025
+      timeout_minutes: 90
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+      cli_archive: false
+
+  release:
+    name: Publish fork prerelease
+    needs: [prepare, linux_cli_x64, desktop_win_x64]
+    if: needs.prepare.outputs.should_build == 'true' && needs.linux_cli_x64.result == 'success' && needs.desktop_win_x64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download Windows desktop assets
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-win-x64
+          path: release-assets
+
+      - name: Download Linux x64 CLI archive
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-linux-x64
+          path: release-assets
+
+      - name: Validate and stage release assets
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="release-assets/nightly-win-x64.yml"
+          [[ -f "$manifest" ]] || { echo "Missing $manifest" >&2; exit 1; }
+          mv "$manifest" release-assets/nightly.yml
+
+          shopt -s nullglob
+          installers=(release-assets/*.exe)
+          blockmaps=(release-assets/*.exe.blockmap)
+          archives=(release-assets/t3-*-linux-x64.tar.gz)
+          [[ ${#installers[@]} -eq 1 ]] || { echo "Expected one Windows installer." >&2; exit 1; }
+          [[ ${#blockmaps[@]} -eq 1 ]] || { echo "Expected one Windows blockmap." >&2; exit 1; }
+          [[ ${#archives[@]} -eq 1 ]] || { echo "Expected one Linux x64 CLI archive." >&2; exit 1; }
+          grep -F "version: $VERSION" release-assets/nightly.yml
+          (
+            cd release-assets
+            sha256sum "$(basename "${archives[0]}")" > SHA256SUMS
+          )
+
+      - name: Write release notes
+        env:
+          UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+          FORK_VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_SHA: ${{ needs.prepare.outputs.build_sha }}
+        run: |
+          cat > release-notes.md <<EOF
+          Fork desktop build with the local overlay, merged from upstream \`$UPSTREAM_TAG\`.
+
+          Version \`$FORK_VERSION\` scales the upstream nightly sequence by 1000 and adds 1. This keeps the required \`-nightly.YYYYMMDD.N\` channel shape, sorts strictly above its source nightly under electron-updater's semver comparison, and deterministically identifies an already-published source build.
+
+          Built from \`$BUILD_SHA\`. This Windows build is intentionally unsigned.
+          EOF
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ needs.prepare.outputs.build_sha }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          body_path: release-notes.md
+          prerelease: true
+          make_latest: false
+          files: |
+            release-assets/*.exe
+            release-assets/*.exe.blockmap
+            release-assets/nightly.yml
+            release-assets/t3-*-linux-x64.tar.gz
+            release-assets/SHA256SUMS
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}
