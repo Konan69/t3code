@@ -74,7 +74,11 @@ on:
         required: false
         default: false
         type: boolean
-      update_repository:
+      publish_repository:
+        required: false
+        default: ""
+        type: string
+      detection_repository:
         required: false
         default: ""
         type: string
@@ -123,7 +127,8 @@ jobs:
       T3CODE_CLERK_JWT_TEMPLATE: ${{ inputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ inputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ inputs.relay_url }}
-      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ inputs.update_repository }}
+      T3CODE_DESKTOP_PUBLISH_REPOSITORY: ${{ inputs.publish_repository }}
+      T3CODE_DESKTOP_DETECTION_REPOSITORY: ${{ inputs.detection_repository }}
     steps:
       # This repository is public, so Git needs no credentials. checkout's
       # credential cleanup runs submodule foreach even with submodules disabled,
