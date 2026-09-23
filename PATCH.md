@@ -4,7 +4,7 @@
 
 - Working branch: `local/boat`
 - Starting commit: `099287af0f0d1d28805942ffc977e669d98a98b0`
-- Upstream release in that merge: `v0.0.43-nightly.20260920.2031`
+- Upstream release in that merge: `v0.0.43-nightly.20260923.2150`
 
 ## Remote-host decision
 
