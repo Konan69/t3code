@@ -16,6 +16,12 @@ const configuration = Option.some({
   repo: "t3code",
   branch: "local/fork-feed",
 });
+const completeRelease = {
+  tag_name: forkTag,
+  assets: DesktopForkRelease.requiredForkReleaseAssetNames(forkTag.slice(1)).map((name) => ({
+    name,
+  })),
+};
 
 const response = (request: HttpClientRequest.HttpClientRequest, status: number, body?: unknown) =>
   HttpClientResponse.fromWeb(
@@ -67,7 +73,7 @@ describe("DesktopForkRelease", () => {
         (request) =>
           Effect.sync(() => {
             requests.push(request);
-            return response(request, 200, { tag_name: forkTag });
+            return response(request, 200, completeRelease);
           }),
         (distro, command, args) => {
           commands.push([distro, command, args]);
@@ -96,7 +102,7 @@ describe("DesktopForkRelease", () => {
     }),
   );
 
-  it.effect("dispatches, correlates, and waits for a successful release", () =>
+  it.effect("rebuilds an incomplete release and waits for all required assets", () =>
     Effect.gen(function* () {
       const requests: HttpClientRequest.HttpClientRequest[] = [];
       const runUrls: string[] = [];
@@ -109,8 +115,11 @@ describe("DesktopForkRelease", () => {
           if (request.url.includes(`/releases/tags/${forkTag}`)) {
             releaseLookups += 1;
             return releaseLookups === 1
-              ? response(request, 404)
-              : response(request, 200, { tag_name: forkTag });
+              ? response(request, 200, {
+                  tag_name: forkTag,
+                  assets: [{ name: "nightly.yml" }],
+                })
+              : response(request, 200, completeRelease);
           }
           if (request.method === "POST") {
             requestId = readDispatchRequestId(request);

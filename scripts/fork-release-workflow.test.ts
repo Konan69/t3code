@@ -21,4 +21,23 @@ describe("fork release workflow", () => {
     expect(releaseDesktop).toContain('if [[ "${{ inputs.unsigned }}" == "true" ]]; then');
     expect(releaseDesktop).toContain("Windows signing explicitly disabled for this build.");
   });
+
+  it("rebuilds a fork release unless every required asset is present", () => {
+    const forkRelease = readWorkflow("fork-release.yml");
+
+    expect(forkRelease).toContain("name: Check for a complete fork release");
+    expect(forkRelease).toContain("'nightly.yml'");
+    expect(forkRelease).toContain(
+      "const installer = `T3-Code-${process.env.FORK_VERSION}-x64.exe`",
+    );
+    expect(forkRelease).toContain("`${installer}.blockmap`");
+    expect(forkRelease).toContain("`t3-${process.env.FORK_VERSION}-linux-x64.tar.gz`");
+    expect(forkRelease).toContain(
+      "const missingAssets = requiredAssets.filter((asset) => !publishedAssets.has(asset))",
+    );
+    expect(forkRelease).toContain("if (missingAssets.length === 0)");
+    expect(forkRelease).toContain(
+      "Fork release is incomplete; rebuilding missing assets: ${missingAssets.join(', ')}",
+    );
+  });
 });

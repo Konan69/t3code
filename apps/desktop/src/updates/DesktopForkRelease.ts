@@ -129,8 +129,16 @@ export class DesktopForkRelease extends Context.Service<
   }
 >()("@t3tools/desktop/updates/DesktopForkRelease") {}
 
-const Release = Schema.Struct({ tag_name: Schema.String });
+const Release = Schema.Struct({
+  tag_name: Schema.String,
+  assets: Schema.Array(Schema.Struct({ name: Schema.String })),
+});
 const decodeRelease = Schema.decodeUnknownEffect(Schema.fromJsonString(Release));
+
+export function requiredForkReleaseAssetNames(version: string): ReadonlyArray<string> {
+  const installer = `T3-Code-${version}-x64.exe`;
+  return ["nightly.yml", installer, `${installer}.blockmap`, `t3-${version}-linux-x64.tar.gz`];
+}
 const WorkflowRun = Schema.Struct({
   id: Schema.Number,
   status: Schema.String,
@@ -167,7 +175,7 @@ export const makeWithConfiguration = (configuration: Option.Option<ForkReleaseCo
       const execute = (request: HttpClientRequest.HttpClientRequest, token?: string) =>
         httpClient.execute(request.pipe(HttpClientRequest.setHeaders(buildHeaders(token))));
 
-      const releaseExists = (token?: string) =>
+      const releaseIsReady = (token?: string) =>
         execute(HttpClientRequest.get(releaseUrl), token).pipe(
           Effect.mapError(
             (cause) =>
@@ -192,7 +200,13 @@ export const makeWithConfiguration = (configuration: Option.Option<ForkReleaseCo
                     message: `GitHub release response was invalid: ${String(cause)}`,
                   }),
               ),
-              Effect.map((release) => release.tag_name === metadata.tag),
+              Effect.map((release) => {
+                if (release.tag_name !== metadata.tag) return false;
+                const assets = new Set(release.assets.map(({ name }) => name));
+                return requiredForkReleaseAssetNames(metadata.version).every((name) =>
+                  assets.has(name),
+                );
+              }),
             );
           }),
         );
@@ -215,7 +229,7 @@ export const makeWithConfiguration = (configuration: Option.Option<ForkReleaseCo
         });
       }
 
-      const existing = yield* releaseExists(token).pipe(
+      const existing = yield* releaseIsReady(token).pipe(
         Effect.mapError(
           (cause) =>
             new DesktopForkReleaseDispatchFailedError({
@@ -368,7 +382,7 @@ export const makeWithConfiguration = (configuration: Option.Option<ForkReleaseCo
       }
 
       for (let attempt = 0; attempt < RELEASE_POLL_LIMIT; attempt += 1) {
-        const published = yield* releaseExists(token).pipe(
+        const published = yield* releaseIsReady(token).pipe(
           Effect.mapError(
             (cause) =>
               new DesktopForkReleaseRunFailedError({
