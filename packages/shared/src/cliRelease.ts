@@ -88,8 +88,9 @@ export const CLI_RELEASE_CHANNELS: ReadonlyArray<CliReleaseChannel> = [
 
 /** The release train a version was published on, derived from its prerelease tag. */
 export function cliReleaseChannelOf(version: string): CliReleaseChannel {
-  const channel = /^[^-+]+-(nightly|preview)\.\d{8}\.\d+$/.exec(version)?.[1];
-  return channel === "nightly" || channel === "preview" ? channel : "stable";
+  if (/^[^-+]+-nightly\.\d{8}\.\d+(?:\.\d+)?$/.test(version)) return "nightly";
+  if (/^[^-+]+-preview\.\d{8}\.\d+$/.test(version)) return "preview";
+  return "stable";
 }
 
 /**

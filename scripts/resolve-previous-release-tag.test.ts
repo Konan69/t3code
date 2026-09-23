@@ -65,6 +65,18 @@ it.effect("accepts legacy nightly tags when selecting the previous nightly", () 
   }),
 );
 
+it.effect("orders fork nightly tags after their source nightly", () =>
+  Effect.gen(function* () {
+    const previous = yield* resolvePreviousReleaseTag("nightly", "v1.2.0-nightly.20260620.2.1", [
+      "v1.2.0-nightly.20260620.2",
+      "v1.2.0-nightly.20260620.1.1",
+      "v1.1.0-nightly.20260619.9",
+    ]);
+
+    assert.equal(previous, "v1.2.0-nightly.20260620.2");
+  }),
+);
+
 it.effect("keeps preview tags in their own series", () =>
   Effect.gen(function* () {
     const previous = yield* resolvePreviousReleaseTag("preview", "v1.2.0-preview.20260620.2", [

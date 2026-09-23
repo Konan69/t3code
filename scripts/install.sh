@@ -150,7 +150,8 @@ if [ -z "$version" ]; then
   # install can never pick up a nightly or preview build by accident.
   case "$channel" in
     stable) tag_pattern='v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)' ;;
-    nightly | preview) tag_pattern="v\([0-9][^\"]*-${channel}\.[0-9]*\.[0-9]*\)" ;;
+    nightly) tag_pattern='v\([0-9][^\"]*-nightly\.[0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\{0,1\}\)' ;;
+    preview) tag_pattern='v\([0-9][^\"]*-preview\.[0-9][0-9]*\.[0-9][0-9]*\)' ;;
     *) fail "T3CODE_CHANNEL must be stable, nightly, or preview" ;;
   esac
   tmp_index="$(mktemp)"

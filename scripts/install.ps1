@@ -135,7 +135,7 @@ if (-not $version) {
   # install can never pick up a nightly or preview build by accident.
   $tagPattern = switch ($channel) {
     "stable" { '^v\d+\.\d+\.\d+$' }
-    "nightly" { '^v\d+\.\d+\.\d+-nightly\.\d+\.\d+$' }
+    "nightly" { '^v\d+\.\d+\.\d+-nightly\.\d+\.\d+(?:\.\d+)?$' }
     "preview" { '^v\d+\.\d+\.\d+-preview\.\d+\.\d+$' }
     default { Fail "T3CODE_CHANNEL must be stable, nightly, or preview" }
   }
