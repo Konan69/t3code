@@ -32,6 +32,9 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  runUrl: null,
+  startedAt: null,
+  buildError: null,
 };
 
 describe("desktop update button state", () => {
@@ -344,6 +347,54 @@ describe("getDesktopUpdateButtonTooltip", () => {
     expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "idle" })).toBe("Up to date");
     expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "up-to-date" })).toBe(
       "Up to date",
+    );
+  });
+});
+
+describe("fork build state", () => {
+  const building: DesktopUpdateState = {
+    ...baseState,
+    channel: "nightly",
+    status: "building",
+    availableVersion: "0.0.43-nightly.20260923.2150",
+    runUrl: "https://github.com/Konan69/t3code/actions/runs/1",
+    startedAt: "2026-09-23T22:00:00.000Z",
+  };
+
+  it("locks the button and the update check while the fork build runs", () => {
+    expect(resolveDesktopUpdateButtonAction(building)).toBe("none");
+    expect(isDesktopUpdateButtonDisabled(building)).toBe(true);
+    expect(canCheckForUpdate(building)).toBe(false);
+    expect(getDesktopUpdateButtonTooltip(building)).toBe(
+      "Building 0.0.43-nightly.20260923.2150 with your patches…",
+    );
+  });
+
+  it("retries a failed fork build from the update button", () => {
+    const failed: DesktopUpdateState = {
+      ...building,
+      status: "error",
+      errorContext: "build",
+      buildError: "fork-release-run-failed",
+      message: "The fork release workflow did not publish the requested update.",
+    };
+    expect(resolveDesktopUpdateButtonAction(failed)).toBe("download");
+    expect(isDesktopUpdateButtonDisabled(failed)).toBe(false);
+    expect(getDesktopUpdateButtonTooltip(failed)).toBe(
+      "Build failed for 0.0.43-nightly.20260923.2150. Click to retry.",
+    );
+  });
+
+  it("tells the user how to fix a missing GitHub token", () => {
+    const missingToken: DesktopUpdateState = {
+      ...building,
+      status: "error",
+      errorContext: "build",
+      buildError: "fork-release-token-missing",
+      runUrl: null,
+    };
+    expect(getDesktopUpdateButtonTooltip(missingToken)).toBe(
+      "Run `gh auth login` as Konan69 in WSL, then click to retry.",
     );
   });
 });

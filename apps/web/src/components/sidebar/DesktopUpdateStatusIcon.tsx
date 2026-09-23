@@ -9,6 +9,7 @@ export type DesktopUpdateStatusIconState =
   | "idle"
   | "checking"
   | "available"
+  | "building"
   | "downloading"
   | "downloaded";
 
@@ -88,6 +89,39 @@ function DesktopUpdateDownloadingIcon({ percent }: { readonly percent: number | 
   );
 }
 
+// Build time is unknown, so the ring is an indeterminate arc rather than a percentage.
+function DesktopUpdateBuildingIcon() {
+  return (
+    <span className="relative grid size-8 place-items-center">
+      <svg
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 size-full -rotate-90 motion-safe:animate-spin motion-safe:[animation-duration:1.6s]"
+        viewBox="0 0 32 32"
+      >
+        <circle
+          cx="16"
+          cy="16"
+          r={DOWNLOAD_PROGRESS_RADIUS}
+          fill="none"
+          stroke="color-mix(in srgb, currentColor 22%, transparent)"
+          strokeWidth="1.5"
+        />
+        <circle
+          cx="16"
+          cy="16"
+          r={DOWNLOAD_PROGRESS_RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeDasharray={`${DOWNLOAD_PROGRESS_CIRCUMFERENCE * 0.25} ${DOWNLOAD_PROGRESS_CIRCUMFERENCE}`}
+          strokeLinecap="round"
+          strokeWidth="1.5"
+        />
+      </svg>
+      <DownloadIcon className="size-4" />
+    </span>
+  );
+}
+
 function DesktopUpdateDownloadedIcon() {
   return (
     <span className="relative grid size-4 place-items-center">
@@ -111,6 +145,7 @@ export function DesktopUpdateStatusIcon({
   readonly status: DesktopUpdateStatusIconState;
 }) {
   if (status === "available") return <DesktopUpdateAvailableIcon />;
+  if (status === "building") return <DesktopUpdateBuildingIcon />;
   if (status === "downloading") {
     return <DesktopUpdateDownloadingIcon percent={downloadPercent ?? null} />;
   }

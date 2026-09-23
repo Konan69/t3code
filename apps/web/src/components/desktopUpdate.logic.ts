@@ -40,7 +40,10 @@ export function resolveDesktopUpdateButtonAction(
     return "download";
   }
   if (state.status === "error") {
-    if (state.errorContext === "download" && state.availableVersion) {
+    if (
+      (state.errorContext === "download" || state.errorContext === "build") &&
+      state.availableVersion
+    ) {
       return "download";
     }
   }
@@ -52,7 +55,18 @@ export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | nul
 }
 
 export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null): boolean {
-  return state?.status === "downloading";
+  return state?.status === "downloading" || state?.status === "building";
+}
+
+function getDesktopUpdateBuildErrorTooltip(state: DesktopUpdateState): string {
+  const version = state.availableVersion ?? "the update";
+  if (state.buildError === "fork-release-token-missing") {
+    return "Run `gh auth login` as Konan69 in WSL, then click to retry.";
+  }
+  if (state.buildError === "fork-release-dispatch-failed") {
+    return `Couldn't start the build for ${version}. Click to retry.`;
+  }
+  return `Build failed for ${version}. Click to retry.`;
 }
 
 export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState): string {
@@ -74,6 +88,9 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
   if (state.status === "available") {
     return `Update ${state.availableVersion ?? "available"} ready to download`;
   }
+  if (state.status === "building") {
+    return `Building ${state.availableVersion ?? "update"} with your patches…`;
+  }
   if (state.status === "downloading") {
     const progress =
       typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
@@ -83,6 +100,9 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
     return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
   }
   if (state.status === "error") {
+    if (state.errorContext === "build" && state.availableVersion) {
+      return getDesktopUpdateBuildErrorTooltip(state);
+    }
     if (state.errorContext === "download" && state.availableVersion) {
       return `Download failed for ${state.availableVersion}. Click to retry.`;
     }
@@ -118,6 +138,9 @@ export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateAction
 export function canCheckForUpdate(state: DesktopUpdateState | null): boolean {
   if (!state || !state.enabled) return false;
   return (
-    state.status !== "checking" && state.status !== "downloading" && state.status !== "disabled"
+    state.status !== "checking" &&
+    state.status !== "building" &&
+    state.status !== "downloading" &&
+    state.status !== "disabled"
   );
 }

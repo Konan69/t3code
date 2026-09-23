@@ -63,23 +63,27 @@ export function openSidebarUpdateReleaseNotesPopoverOnForwardTab(
 
 function resolveSidebarUpdatePresentation({
   action,
+  isBuilding,
   isDownloading,
   showCheckIcon,
 }: {
   readonly action: ReturnType<typeof resolveDesktopUpdateButtonAction>;
+  readonly isBuilding: boolean;
   readonly isDownloading: boolean;
   readonly showCheckIcon: boolean;
 }) {
-  const showUpdateDetails = action !== "none" || isDownloading;
+  const showUpdateDetails = action !== "none" || isBuilding || isDownloading;
   const iconStatus = showCheckIcon
     ? "checking"
     : action === "install"
       ? "downloaded"
-      : isDownloading
-        ? "downloading"
-        : action === "download"
-          ? "available"
-          : "idle";
+      : isBuilding
+        ? "building"
+        : isDownloading
+          ? "downloading"
+          : action === "download"
+            ? "available"
+            : "idle";
 
   return {
     iconStatus,
@@ -132,6 +136,7 @@ function SidebarUpdateControl() {
   }, [prefersReducedMotion, state?.status]);
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
+  const isBuilding = state?.status === "building";
   const isDownloading = state?.status === "downloading";
   const showCheckIcon = shouldShowDesktopUpdateCheckIcon({
     isAnimationLatched: isCheckAnimationLatched,
@@ -140,6 +145,7 @@ function SidebarUpdateControl() {
   });
   const { iconStatus, showUpdateDetails, showUpdateIconState } = resolveSidebarUpdatePresentation({
     action,
+    isBuilding,
     isDownloading,
     showCheckIcon,
   });
@@ -190,11 +196,25 @@ function SidebarUpdateControl() {
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
+          const runUrl = result.state.errorContext === "build" ? result.state.runUrl : null;
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not download update",
+              title:
+                result.state.errorContext === "build"
+                  ? "Could not build update"
+                  : "Could not download update",
               description: actionError,
+              ...(runUrl
+                ? {
+                    actionProps: {
+                      children: "View build",
+                      onClick: () => {
+                        void bridge.openExternal(runUrl);
+                      },
+                    },
+                  }
+                : {}),
             }),
           );
         })

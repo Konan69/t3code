@@ -35,6 +35,9 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  runUrl: null,
+  startedAt: null,
+  buildError: null,
 };
 
 function collectAnchors(node: ReactNode, anchors: AnchorElement[] = []): AnchorElement[] {
