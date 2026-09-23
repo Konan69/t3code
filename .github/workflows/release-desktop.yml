@@ -70,6 +70,12 @@ on:
         required: false
         default: true
         type: boolean
+      # Explicit unsigned builds ignore inherited signing secrets. Fork release
+      # jobs use this so repository-level Azure credentials cannot sign them.
+      unsigned:
+        required: false
+        default: false
+        type: boolean
       copy_example_env:
         required: false
         default: false
@@ -283,7 +289,7 @@ jobs:
           fi
 
       - name: Prepare Azure Trusted Signing
-        if: inputs.desktop_artifact && inputs.platform == 'win'
+        if: inputs.desktop_artifact && inputs.platform == 'win' && !inputs.unsigned
         shell: pwsh
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -411,7 +417,9 @@ jobs:
             # Embed the Linux CLI archive built by the same-arch Linux job as
             # the WSL runtime. Required for a working WSL backend on Windows.
             args+=(--wsl-runtime "$GITHUB_WORKSPACE"/wsl-runtime/t3-*-linux-${{ inputs.arch }}.tar.gz)
-            if has_all \
+            if [[ "${{ inputs.unsigned }}" == "true" ]]; then
+              echo "Windows signing explicitly disabled for this build."
+            elif has_all \
               "$AZURE_TENANT_ID" \
               "$AZURE_CLIENT_ID" \
               "$AZURE_CLIENT_SECRET" \
