@@ -60,7 +60,7 @@ const asarRoot = path.join(
   "@electron",
   "asar",
 );
-const asar = require(asarRoot);
+const asar = require(path.join(asarRoot, "lib", "asar.js"));
 const { Pickle } = require(path.join(asarRoot, "lib", "pickle.js"));
 
 const walkFiles = (root) => {
