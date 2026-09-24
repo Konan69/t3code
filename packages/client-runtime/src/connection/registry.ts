@@ -18,17 +18,20 @@ import {
   type ConnectionRegistration,
   type PlatformConnectionRegistration,
   type PrimaryConnectionRegistration,
+  RelayConnectionRegistration,
   SshConnectionProfile,
   connectionRegistrationCatalogEntry,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as Connectivity from "./connectivity.ts";
-import type {
-  ConnectionAttemptError,
-  ConnectionTarget,
-  NetworkStatus,
-  SupervisorConnectionState,
+import {
+  type ConnectionAttemptError,
+  type ConnectionTarget,
+  type NetworkStatus,
+  RelayConnectionTarget,
+  type RelayWakePolicy,
+  type SupervisorConnectionState,
 } from "./model.ts";
 import { ConnectionBlockedError } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
@@ -63,6 +66,20 @@ export class PlatformEnvironmentRemovalError extends Schema.TaggedError<Platform
     return `Platform-managed environment ${this.environmentId} cannot be removed.`;
   }
 }
+
+export class WakePolicyUnsupportedTargetError extends Schema.TaggedErrorClass<WakePolicyUnsupportedTargetError>()(
+  "WakePolicyUnsupportedTargetError",
+  {
+    environmentId: EnvironmentId,
+    targetTag: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Environment ${this.environmentId} uses ${this.targetTag}, not a relay connection target.`;
+  }
+}
+
+export type EnvironmentWakeStatusResult = WakeStatusResult | { readonly _tag: "NoPolicy" };
 
 export class EnvironmentRegistry extends Context.Service<
   EnvironmentRegistry,
@@ -161,6 +178,7 @@ export const make = Effect.gen(function* () {
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
+  const wakeIntent = yield* WakeIntent.WakeIntent;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const persistedTargets = yield* storage.list;
   const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
@@ -479,6 +497,40 @@ export const make = Effect.gen(function* () {
           return next;
         });
         yield* installEntryLocked(entry);
+      }),
+    );
+  });
+
+  const setWakePolicy = Effect.fn("EnvironmentRegistry.setWakePolicy")(function* (
+    environmentId: EnvironmentId,
+    policy: RelayWakePolicy | null,
+  ) {
+    yield* withLeaseLock(
+      environmentId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(environmentId);
+        if (entry.target._tag !== "RelayConnectionTarget") {
+          return yield* new WakePolicyUnsupportedTargetError({
+            environmentId,
+            targetTag: entry.target._tag,
+          });
+        }
+        const target = new RelayConnectionTarget({
+          environmentId: entry.target.environmentId,
+          label: entry.target.label,
+          ...(policy === null ? {} : { wakePolicy: policy }),
+        });
+        yield* registrations.register(new RelayConnectionRegistration({ target }));
+        yield* Ref.update(persistedTargetsByEnvironment, (current) => {
+          const next = new Map(current);
+          next.set(environmentId, target);
+          return next;
+        });
+        yield* SubscriptionRef.update(entries, (current) => {
+          const next = new Map(current);
+          next.set(environmentId, { ...entry, target });
+          return next;
+        });
       }),
     );
   });

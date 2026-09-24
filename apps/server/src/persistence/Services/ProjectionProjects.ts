@@ -11,6 +11,7 @@ import {
   ModelSelection,
   ProjectIconOverride,
   ProjectId,
+  ProjectMachineMode,
   ProjectScript,
   ThreadEnvMode,
 } from "@t3tools/contracts";

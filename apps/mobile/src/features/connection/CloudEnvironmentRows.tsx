@@ -30,6 +30,7 @@ import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-typ
 import { serverEnvironment } from "../../state/server";
 import { availableCloudEnvironmentPresentation } from "../cloud/cloudEnvironmentPresentation";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
+import { useManagedRelayEnvironmentHostStatus } from "../cloud/managedRelayState";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
 import { type RelayEnvironmentView, useConnectionController } from "./useConnectionController";
 
@@ -142,6 +143,9 @@ function CloudEnvironmentRowsContent(
               }
               errorExpanded={expandedErrorId === environment.environmentId}
               onToggleError={() => handleToggleCloudError(environment.environmentId)}
+              relayEnvironment={controller.relayEnvironments.find(
+                (entry) => entry.environment.environmentId === environment.environmentId,
+              )}
             />
           ))}
           {availableCloudEnvironments.map((environment) => (
@@ -212,6 +216,7 @@ function ConnectedCloudEnvironmentRow(props: {
   readonly onRemove: () => void;
   readonly onOpen?: (() => void) | undefined;
   readonly onToggleError: () => void;
+  readonly relayEnvironment?: RelayEnvironmentView;
 }) {
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(props.environment.environmentId),
@@ -252,6 +257,39 @@ function ConnectedCloudEnvironmentRow(props: {
   );
 }
 
+function ConnectedCloudHostControl(props: {
+  readonly environment: RelayEnvironmentView["environment"];
+}) {
+  const hostStatus = useManagedRelayEnvironmentHostStatus(props.environment);
+  const state = hostStatus.data?.state ?? null;
+
+  useEffect(() => {
+    if (props.environment.hostLifecycle === undefined) return;
+    const timer = setInterval(hostStatus.refresh, state === "resuming" ? 5_000 : 30_000);
+    return () => clearInterval(timer);
+  }, [hostStatus.refresh, props.environment.hostLifecycle, state]);
+
+  if (props.environment.hostLifecycle === undefined) return null;
+  const stateLabel = hostStatus.error
+    ? "Host state unavailable"
+    : state === "running"
+      ? "Host awake"
+      : state === "suspended"
+        ? "Host asleep"
+        : state === "stopped"
+          ? "Host stopped"
+          : state === "resuming"
+            ? "Host waking…"
+            : "Checking host…";
+
+  return (
+    <Text className="mt-1 text-xs text-foreground-muted">
+      {stateLabel}
+      {state === "running" || state === "resuming" ? "" : " · Wakes when you interact"}
+    </Text>
+  );
+}
+
 function CloudEnvironmentRow(props: {
   readonly environment: RelayEnvironmentView;
   readonly showChevron: boolean;
@@ -259,12 +297,35 @@ function CloudEnvironmentRow(props: {
   readonly onConnect: () => void;
   readonly onToggleError: () => void;
 }) {
+  const hostStatus = useManagedRelayEnvironmentHostStatus(props.environment.environment);
   const presentation = availableCloudEnvironmentPresentation({
     isStatusPending: props.environment.availability === "checking",
     status: props.environment.status,
     statusError: props.environment.error,
     statusErrorTraceId: props.environment.traceId,
   });
+  const hostState = hostStatus.data?.state ?? null;
+  const hostStatusText =
+    props.environment.environment.hostLifecycle === undefined
+      ? undefined
+      : hostStatus.error
+        ? "Host state unavailable"
+        : hostState === "running"
+          ? "Host awake"
+          : hostState === "suspended"
+            ? "Host asleep"
+            : hostState === "stopped"
+              ? "Host stopped"
+              : hostState === "resuming"
+                ? "Host waking…"
+                : hostState === "other"
+                  ? `Host ${hostStatus.data?.gceStatus.toLowerCase() ?? "transitioning"}`
+                  : "Checking host…";
+  useEffect(() => {
+    if (props.environment.environment.hostLifecycle === undefined) return;
+    const timer = setInterval(hostStatus.refresh, hostState === "resuming" ? 5_000 : 30_000);
+    return () => clearInterval(timer);
+  }, [hostState, hostStatus.refresh, props.environment.environment.hostLifecycle]);
 
   return (
     <CloudEnvironmentRowShell
@@ -410,6 +471,10 @@ function CloudEnvironmentRowShell(props: {
             />
           ) : null}
         </StatusContainer>
+        {props.hostControl}
+        {props.hostStatusText ? (
+          <Text className="mt-1 text-xs text-foreground-muted">{props.hostStatusText}</Text>
+        ) : null}
       </View>
       <ThemedSwitch
         style={{ alignSelf: "center" }}

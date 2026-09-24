@@ -19,7 +19,7 @@ import {
 } from "./storage";
 
 const emptyCatalog = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   targets: [],
   profiles: [],
   credentials: [],

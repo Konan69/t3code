@@ -11,6 +11,7 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
+  type ThreadMachineBinding,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -34,6 +35,11 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { hostToGuestPath, MachineServiceError } from "../../machine/MachineService.ts";
+import {
+  ThreadMachineService,
+  ThreadMachineServiceError,
+} from "../../machine/ThreadMachineService.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterProcessError,
@@ -70,6 +76,7 @@ const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+const isThreadMachineServiceError = Schema.is(ThreadMachineServiceError);
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -185,6 +192,16 @@ function stalePendingRequestDetail(
 ): string {
   return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
 }
+
+export const mapProviderCwdForMachine = Effect.fn("mapProviderCwdForMachine")(function* (
+  binding: ThreadMachineBinding | null | undefined,
+  hostCwd: string | undefined,
+) {
+  if (!binding || !hostCwd) {
+    return hostCwd;
+  }
+  return yield* hostToGuestPath(binding, hostCwd);
+});
 
 function buildGeneratedWorktreeBranchName(raw: string): string {
   const normalized = raw
@@ -480,17 +497,18 @@ const make = Effect.gen(function* () {
     readonly projectId: ProjectId;
     readonly branch: string | null;
     readonly worktreePath: string | null;
+    readonly machine?: { readonly hostWorkspaceRoot: string } | null | undefined;
   }) {
     const { worktreePath, branch } = thread;
-    if (!worktreePath || !branch) {
+    if (!worktreePath || !branch || thread.machine != null) {
+      return;
+    }
+    const project = yield* resolveProject(thread.projectId);
+    if (!project || project.machineMode === "thread") {
       return;
     }
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
     if (exists) {
-      return;
-    }
-    const project = yield* resolveProject(thread.projectId);
-    if (!project) {
       return;
     }
     const cwd = project.workspaceRoot;
@@ -700,6 +718,16 @@ const make = Effect.gen(function* () {
         });
       }
     }
+    const ensuredMachine = yield* threadMachines.ensureForThread(threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: preferredProvider,
+            method: "thread.turn.start",
+            detail: `Could not start the thread machine: ${cause.detail}`,
+          }),
+      ),
+    );
     const project = yield* resolveProject(thread.projectId);
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
@@ -896,6 +924,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly branch: string | null;
     readonly worktreePath: string | null;
+    readonly providerCwd: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
   }) {
@@ -920,7 +949,7 @@ const make = Effect.gen(function* () {
             );
 
       const generated = yield* textGeneration.generateBranchName({
-        cwd,
+        cwd: input.providerCwd,
         message: input.messageText,
         ...(attachments.length > 0 ? { attachments } : {}),
         modelSelection,

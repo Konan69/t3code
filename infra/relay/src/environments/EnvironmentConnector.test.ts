@@ -225,6 +225,8 @@ function makeLinks(
         ...overrides,
       }),
     revokeForUser: () => Effect.succeed(false),
+    configureHostLifecycleForUser: () => Effect.succeed(false),
+    removeHostLifecycleForUser: () => Effect.succeed(false),
   };
 }
 

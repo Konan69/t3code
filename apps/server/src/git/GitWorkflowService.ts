@@ -67,6 +67,9 @@ export class GitWorkflowService extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    readonly listWorktrees: (
+      input: GitVcsDriver.GitListWorktreesInput,
+    ) => Effect.Effect<ReadonlyArray<GitVcsDriver.GitWorktreeEntry>, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
       options?: GitVcsDriver.CreateWorktreeOptions,

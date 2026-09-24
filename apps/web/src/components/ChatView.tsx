@@ -8691,6 +8691,10 @@ export default function ChatView(props: ChatViewProps) {
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
       if (!activeThreadId) return;
+      if (activeEnvironmentUnavailable) {
+        await handleReconnectActiveEnvironment(environmentId);
+        return;
+      }
 
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
@@ -8713,7 +8717,14 @@ export default function ChatView(props: ChatViewProps) {
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, respondToThreadApproval, setThreadError],
+    [
+      activeEnvironmentUnavailable,
+      activeThreadId,
+      environmentId,
+      handleReconnectActiveEnvironment,
+      respondToThreadApproval,
+      setThreadError,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
@@ -8966,6 +8977,10 @@ export default function ChatView(props: ChatViewProps) {
       ) {
         return false;
       }
+      if (activeEnvironmentUnavailable) {
+        await handleReconnectActiveEnvironment(activeThread.environmentId);
+        return;
+      }
 
       const trimmed = text.trim();
       if (!trimmed) {
@@ -9095,12 +9110,14 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
+      activeEnvironmentUnavailable,
       activeProposedPlan,
       acknowledgeActiveThreadWoke,
       beginLocalDispatch,
       isConnecting,
       isSendBusy,
       isServerThread,
+      handleReconnectActiveEnvironment,
       localCheckoutBranchMismatch,
       persistThreadSettingsForNextTurn,
       resetLocalDispatch,
@@ -9117,6 +9134,10 @@ export default function ChatView(props: ChatViewProps) {
   );
 
   const onImplementPlanInNewThread = useCallback(async () => {
+    if (activeThread && activeEnvironmentUnavailable) {
+      await handleReconnectActiveEnvironment(activeThread.environmentId);
+      return;
+    }
     if (
       !activeThread ||
       !activeProject ||
@@ -9273,6 +9294,7 @@ export default function ChatView(props: ChatViewProps) {
     defaultRuntimeMode,
     startThreadTurn,
     environmentId,
+    handleReconnectActiveEnvironment,
     composerRef,
   ]);
 

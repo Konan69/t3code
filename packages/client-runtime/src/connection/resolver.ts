@@ -56,6 +56,14 @@ const isBearerProfile = Schema.is(BearerConnectionProfile);
 const isSshProfile = Schema.is(SshConnectionProfile);
 const isBearerCredential = Schema.is(BearerConnectionCredential);
 
+function isMissingRelayHostLifecycle(error: ManagedRelay.ManagedRelayClientError): boolean {
+  return (
+    error._tag === "ManagedRelayRequestFailedError" &&
+    error.relayError?._tag === "RelayEnvironmentConnectNotAuthorizedError" &&
+    error.relayError.reason === "host_lifecycle_not_configured"
+  );
+}
+
 function primarySocketUrl(
   target: PrimaryConnectionTarget,
   clientMetadata: AuthClientPresentationMetadata | undefined,
@@ -157,9 +165,29 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
 
 const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(function* () {
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+  const wakeIntent = yield* WakeIntent.WakeIntent;
 
   return Effect.fnUntraced(
     function* (target: RelayConnectionTarget) {
+      if (yield* wakeIntent.consume(target.environmentId)) {
+        if (target.wakePolicy !== undefined) {
+          yield* wakeEndpoint(target.wakePolicy);
+        } else {
+          const clerkToken = yield* session.clerkToken.pipe(
+            Effect.withSpan("relay.connection.wake.cloudSessionToken.resolve"),
+          );
+          yield* relay
+            .wakeEnvironmentHost({
+              clerkToken,
+              scopes: [RelayEnvironmentWakeScope],
+              environmentId: target.environmentId,
+            })
+            .pipe(
+              Effect.catchIf(isMissingRelayHostLifecycle, () => Effect.void),
+              Effect.mapError(mapManagedRelayError),
+            );
+        }
+      }
       const authorized = yield* remote.authorizeDpop({
         expectedEnvironmentId: target.environmentId,
       });

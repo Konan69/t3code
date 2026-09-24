@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  GitCommandError,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -32,6 +33,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -74,6 +76,10 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import {
+  ThreadMachineService,
+  ThreadMachineServiceError,
+} from "../../machine/ThreadMachineService.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -205,7 +211,9 @@ describe("ProviderCommandReactor", () => {
       model: "gpt-5-codex",
     };
     const startSessionEffect = input?.startSessionEffect;
+    const onStartSession = input?.onStartSession;
     const startSession = vi.fn((_: unknown, input: unknown) => {
+      onStartSession?.();
       const sessionIndex = nextSessionIndex++;
       const resumeCursor =
         typeof input === "object" && input !== null && "resumeCursor" in input
@@ -629,6 +637,8 @@ describe("ProviderCommandReactor", () => {
       drain,
       startReactor,
       runEffect,
+      mapProviderCwd: (binding: ThreadMachineBinding, hostCwd: string) =>
+        Effect.runPromise(mapProviderCwdForMachine(binding, hostCwd)),
       get titleRegenerationCompletionDispatchAttempts() {
         return titleRegenerationCompletionDispatchAttempts;
       },

@@ -429,6 +429,15 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.succeed(
+          ThreadMachineService,
+          ThreadMachineService.of({
+            ensureForThread: () => Effect.succeed(Option.none()),
+            runSetupForThread: () => Effect.succeed({ status: "no-script" }),
+          }),
+        ),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(

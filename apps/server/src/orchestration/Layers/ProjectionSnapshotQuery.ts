@@ -259,6 +259,7 @@ const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   projectId: ProjectId,
   workspaceRoot: Schema.String,
   worktreePath: Schema.NullOr(Schema.String),
+  machineHostWorkspaceRoot: Schema.NullOr(Schema.String),
 });
 const FullThreadDiffContextLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -269,6 +270,7 @@ const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   projectId: ProjectId,
   workspaceRoot: Schema.String,
   worktreePath: Schema.NullOr(Schema.String),
+  machineHostWorkspaceRoot: Schema.NullOr(Schema.String),
   latestCheckpointTurnCount: Schema.NullOr(NonNegativeInt),
   toCheckpointRef: Schema.NullOr(CheckpointRef),
 });
@@ -389,6 +391,27 @@ function mapSessionRow(
     lastError: row.lastError,
     updatedAt: row.updatedAt,
   };
+}
+
+function mapThreadMachine(
+  row: Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>,
+): ThreadMachineBinding | null {
+  return row.machineId !== null &&
+    row.machineName !== null &&
+    row.machineState !== null &&
+    row.machineHostWorkspaceRoot !== null &&
+    row.machineGuestWorkspaceRoot !== null
+    ? {
+        machineId: row.machineId,
+        machineName: row.machineName,
+        state: row.machineState,
+        ...(row.machineProjectWorkspaceRoot === null
+          ? {}
+          : { projectWorkspaceRoot: row.machineProjectWorkspaceRoot }),
+        hostWorkspaceRoot: row.machineHostWorkspaceRoot,
+        guestWorkspaceRoot: row.machineGuestWorkspaceRoot,
+      }
+    : null;
 }
 
 function mapProjectShellRow(
@@ -573,6 +596,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          machine_id AS "machineId",
+          machine_name AS "machineName",
+          machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
+          machine_host_workspace_root AS "machineHostWorkspaceRoot",
+          machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
@@ -614,6 +643,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          machine_id AS "machineId",
+          machine_name AS "machineName",
+          machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
+          machine_host_workspace_root AS "machineHostWorkspaceRoot",
+          machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
@@ -687,6 +722,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          machine_id AS "machineId",
+          machine_name AS "machineName",
+          machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
+          machine_host_workspace_root AS "machineHostWorkspaceRoot",
+          machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
@@ -1227,7 +1268,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threads.thread_id AS "threadId",
           threads.project_id AS "projectId",
           projects.workspace_root AS "workspaceRoot",
-          threads.worktree_path AS "worktreePath"
+          threads.worktree_path AS "worktreePath",
+          threads.machine_host_workspace_root AS "machineHostWorkspaceRoot"
         FROM projection_threads AS threads
         INNER JOIN projection_projects AS projects
           ON projects.project_id = threads.project_id
@@ -1252,6 +1294,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          machine_id AS "machineId",
+          machine_name AS "machineName",
+          machine_state AS "machineState",
+          machine_project_workspace_root AS "machineProjectWorkspaceRoot",
+          machine_host_workspace_root AS "machineHostWorkspaceRoot",
+          machine_guest_workspace_root AS "machineGuestWorkspaceRoot",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
@@ -2035,6 +2083,7 @@ pending_approval_requests AS (
           threads.project_id AS "projectId",
           projects.workspace_root AS "workspaceRoot",
           threads.worktree_path AS "worktreePath",
+          threads.machine_host_workspace_root AS "machineHostWorkspaceRoot",
           (
             SELECT MAX(turns.checkpoint_turn_count)
             FROM projection_turns AS turns
@@ -3185,6 +3234,7 @@ pending_approval_requests AS (
         projectId: row.value.projectId,
         workspaceRoot: row.value.workspaceRoot,
         worktreePath: row.value.worktreePath,
+        machineHostWorkspaceRoot: row.value.machineHostWorkspaceRoot,
         latestCheckpointTurnCount: row.value.latestCheckpointTurnCount ?? 0,
         toCheckpointRef: row.value.toCheckpointRef,
       });

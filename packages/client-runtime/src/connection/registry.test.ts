@@ -42,6 +42,7 @@ import {
   BearerConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
+  type RelayWakePolicy,
   SshConnectionTarget,
   type ConnectionTarget,
   type PreparedConnection,
@@ -92,6 +93,12 @@ const SECOND_RELAY_TARGET = new RelayConnectionTarget({
   environmentId: EnvironmentId.make("environment-relay-2"),
   label: "Second relay environment",
 });
+const WAKE_POLICY: RelayWakePolicy = {
+  endpoint: "https://wake.example.test",
+  name: "cloudbox",
+  secret: "local-secret",
+  mode: "explicit-intent",
+};
 
 const BEARER_TARGET = new BearerConnectionTarget({
   environmentId: EnvironmentId.make("environment-bearer"),
@@ -414,6 +421,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
           ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.never }),
         ),
         Layer.succeed(ConnectionDriver.ConnectionDriver, driver),
+        WakeIntent.layer,
         cacheLayer,
         Layer.succeed(Persistence.EnvironmentOwnedDataCleanup, ownedDataCleanup),
       ),

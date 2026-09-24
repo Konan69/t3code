@@ -158,6 +158,17 @@ function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
   }
 }
 
+function activityAffectsShellSummary(kind: string): boolean {
+  return (
+    kind === "user-input.requested" ||
+    kind === "user-input.resolved" ||
+    kind === "provider.user-input.respond.failed" ||
+    kind === "approval.requested" ||
+    kind === "approval.resolved" ||
+    kind === "provider.approval.respond.failed"
+  );
+}
+
 function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ProjectionThreadActivity>,
 ): number {
@@ -619,6 +630,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            machineId: null,
+            machineName: null,
+            machineState: null,
+            machineProjectWorkspaceRoot: null,
+            machineHostWorkspaceRoot: null,
+            machineGuestWorkspaceRoot: null,
             linkedPullRequest: null,
             branchPullRequest: null,
             latestTurnId: null,
@@ -963,6 +980,41 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.machine-bound": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            machineId: event.payload.binding.machineId,
+            machineName: event.payload.binding.machineName,
+            machineState: event.payload.binding.state,
+            machineProjectWorkspaceRoot: event.payload.binding.projectWorkspaceRoot ?? null,
+            machineHostWorkspaceRoot: event.payload.binding.hostWorkspaceRoot,
+            machineGuestWorkspaceRoot: event.payload.binding.guestWorkspaceRoot,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.machine-state-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow) || existingRow.value.machineId === null) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            machineState: event.payload.state,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         case "thread.deleted": {
           // A draft retry can re-create this id later in the log. During
           // replay the attachment files on disk already belong to that later
@@ -1019,7 +1071,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.proposed-plan-upserted":
-        case "thread.activity-appended":
         case "thread.approval-response-requested":
         case "thread.user-input-response-requested": {
           const existingRow = yield* projectionThreadRepository.getById({

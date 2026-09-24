@@ -75,6 +75,7 @@ import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
 } from "./composer-attachment-uploads";
+import { environmentCatalog } from "../connection/catalog";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -478,6 +479,7 @@ export function useThreadComposerState() {
     );
     return messageId;
   }, [
+    armEnvironmentWake,
     selectedEnvironmentRuntime?.connectionState,
     selectedEnvironmentRuntime?.serverConfig,
     selectedThreadCreation,

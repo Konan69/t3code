@@ -143,6 +143,28 @@ export function applyThreadDetailEvent(
         },
       };
 
+    case "thread.machine-bound":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          machine: event.payload.binding,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.machine-state-set":
+      return thread.machine == null
+        ? { kind: "unchanged" }
+        : {
+            kind: "updated",
+            thread: {
+              ...thread,
+              machine: { ...thread.machine, state: event.payload.state },
+              updatedAt: event.payload.updatedAt,
+            },
+          };
+
     case "thread.deleted":
       return { kind: "deleted" };
 

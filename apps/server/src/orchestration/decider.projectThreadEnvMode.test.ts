@@ -111,6 +111,68 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
     }),
   );
 
+  it.effect("persists project machine mode and internal thread bindings", () =>
+    Effect.gen(function* () {
+      const initial = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
+      const modeResult = yield* decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-project-machine-mode"),
+          projectId,
+          machineMode: "thread",
+        },
+        readModel: initial,
+      });
+      const modeEvent = Array.isArray(modeResult) ? modeResult[0] : modeResult;
+      const withMode = yield* projectEvent(initial, { ...modeEvent, sequence: 2 });
+      expect(withMode.projects[0]?.machineMode).toBe("thread");
+
+      const threadId = ThreadId.make("thread-machine-binding");
+      const createResult = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.create",
+          commandId: CommandId.make("cmd-thread-create"),
+          threadId,
+          projectId,
+          title: "Machine thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.4",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        },
+        readModel: withMode,
+      });
+      const createEvent = Array.isArray(createResult) ? createResult[0] : createResult;
+      const withThread = yield* projectEvent(withMode, { ...createEvent, sequence: 3 });
+      expect(withThread.threads[0]?.machine).toBeNull();
+
+      const binding = {
+        machineId: "thread-machine-binding",
+        machineName: "thread-thread-machine-binding",
+        state: "running" as const,
+        hostWorkspaceRoot: "/tank/threads/thread-machine-binding/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+      };
+      const bindResult = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.machine.bind",
+          commandId: CommandId.make("cmd-thread-machine-bind"),
+          threadId,
+          binding,
+        },
+        readModel: withThread,
+      });
+      const bindEvent = Array.isArray(bindResult) ? bindResult[0] : bindResult;
+      const bound = yield* projectEvent(withThread, { ...bindEvent, sequence: 4 });
+      expect(bound.threads[0]?.machine).toEqual(binding);
+    }),
+  );
+
   it.effect("omits the field when unset and clears it on explicit null", () =>
     Effect.gen(function* () {
       const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));

@@ -17,6 +17,7 @@ import {
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
+  resolveNewProjectMachineMode,
   sortAddProjectProviderSources,
   type AddProjectRemoteSource,
 } from "@t3tools/client-runtime/operations/projects";
@@ -669,6 +670,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
         commandId: CommandId.make(uuidv4()),
         projectId,
         workspaceRoot,
+        machineMode: resolveNewProjectMachineMode(environment.threadMachines),
         createdAt: new Date().toISOString(),
       });
       const result = await createProject({

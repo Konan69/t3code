@@ -3264,7 +3264,10 @@ const makeWsRpcLayer = (
               }
               return yield* issueAssetUrl({
                 resource: input.resource,
-                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+                workspaceRoot:
+                  thread.value.machine?.hostWorkspaceRoot ??
+                  thread.value.worktreePath ??
+                  project.value.workspaceRoot,
               });
             }),
             { "rpc.aggregate": "workspace" },

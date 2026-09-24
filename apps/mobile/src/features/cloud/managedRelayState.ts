@@ -4,6 +4,7 @@ import {
   deregisterManagedRelayEnvironment,
   managedRelaySessionAtom,
   readManagedRelaySnapshotState,
+  wakeManagedRelayEnvironmentHost,
 } from "@t3tools/client-runtime/relay";
 import {
   createAtomCommandScheduler,
