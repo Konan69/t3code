@@ -2,6 +2,7 @@ import {
   DesktopUpdateChannelSchema,
   type DesktopRuntimeInfo,
   type DesktopUpdateActionResult,
+  type DesktopUpdateBuildError,
   type DesktopUpdateChannel,
   type DesktopUpdateCheckResult,
   type DesktopUpdateState,
@@ -31,10 +32,14 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopForkRelease from "./DesktopForkRelease.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
   createInitialDesktopUpdateState,
+  reduceDesktopUpdateStateOnBuildFailure,
+  reduceDesktopUpdateStateOnBuildRunStarted,
+  reduceDesktopUpdateStateOnBuildStart,
   reduceDesktopUpdateStateOnCheckFailure,
   reduceDesktopUpdateStateOnCheckStart,
   reduceDesktopUpdateStateOnDownloadComplete,
@@ -145,6 +150,20 @@ export class DesktopUpdateUnexpectedActionError extends Schema.TaggedError<Deskt
 ) {
   override get message(): string {
     return `Desktop update ${this.action} action failed unexpectedly.`;
+  }
+}
+
+export class DesktopForkUpdateUnavailableError extends Schema.TaggedError<DesktopForkUpdateUnavailableError>()(
+  "DesktopForkUpdateUnavailableError",
+  {
+    expectedVersion: Schema.String,
+    actualVersion: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    return this.actualVersion === null
+      ? `The fork update feed did not offer ${this.expectedVersion}.`
+      : `The fork update feed offered ${this.actualVersion} instead of ${this.expectedVersion}.`;
   }
 }
 
@@ -281,8 +300,12 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const forkRelease = yield* DesktopForkRelease.DesktopForkRelease;
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
+  const sourceUpdateFeedRef = yield* Ref.make<
+    Option.Option<ElectronUpdater.ElectronUpdaterFeedUrl>
+  >(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
   const finishedUpdateActions = yield* PubSub.unbounded<UpdateAction>();
   const updaterConfiguredRef = yield* Ref.make(false);
@@ -443,9 +466,23 @@ export const make = Effect.gen(function* () {
         );
   });
 
+  const restoreSourceUpdateFeed = Ref.get(sourceUpdateFeedRef).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: electronUpdater.setFeedURL,
+      }),
+    ),
+  );
+
   const downloadAvailableUpdate = Effect.gen(function* () {
     const state = yield* Ref.get(updateStateRef);
-    if (!(yield* Ref.get(updaterConfiguredRef)) || state.status !== "available") {
+    const canRetryForkBuild =
+      state.status === "error" && state.errorContext === "build" && state.availableVersion !== null;
+    if (
+      !(yield* Ref.get(updaterConfiguredRef)) ||
+      (state.status !== "available" && !canRetryForkBuild)
+    ) {
       return { accepted: false, completed: false };
     }
 
@@ -453,8 +490,97 @@ export const make = Effect.gen(function* () {
       return { accepted: false, completed: false };
     }
 
+    let switchedToForkFeed = false;
     return yield* Effect.gen(function* () {
-      yield* setState(reduceDesktopUpdateStateOnDownloadStart(state));
+      let downloadState = state;
+      if (Option.isSome(forkRelease.configuration)) {
+        const availableVersion = state.availableVersion;
+        if (availableVersion === null) {
+          return { accepted: false, completed: false };
+        }
+        const startedAt = yield* currentIsoTimestamp;
+        yield* setState(reduceDesktopUpdateStateOnBuildStart(state, startedAt));
+        const settings = yield* desktopSettings.get;
+        const prepared = yield* forkRelease
+          .ensureRelease({
+            upstreamTag: `v${availableVersion}`,
+            distro: settings.wslDistro,
+            onRunStarted: (runUrl) =>
+              updateState((current) =>
+                reduceDesktopUpdateStateOnBuildRunStarted(current, runUrl),
+              ).pipe(Effect.asVoid),
+          })
+          .pipe(
+            Effect.matchEffect({
+              onFailure: (error) => {
+                const buildError: DesktopUpdateBuildError =
+                  error._tag === "DesktopForkReleaseTokenMissingError"
+                    ? "fork-release-token-missing"
+                    : error._tag === "DesktopForkReleaseDispatchFailedError"
+                      ? "fork-release-dispatch-failed"
+                      : "fork-release-run-failed";
+                return Effect.gen(function* () {
+                  yield* updateState((current) =>
+                    reduceDesktopUpdateStateOnBuildFailure(
+                      current,
+                      buildError,
+                      error.message,
+                      error.runUrl,
+                    ),
+                  );
+                  yield* logUpdaterError(error.message, {
+                    errorTag: error._tag,
+                    upstreamTag: error.upstreamTag,
+                    runUrl: error.runUrl,
+                  });
+                  return Option.none<DesktopForkRelease.EnsureForkReleaseResult>();
+                });
+              },
+              onSuccess: (result) => Effect.succeed(Option.some(result)),
+            }),
+          );
+        if (Option.isNone(prepared)) {
+          return { accepted: true, completed: false };
+        }
+
+        const forkConfig = forkRelease.configuration.value;
+        yield* electronUpdater.setFeedURL({
+          provider: "github",
+          owner: forkConfig.owner,
+          repo: forkConfig.repo,
+          releaseType: "prerelease",
+          channel: "nightly",
+        });
+        switchedToForkFeed = true;
+        yield* logUpdaterInfo("fork release ready; switching update feed", {
+          upstreamVersion: availableVersion,
+          forkVersion: prepared.value.version,
+          alreadyBuilt: prepared.value.alreadyBuilt,
+        });
+        const forkUpdate = yield* electronUpdater.checkForUpdates;
+        if (
+          forkUpdate === null ||
+          !forkUpdate.isUpdateAvailable ||
+          forkUpdate.version !== prepared.value.version
+        ) {
+          return yield* new DesktopForkUpdateUnavailableError({
+            expectedVersion: prepared.value.version,
+            actualVersion: forkUpdate?.version ?? null,
+          });
+        }
+        const checkedAt = yield* currentIsoTimestamp;
+        const current = yield* Ref.get(updateStateRef);
+        downloadState = reduceDesktopUpdateStateOnUpdateAvailable(
+          current,
+          prepared.value.version,
+          checkedAt,
+          state.releaseNotes,
+          state.omittedReleaseCount,
+        );
+        yield* setState(downloadState);
+      }
+
+      yield* setState(reduceDesktopUpdateStateOnDownloadStart(downloadState));
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
@@ -463,10 +589,38 @@ export const make = Effect.gen(function* () {
       return { accepted: true, completed: true };
     }).pipe(
       Effect.catchTags({
-        ElectronUpdaterDownloadUpdateError: Effect.fn("desktop.updates.handleDownloadFailure")(
+        DesktopForkUpdateUnavailableError: Effect.fn("desktop.updates.handleForkUpdateUnavailable")(
           function* (error) {
             yield* updateState((current) =>
-              reduceDesktopUpdateStateOnDownloadFailure(current, error.message),
+              reduceDesktopUpdateStateOnBuildFailure(
+                current,
+                "fork-release-update-unavailable",
+                error.message,
+                current.runUrl,
+              ),
+            );
+            yield* logUpdaterError(error.message, {
+              errorTag: error._tag,
+              expectedVersion: error.expectedVersion,
+              actualVersion: error.actualVersion,
+            });
+            return { accepted: true, completed: false };
+          },
+        ),
+        ElectronUpdaterCheckForUpdatesError: Effect.fn(
+          "desktop.updates.handleForkFeedCheckFailure",
+        )(function* (error) {
+          yield* updateState(() => reduceDesktopUpdateStateOnDownloadFailure(state, error.message));
+          yield* logUpdaterError(error.message, {
+            errorTag: error._tag,
+            channel: error.channel,
+          });
+          return { accepted: true, completed: false };
+        }),
+        ElectronUpdaterDownloadUpdateError: Effect.fn("desktop.updates.handleDownloadFailure")(
+          function* (error) {
+            yield* updateState(() =>
+              reduceDesktopUpdateStateOnDownloadFailure(state, error.message),
             );
             yield* logUpdaterError(error.message, {
               errorTag: error._tag,
@@ -477,9 +631,9 @@ export const make = Effect.gen(function* () {
         ),
       }),
       Effect.onInterrupt(() =>
-        updateState((current) => (current.status === "downloading" ? state : current)).pipe(
-          Effect.asVoid,
-        ),
+        updateState((current) =>
+          current.status === "building" || current.status === "downloading" ? state : current,
+        ).pipe(Effect.asVoid),
       ),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -487,9 +641,7 @@ export const make = Effect.gen(function* () {
         }
         const error = new DesktopUpdateUnexpectedActionError({ action: "download", cause });
         return Effect.gen(function* () {
-          yield* updateState((current) =>
-            reduceDesktopUpdateStateOnDownloadFailure(current, error.message),
-          );
+          yield* updateState(() => reduceDesktopUpdateStateOnDownloadFailure(state, error.message));
           yield* logUpdaterError(error.message, {
             errorTag: error._tag,
             action: error.action,
@@ -497,6 +649,11 @@ export const make = Effect.gen(function* () {
           return { accepted: true, completed: false };
         });
       }),
+      Effect.ensuring(
+        Effect.suspend(() => (switchedToForkFeed ? restoreSourceUpdateFeed : Effect.void)).pipe(
+          Effect.ignoreCause,
+        ),
+      ),
       Effect.ensuring(finishUpdateAction("download")),
     );
   }).pipe(Effect.withSpan("desktop.updates.downloadAvailableUpdate"));
@@ -869,17 +1026,29 @@ export const make = Effect.gen(function* () {
 
       const appUpdateYmlConfig = yield* readAppUpdateYml;
       yield* Ref.set(appUpdateYmlConfigRef, appUpdateYmlConfig);
+      yield* Ref.set(
+        sourceUpdateFeedRef,
+        Option.map(
+          appUpdateYmlConfig,
+          (feed) => feed as unknown as ElectronUpdater.ElectronUpdaterFeedUrl,
+        ),
+      );
 
       if (config.mockUpdates) {
-        yield* electronUpdater.setFeedURL({
+        const mockFeed = {
           provider: "generic",
           url: `http://localhost:${config.mockUpdateServerPort}`,
-        } as ElectronUpdater.ElectronUpdaterFeedUrl);
+        } as ElectronUpdater.ElectronUpdaterFeedUrl;
+        yield* Ref.set(sourceUpdateFeedRef, Option.some(mockFeed));
+        yield* electronUpdater.setFeedURL(mockFeed);
       }
 
       const settings = yield* desktopSettings.get;
+      const updateChannel = Option.isSome(forkRelease.configuration)
+        ? "nightly"
+        : settings.updateChannel;
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+      yield* setState(createBaseUpdateState(updateChannel, enabled, environment));
       if (!enabled) {
         return;
       }
@@ -887,7 +1056,7 @@ export const make = Effect.gen(function* () {
 
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
-      yield* applyAutoUpdaterChannel(settings.updateChannel);
+      yield* applyAutoUpdaterChannel(updateChannel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
@@ -924,14 +1093,15 @@ export const make = Effect.gen(function* () {
       yield* startUpdatePollers;
     }).pipe(Effect.withSpan("desktop.updates.configure")),
     setChannel: Effect.fn("desktop.updates.setChannel")(function* (
-      nextChannel: DesktopUpdateChannel,
+      requestedChannel: DesktopUpdateChannel,
     ) {
-      yield* Effect.annotateCurrentSpan({ channel: nextChannel });
+      const nextChannel = Option.isSome(forkRelease.configuration) ? "nightly" : requestedChannel;
+      yield* Effect.annotateCurrentSpan({ channel: nextChannel, requestedChannel });
       const activeAction = yield* tryStartChannelChange;
       if (Option.isSome(activeAction)) {
         return yield* new DesktopUpdateActionInProgressError({
           action: activeAction.value === "install-recovery" ? "install" : activeAction.value,
-          requestedChannel: nextChannel,
+          requestedChannel,
         });
       }
 

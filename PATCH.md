@@ -4,7 +4,7 @@
 
 - Working branch: `local/boat`
 - Starting commit: `099287af0f0d1d28805942ffc977e669d98a98b0`
-- Upstream release in that merge: `v0.0.43-nightly.20260920.2031`
+- Upstream release in that merge: `v0.0.43-nightly.20260923.2150`
 
 ## Remote-host decision
 
@@ -64,3 +64,28 @@ v0.0.43-nightly.20260920.2031/t3-0.0.43-nightly.20260920.2031-linux-x64.tar.gz
 Build a replacement archive from `local/boat`; the earlier archive was built from the starting commit and still contains the retired implementation.
 
 Do not publish or install local artifacts as part of source maintenance. In particular, do not modify the currently installed Windows application while preparing this branch.
+
+## Fork desktop update feed
+
+The fork's `.github/workflows/fork-release.yml` has no schedule. The desktop app dispatches it after the user clicks Update for a detected upstream nightly; maintainers can also dispatch it manually with a required upstream tag. It merges that `pingdotgg/t3code` nightly tag into `local/fork-feed`, rejects upstream/fork migration-id collisions, and reuses the upstream desktop release workflow to publish only:
+
+- the unsigned Windows x64 NSIS installer, blockmap, and `nightly.yml` updater manifest;
+- the Linux x64 CLI archive embedded as the Windows WSL runtime;
+- `SHA256SUMS` for the CLI archive.
+
+The packaged `app-update.yml` follows `pingdotgg/t3code`, so checks detect upstream nightlies without building or downloading. On Update, the app uses `gh auth token --user Konan69` inside WSL, dispatches the fork workflow when needed, waits for its prerelease, and temporarily switches electron-updater to `Konan69/t3code` for download. A source version ending in nightly sequence `N` maps to `<core>-nightly.<date>.<N>.1`; it sorts above source nightly `N` and below upstream nightly `N+1` under electron-updater's semver comparison.
+
+### One-time bootstrap
+
+A stock installation does not contain the click-triggered fork build logic. Download and install the first fork Windows `.exe` manually from the [Konan69/t3code prereleases](https://github.com/Konan69/t3code/releases). After that one install, the fork app detects upstream nightlies and builds the matching fork release when Update is clicked.
+
+### Merge-conflict issue
+
+The workflow never resolves upstream merge conflicts automatically. When it opens or refreshes `fork-release: merge conflict on <tag>`:
+
+1. Check out the overlay branch named in the workflow run.
+2. Merge the reported upstream tag locally.
+3. Resolve every listed file while preserving both upstream behavior and this overlay.
+4. Commit and push the resolution, then rerun `fork-release.yml` for that branch.
+
+Do not close the issue as a substitute for resolving the merge. The next run must complete the merge and migration guard before it can publish.

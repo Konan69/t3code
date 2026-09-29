@@ -8,6 +8,34 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
+describe("installer release discovery", () => {
+  it("recognizes fork nightly tags in both shell installers", async () => {
+    const shellSource = await NodeFSP.readFile(
+      NodePath.resolve(import.meta.dirname, "install.sh"),
+      "utf8",
+    );
+    const powershellSource = await NodeFSP.readFile(
+      NodePath.resolve(import.meta.dirname, "install.ps1"),
+      "utf8",
+    );
+    const shellPattern = /nightly\) tag_pattern='([^']+)'/.exec(shellSource)?.[1];
+    const powershellPattern = /"nightly" \{ '([^']+)' \}/.exec(powershellSource)?.[1];
+    expect(shellPattern).toBeDefined();
+    expect(powershellPattern).toBeDefined();
+
+    const forkTag = "v1.2.3-nightly.20260911.4.1";
+    const releaseIndex = JSON.stringify([{ tag_name: forkTag }]);
+    const discovered = NodeChildProcess.execFileSync(
+      "sed",
+      ["-n", `s/.*"tag_name": *"${shellPattern}".*/\\1/p`],
+      { input: releaseIndex, encoding: "utf8" },
+    ).trim();
+
+    expect(discovered).toBe(forkTag.slice(1));
+    expect(new RegExp(powershellPattern ?? "(?!)").test(forkTag)).toBe(true);
+  });
+});
+
 // util-linux's script gives the real installer a terminal without a browser or extra packages.
 describe.skipIf(HostProcessPlatform.defaultValue() !== "linux")("installer terminal", () => {
   it.each([false, true])(

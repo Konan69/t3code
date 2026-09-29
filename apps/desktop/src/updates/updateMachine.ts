@@ -1,5 +1,6 @@
 import type {
   DesktopRuntimeInfo,
+  DesktopUpdateBuildError,
   DesktopUpdateChannel,
   DesktopUpdateReleaseNote,
   DesktopUpdateState,
@@ -34,8 +35,11 @@ export function createInitialDesktopUpdateState(
     omittedReleaseCount: 0,
     downloadPercent: null,
     checkedAt: null,
+    runUrl: null,
+    startedAt: null,
     message: null,
     errorContext: null,
+    buildError: null,
     canRetry: false,
   };
 }
@@ -53,7 +57,10 @@ export function reduceDesktopUpdateStateOnCheckStart(
     omittedReleaseCount: hasDownloadedUpdate ? state.omittedReleaseCount : 0,
     message: null,
     downloadPercent: hasDownloadedUpdate ? 100 : null,
+    runUrl: null,
+    startedAt: null,
     errorContext: null,
+    buildError: null,
     canRetry: false,
   };
 }
@@ -70,7 +77,10 @@ export function reduceDesktopUpdateStateOnCheckFailure(
       message: null,
       checkedAt,
       downloadPercent: 100,
+      runUrl: null,
+      startedAt: null,
       errorContext: null,
+      buildError: null,
       canRetry: true,
     };
   }
@@ -81,7 +91,10 @@ export function reduceDesktopUpdateStateOnCheckFailure(
     message,
     checkedAt,
     downloadPercent: null,
+    runUrl: null,
+    startedAt: null,
     errorContext: "check",
+    buildError: null,
     canRetry: true,
   };
 }
@@ -93,20 +106,37 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
   releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote> = [],
   omittedReleaseCount = 0,
 ): DesktopUpdateState {
-  const isDownloadedVersion = state.downloadedVersion === version;
-  const preserveReleaseNotes = isDownloadedVersion && releaseNotes.length === 0;
+  if (state.downloadedVersion !== null) {
+    return {
+      ...state,
+      status: "downloaded",
+      availableVersion: state.downloadedVersion,
+      downloadPercent: 100,
+      checkedAt,
+      runUrl: null,
+      startedAt: null,
+      message: null,
+      errorContext: null,
+      buildError: null,
+      canRetry: true,
+    };
+  }
+
   return {
     ...state,
-    status: isDownloadedVersion ? "downloaded" : "available",
+    status: "available",
     availableVersion: version,
-    downloadedVersion: isDownloadedVersion ? version : null,
-    releaseNotes: preserveReleaseNotes ? state.releaseNotes : releaseNotes,
-    omittedReleaseCount: preserveReleaseNotes ? state.omittedReleaseCount : omittedReleaseCount,
-    downloadPercent: isDownloadedVersion ? 100 : null,
+    downloadedVersion: null,
+    releaseNotes,
+    omittedReleaseCount,
+    downloadPercent: null,
     checkedAt,
+    runUrl: null,
+    startedAt: null,
     message: null,
     errorContext: null,
-    canRetry: isDownloadedVersion,
+    buildError: null,
+    canRetry: false,
   };
 }
 
@@ -121,8 +151,11 @@ export function reduceDesktopUpdateStateOnNoUpdate(
       availableVersion: state.downloadedVersion,
       downloadPercent: 100,
       checkedAt,
+      runUrl: null,
+      startedAt: null,
       message: null,
       errorContext: null,
+      buildError: null,
       canRetry: true,
     };
   }
@@ -136,9 +169,54 @@ export function reduceDesktopUpdateStateOnNoUpdate(
     omittedReleaseCount: 0,
     downloadPercent: null,
     checkedAt,
+    runUrl: null,
+    startedAt: null,
     message: null,
     errorContext: null,
+    buildError: null,
     canRetry: false,
+  };
+}
+
+export function reduceDesktopUpdateStateOnBuildStart(
+  state: DesktopUpdateState,
+  startedAt: string,
+): DesktopUpdateState {
+  return {
+    ...state,
+    status: "building",
+    runUrl: null,
+    startedAt,
+    downloadPercent: null,
+    message: null,
+    errorContext: null,
+    buildError: null,
+    canRetry: false,
+  };
+}
+
+export function reduceDesktopUpdateStateOnBuildRunStarted(
+  state: DesktopUpdateState,
+  runUrl: string,
+): DesktopUpdateState {
+  return { ...state, status: "building", runUrl };
+}
+
+export function reduceDesktopUpdateStateOnBuildFailure(
+  state: DesktopUpdateState,
+  error: DesktopUpdateBuildError,
+  message: string,
+  runUrl: string | null,
+): DesktopUpdateState {
+  return {
+    ...state,
+    status: "error",
+    runUrl,
+    message,
+    downloadPercent: null,
+    errorContext: "build",
+    buildError: error,
+    canRetry: state.availableVersion !== null,
   };
 }
 
@@ -149,8 +227,11 @@ export function reduceDesktopUpdateStateOnDownloadStart(
     ...state,
     status: "downloading",
     downloadPercent: 0,
+    runUrl: null,
+    startedAt: null,
     message: null,
     errorContext: null,
+    buildError: null,
     canRetry: false,
   };
 }
@@ -177,8 +258,11 @@ export function reduceDesktopUpdateStateOnDownloadProgress(
     ...state,
     status: "downloading",
     downloadPercent: percent,
+    runUrl: null,
+    startedAt: null,
     message: null,
     errorContext: null,
+    buildError: null,
     canRetry: false,
   };
 }
@@ -193,8 +277,11 @@ export function reduceDesktopUpdateStateOnDownloadComplete(
     availableVersion: version,
     downloadedVersion: version,
     downloadPercent: 100,
+    runUrl: null,
+    startedAt: null,
     message: null,
     errorContext: null,
+    buildError: null,
     canRetry: true,
   };
 }

@@ -56,6 +56,9 @@ function downloadedState(overrides: Partial<DesktopUpdateState> = {}): DesktopUp
     message: null,
     errorContext: null,
     canRetry: true,
+    runUrl: null,
+    startedAt: null,
+    buildError: null,
     ...overrides,
   };
 }

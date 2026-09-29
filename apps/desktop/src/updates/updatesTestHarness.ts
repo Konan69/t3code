@@ -11,6 +11,7 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopForkRelease from "./DesktopForkRelease.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 /** Shared DesktopUpdates test harness: a fully stubbed updater layer whose
@@ -21,7 +22,7 @@ export const flushCallbacks = Effect.yieldNow;
 
 export interface UpdatesHarnessOptions {
   readonly checkForUpdates?: Effect.Effect<
-    void,
+    ElectronUpdater.ElectronUpdaterCheckResult | null | void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
   >;
   readonly beforeSetUpdateChannel?: Effect.Effect<void>;
@@ -32,6 +33,7 @@ export interface UpdatesHarnessOptions {
   readonly stopBackend?: Effect.Effect<void>;
   readonly startBackend?: Effect.Effect<void>;
   readonly env?: Record<string, string | undefined>;
+  readonly forkRelease?: DesktopForkRelease.DesktopForkRelease["Service"];
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -40,6 +42,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let downloadCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
+  const autoDownloadValues: boolean[] = [];
+  const channels: string[] = [];
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
@@ -67,9 +71,15 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         feedUrls.push(options);
       }),
-    setAutoDownload: () => Effect.void,
+    setAutoDownload: (value) =>
+      Effect.sync(() => {
+        autoDownloadValues.push(value);
+      }),
     setAutoInstallOnAppQuit: () => Effect.void,
-    setChannel: () => Effect.void,
+    setChannel: (channel) =>
+      Effect.sync(() => {
+        channels.push(channel);
+      }),
     setAllowPrerelease: () => Effect.void,
     allowDowngrade: Effect.sync(() => allowDowngrade),
     setAllowDowngrade: (value) =>
@@ -83,7 +93,10 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     setDisableDifferentialDownload: () => options.setDisableDifferentialDownload ?? Effect.void,
     checkForUpdates: Effect.sync(() => {
       checkCount += 1;
-    }).pipe(Effect.andThen(options.checkForUpdates ?? Effect.void)),
+    }).pipe(
+      Effect.andThen(options.checkForUpdates ?? Effect.succeed(null)),
+      Effect.map((result) => result ?? null),
+    ),
     downloadUpdate: Effect.sync(() => {
       downloadCount += 1;
     }).pipe(Effect.andThen(options.downloadUpdate ?? Effect.void)),
@@ -203,8 +216,18 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
       : DesktopAppSettings.layer;
 
+  const forkReleaseLayer = Layer.succeed(
+    DesktopForkRelease.DesktopForkRelease,
+    options.forkRelease ??
+      DesktopForkRelease.DesktopForkRelease.of({
+        configuration: Option.none(),
+        ensureRelease: () => Effect.die("unexpected fork release request"),
+      }),
+  );
+
   const layer = DesktopUpdates.layer.pipe(
     Layer.provideMerge(updaterLayer),
+    Layer.provideMerge(forkReleaseLayer),
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
     Layer.provideMerge(DesktopState.layer),
@@ -228,6 +251,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     installSteps,
     downloadCount: () => downloadCount,
     feedUrls: () => feedUrls,
+    autoDownloadValues: () => autoDownloadValues,
+    channels: () => channels,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(
