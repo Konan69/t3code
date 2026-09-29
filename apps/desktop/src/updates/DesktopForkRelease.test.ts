@@ -14,7 +14,7 @@ const forkTag = "v1.2.4-nightly.20260709.766.1";
 const configuration = Option.some({
   owner: "Konan69",
   repo: "t3code",
-  branch: "local/fork-feed",
+  branch: "local/boat",
 });
 const completeRelease = {
   tag_name: forkTag,
@@ -149,7 +149,7 @@ describe("DesktopForkRelease", () => {
       assert.isFalse(result.alreadyBuilt);
       assert.deepEqual(runUrls, ["https://github.com/Konan69/t3code/actions/runs/123"]);
       assert.include(dispatchBody, `"upstream_tag":"${upstreamTag}"`);
-      assert.include(dispatchBody, '"branch":"local/fork-feed"');
+      assert.include(dispatchBody, '"branch":"local/boat"');
       assert.deepEqual(
         requests.map((request) => request.method),
         ["GET", "POST", "GET", "GET"],

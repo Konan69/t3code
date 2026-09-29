@@ -11,7 +11,7 @@ on:
       branch:
         description: "Fork overlay branch to merge and build"
         required: false
-        default: local/fork-feed
+        default: local/boat
         type: string
       request_id:
         description: "Optional dispatch correlation id"
@@ -49,7 +49,7 @@ jobs:
       - name: Checkout overlay branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.branch || 'local/fork-feed' }}
+          ref: ${{ inputs.branch || 'local/boat' }}
           fetch-depth: 0
 
       - name: Setup release scripts
@@ -260,7 +260,7 @@ jobs:
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.prepare.outputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ needs.prepare.outputs.relay_url }}
       T3CODE_DESKTOP_FORK_REPOSITORY: ${{ github.repository }}
-      T3CODE_DESKTOP_FORK_BRANCH: ${{ inputs.branch || 'local/fork-feed' }}
+      T3CODE_DESKTOP_FORK_BRANCH: ${{ inputs.branch || 'local/boat' }}
     steps:
       - name: Checkout merged build
         uses: actions/checkout@v6

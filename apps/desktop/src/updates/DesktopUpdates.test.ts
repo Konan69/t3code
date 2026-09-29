@@ -27,7 +27,7 @@ const forkNightlyVersion = "1.2.4-nightly.20260709.766.1";
 const forkReleaseConfiguration = {
   owner: "Konan69",
   repo: "t3code",
-  branch: "local/fork-feed",
+  branch: "local/boat",
 };
 
 const configuredForkRelease = (
