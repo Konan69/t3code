@@ -10,11 +10,6 @@ type AutoUpdater = typeof autoUpdater;
 
 export type ElectronUpdaterFeedUrl = Parameters<AutoUpdater["setFeedURL"]>[0];
 
-export interface ElectronUpdaterCheckResult {
-  readonly isUpdateAvailable: boolean;
-  readonly version: string;
-}
-
 export class ElectronUpdaterCheckForUpdatesError extends Schema.TaggedError<ElectronUpdaterCheckForUpdatesError>()(
   "ElectronUpdaterCheckForUpdatesError",
   {
@@ -72,10 +67,7 @@ export class ElectronUpdater extends Context.Service<
     readonly setAllowDowngrade: (value: boolean) => Effect.Effect<void>;
     readonly setFullChangelog: (value: boolean) => Effect.Effect<void>;
     readonly setDisableDifferentialDownload: (value: boolean) => Effect.Effect<void>;
-    readonly checkForUpdates: Effect.Effect<
-      ElectronUpdaterCheckResult | null,
-      ElectronUpdaterCheckForUpdatesError
-    >;
+    readonly checkForUpdates: Effect.Effect<void, ElectronUpdaterCheckForUpdatesError>;
     readonly downloadUpdate: Effect.Effect<void, ElectronUpdaterDownloadUpdateError>;
     readonly quitAndInstall: (options: {
       readonly isSilent: boolean;
@@ -136,16 +128,7 @@ export const make = ElectronUpdater.of({
     return Effect.tryPromise({
       try: () => autoUpdater.checkForUpdates(),
       catch: (cause) => new ElectronUpdaterCheckForUpdatesError({ channel, cause }),
-    }).pipe(
-      Effect.map((result) =>
-        result === null
-          ? null
-          : {
-              isUpdateAvailable: result.isUpdateAvailable,
-              version: result.updateInfo.version,
-            },
-      ),
-    );
+    }).pipe(Effect.asVoid);
   }),
   downloadUpdate: Effect.suspend(() => {
     const channel = autoUpdater.channel;

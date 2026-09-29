@@ -97,7 +97,6 @@ interface NightlyVersion {
   readonly patch: number;
   readonly date: number;
   readonly runNumber: number;
-  readonly forkBuild: number;
 }
 
 const parseNumericIdentifier = (identifier: string): number | undefined =>
@@ -172,8 +171,7 @@ const compareNightlyVersions = (left: NightlyVersion, right: NightlyVersion): nu
   if (left.minor !== right.minor) return left.minor - right.minor;
   if (left.patch !== right.patch) return left.patch - right.patch;
   if (left.date !== right.date) return left.date - right.date;
-  if (left.runNumber !== right.runNumber) return left.runNumber - right.runNumber;
-  return left.forkBuild - right.forkBuild;
+  return left.runNumber - right.runNumber;
 };
 
 const parseNightlyTag = (
@@ -182,13 +180,12 @@ const parseNightlyTag = (
 ): NightlyVersion | undefined => {
   // Accept both the current `v<semver>` format and the legacy `nightly-v<semver>`
   // format so release note diffs keep working across the tag-format transition.
-  const forkBuildPattern = channel === "nightly" ? "(?:\\.(\\d+))?" : "";
   const match = new RegExp(
-    `^(?:nightly-)?v(\\d+)\\.(\\d+)\\.(\\d+)-${channel}\\.(\\d{8})\\.(\\d+)${forkBuildPattern}$`,
+    `^(?:nightly-)?v(\\d+)\\.(\\d+)\\.(\\d+)-${channel}\\.(\\d{8})\\.(\\d+)$`,
   ).exec(tag);
   if (!match) return undefined;
 
-  const [, major, minor, patch, date, runNumber, forkBuild] = match;
+  const [, major, minor, patch, date, runNumber] = match;
   if (!major || !minor || !patch || !date || !runNumber) return undefined;
 
   return {
@@ -197,7 +194,6 @@ const parseNightlyTag = (
     patch: Number(patch),
     date: Number(date),
     runNumber: Number(runNumber),
-    forkBuild: forkBuild === undefined ? 0 : Number(forkBuild),
   };
 };
 

@@ -133,12 +133,6 @@ export class DesktopWslEnvironment extends Context.Service<
       linuxAppRoot: string,
       options?: EnsureWslNodePtyOptions,
     ) => Effect.Effect<EnsureWslNodePtyResult>;
-    readonly runCommand: (
-      distro: string | null,
-      command: string,
-      args: ReadonlyArray<string>,
-      timeout: Duration.Duration,
-    ) => Effect.Effect<WslCommandResult>;
   }
 >()("@t3tools/desktop/wsl/DesktopWslEnvironment") {}
 
@@ -168,14 +162,14 @@ const concatChunks = (arrays: ReadonlyArray<Uint8Array>): Uint8Array => {
 
 const decodeUtf8 = (bytes: Uint8Array): string => new TextDecoder("utf-8").decode(bytes);
 
-export interface WslCommandResult {
+interface ShellResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
   readonly transportFailure: "timeout" | "spawn" | "process" | null;
 }
 
-const TIMEOUT_RESULT: WslCommandResult = {
+const TIMEOUT_RESULT: ShellResult = {
   exitCode: 124,
   stdout: "",
   stderr: "\n[timeout]",
@@ -183,7 +177,7 @@ const TIMEOUT_RESULT: WslCommandResult = {
 };
 
 export const formatWslShellTransportFailureReason = (
-  failure: WslCommandResult["transportFailure"],
+  failure: ShellResult["transportFailure"],
   subject = "Node.js",
 ): string | null => {
   switch (failure) {
@@ -218,7 +212,7 @@ const runWslShell = (
     readonly nodeEngineRange?: string | null;
     readonly resolveNode?: boolean;
   } = {},
-): Effect.Effect<WslCommandResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
+): Effect.Effect<ShellResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const spawner = ChildProcessSpawner.ChildProcessSpawner;
   // Node discovery is explicit in the generated preamble, so loading user
   // profiles is unnecessary and can corrupt strict script exit status. Runtime
@@ -257,7 +251,7 @@ const runWslShell = (
           stdout: "",
           stderr: `\n${spawnResult.error.message}`,
           transportFailure: "spawn",
-        } satisfies WslCommandResult;
+        } satisfies ShellResult;
       }
       const handle = spawnResult.handle;
       // Drain stdout and stderr concurrently so neither pipe buffer can fill
@@ -271,13 +265,13 @@ const runWslShell = (
         stdout: decodeUtf8(concatChunks(stdoutBytes)),
         stderr: decodeUtf8(concatChunks(stderrBytes)),
         transportFailure: null,
-      } satisfies WslCommandResult;
+      } satisfies ShellResult;
     }),
   ).pipe(
     Effect.timeoutOption(timeout),
-    Effect.map(Option.getOrElse((): WslCommandResult => TIMEOUT_RESULT)),
+    Effect.map(Option.getOrElse((): ShellResult => TIMEOUT_RESULT)),
     Effect.catch((error) =>
-      Effect.succeed<WslCommandResult>({
+      Effect.succeed<ShellResult>({
         exitCode: 127,
         stdout: "",
         stderr: `\n${error.message}`,
@@ -288,16 +282,6 @@ const runWslShell = (
 };
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
-
-const runWslCommand = (
-  distro: string | null,
-  command: string,
-  args: ReadonlyArray<string>,
-  timeout: Duration.Duration,
-) =>
-  runWslShell(distro, `exec ${[command, ...args].map(shellQuote).join(" ")}\n`, timeout, {
-    resolveNode: false,
-  });
 
 // Holds the sha256 of the runtime's `t3` executable, written when the install
 // promotes a verified tree. Presence alone only says an install once finished
@@ -1217,11 +1201,6 @@ export interface DesktopWslEnvironmentTestStub {
     linuxAppRoot: string,
     options?: EnsureWslNodePtyOptions,
   ) => EnsureWslNodePtyResult;
-  readonly runCommand?: (
-    distro: string | null,
-    command: string,
-    args: ReadonlyArray<string>,
-  ) => WslCommandResult;
 }
 
 export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
@@ -1259,15 +1238,6 @@ export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
             ok: false,
             reason: "ensureNodePty stub not configured",
             fatal: true,
-          },
-        ),
-      runCommand: (distro, command, args) =>
-        Effect.succeed(
-          stub.runCommand?.(distro, command, args) ?? {
-            exitCode: 127,
-            stdout: "",
-            stderr: "runCommand stub not configured",
-            transportFailure: "spawn",
           },
         ),
     }),
@@ -1358,10 +1328,6 @@ export const layer = Layer.effect(
       probeRuntime: (distro, linuxAppRoot) =>
         provideSpawner(probeWslRuntimeImpl(distro, linuxAppRoot)).pipe(
           Effect.withSpan("desktop.wsl.probeRuntime"),
-        ),
-      runCommand: (distro, command, args, timeout) =>
-        provideSpawner(runWslCommand(distro, command, args, timeout)).pipe(
-          Effect.withSpan("desktop.wsl.runCommand"),
         ),
       ensureNodePty: (distro, linuxAppRoot, options) =>
         provideSpawner(ensureNodePtyImpl(distro, linuxAppRoot, options)).pipe(

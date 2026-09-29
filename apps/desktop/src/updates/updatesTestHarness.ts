@@ -13,7 +13,6 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
-import * as DesktopForkRelease from "./DesktopForkRelease.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 /** Shared DesktopUpdates test harness: a fully stubbed updater layer whose
@@ -24,7 +23,7 @@ export const flushCallbacks = Effect.yieldNow;
 
 export interface UpdatesHarnessOptions {
   readonly checkForUpdates?: Effect.Effect<
-    ElectronUpdater.ElectronUpdaterCheckResult | null | void,
+    void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
   >;
   readonly beforeSetUpdateChannel?: Effect.Effect<void>;
@@ -35,7 +34,6 @@ export interface UpdatesHarnessOptions {
   readonly stopBackend?: Effect.Effect<void>;
   readonly startBackend?: Effect.Effect<void>;
   readonly env?: Record<string, string | undefined>;
-  readonly forkRelease?: DesktopForkRelease.DesktopForkRelease["Service"];
   readonly platform?: NodeJS.Platform;
   /** Contents of the resources/package-type marker a Linux package ships. */
   readonly packageType?: string | undefined;
@@ -47,8 +45,6 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let downloadCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
-  const autoDownloadValues: boolean[] = [];
-  const channels: string[] = [];
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
@@ -76,15 +72,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         feedUrls.push(options);
       }),
-    setAutoDownload: (value) =>
-      Effect.sync(() => {
-        autoDownloadValues.push(value);
-      }),
+    setAutoDownload: () => Effect.void,
     setAutoInstallOnAppQuit: () => Effect.void,
-    setChannel: (channel) =>
-      Effect.sync(() => {
-        channels.push(channel);
-      }),
+    setChannel: () => Effect.void,
     setAllowPrerelease: () => Effect.void,
     allowDowngrade: Effect.sync(() => allowDowngrade),
     setAllowDowngrade: (value) =>
@@ -98,10 +88,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     setDisableDifferentialDownload: () => options.setDisableDifferentialDownload ?? Effect.void,
     checkForUpdates: Effect.sync(() => {
       checkCount += 1;
-    }).pipe(
-      Effect.andThen(options.checkForUpdates ?? Effect.succeed(null)),
-      Effect.map((result) => result ?? null),
-    ),
+    }).pipe(Effect.andThen(options.checkForUpdates ?? Effect.void)),
     downloadUpdate: Effect.sync(() => {
       downloadCount += 1;
     }).pipe(Effect.andThen(options.downloadUpdate ?? Effect.void)),
@@ -221,14 +208,6 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
       : DesktopAppSettings.layer;
 
-  const forkReleaseLayer = Layer.succeed(
-    DesktopForkRelease.DesktopForkRelease,
-    options.forkRelease ??
-      DesktopForkRelease.DesktopForkRelease.of({
-        configuration: Option.none(),
-        ensureRelease: () => Effect.die("unexpected fork release request"),
-      }),
-  );
   // Tracks the restart markers installs leave, so installs stay free of real
   // disk I/O that would outrun the tests' settle loops.
   const updateRestartMarkers = new Set<string>();
@@ -258,7 +237,6 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layer = DesktopUpdates.layer.pipe(
     Layer.provide(fileSystemLayer),
     Layer.provideMerge(updaterLayer),
-    Layer.provideMerge(forkReleaseLayer),
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
     Layer.provideMerge(DesktopState.layer),
@@ -283,8 +261,6 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     updateRestartMarkers,
     downloadCount: () => downloadCount,
     feedUrls: () => feedUrls,
-    autoDownloadValues: () => autoDownloadValues,
-    channels: () => channels,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(

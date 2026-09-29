@@ -24,9 +24,6 @@ const nightlyState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
-  runUrl: null,
-  startedAt: null,
-  buildError: null,
 };
 
 describe("sidebar update release notes popover", () => {
