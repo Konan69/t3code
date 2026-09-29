@@ -22,7 +22,7 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { MachineService } from "./MachineService.ts";
 import * as Context from "effect/Context";
 
-export class ThreadMachineServiceError extends Schema.TaggedErrorClass<ThreadMachineServiceError>()(
+export class ThreadMachineServiceError extends Schema.TaggedError<ThreadMachineServiceError>()(
   "ThreadMachineServiceError",
   {
     operation: Schema.String,

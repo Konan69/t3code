@@ -1,4 +1,5 @@
 import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
+import { RelayEnvironmentWakeScope } from "@t3tools/contracts/relay";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -9,6 +10,7 @@ import * as Schema from "effect/Schema";
 
 import { appendClientConnectionParams } from "../authorization/remote.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
   BearerConnectionCredential,
@@ -21,6 +23,7 @@ import {
   credentialMissingError,
   environmentMismatchError,
   mapRemoteEnvironmentError,
+  mapManagedRelayError,
   profileMissingError,
 } from "./errors.ts";
 import {
@@ -37,6 +40,8 @@ import type {
 } from "./model.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
+import { wakeEndpoint } from "./wakeEndpoint.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 import {
   appendOrchestrationProtocol,
   orchestrationProtocolCompatibilityError,
@@ -164,6 +169,8 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
 });
 
 const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(function* () {
+  const relay = yield* ManagedRelay.ManagedRelayClient;
+  const session = yield* ClientCapabilities.CloudSession;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
   const wakeIntent = yield* WakeIntent.WakeIntent;
 

@@ -21,7 +21,7 @@ import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
-export class HostLifecycleNotAuthorized extends Schema.TaggedErrorClass<HostLifecycleNotAuthorized>()(
+export class HostLifecycleNotAuthorized extends Schema.TaggedError<HostLifecycleNotAuthorized>()(
   "HostLifecycleNotAuthorized",
   {
     userId: Schema.String,
@@ -30,12 +30,12 @@ export class HostLifecycleNotAuthorized extends Schema.TaggedErrorClass<HostLife
   },
 ) {}
 
-export class HostLifecycleConfigInvalid extends Schema.TaggedErrorClass<HostLifecycleConfigInvalid>()(
+export class HostLifecycleConfigInvalid extends Schema.TaggedError<HostLifecycleConfigInvalid>()(
   "HostLifecycleConfigInvalid",
   { reason: Schema.Literal("endpoint_invalid") },
 ) {}
 
-export class HostLifecycleRequestFailed extends Schema.TaggedErrorClass<HostLifecycleRequestFailed>()(
+export class HostLifecycleRequestFailed extends Schema.TaggedError<HostLifecycleRequestFailed>()(
   "HostLifecycleRequestFailed",
   {
     environmentId: Schema.String,
@@ -44,7 +44,7 @@ export class HostLifecycleRequestFailed extends Schema.TaggedErrorClass<HostLife
   },
 ) {}
 
-export class HostLifecycleRequestTimedOut extends Schema.TaggedErrorClass<HostLifecycleRequestTimedOut>()(
+export class HostLifecycleRequestTimedOut extends Schema.TaggedError<HostLifecycleRequestTimedOut>()(
   "HostLifecycleRequestTimedOut",
   { environmentId: Schema.String },
 ) {}

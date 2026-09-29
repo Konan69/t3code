@@ -38,6 +38,8 @@ import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+import { type WakeStatusResult } from "./wakeEndpoint.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 import {
   GitHubRoutingPermissions,
   gitHubRoutingConnectionKey,
@@ -67,7 +69,7 @@ export class PlatformEnvironmentRemovalError extends Schema.TaggedError<Platform
   }
 }
 
-export class WakePolicyUnsupportedTargetError extends Schema.TaggedErrorClass<WakePolicyUnsupportedTargetError>()(
+export class WakePolicyUnsupportedTargetError extends Schema.TaggedError<WakePolicyUnsupportedTargetError>()(
   "WakePolicyUnsupportedTargetError",
   {
     environmentId: EnvironmentId,

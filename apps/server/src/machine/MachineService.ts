@@ -54,7 +54,7 @@ export type MachineState = typeof MachineState.Type;
 export const ThreadMachineBinding = ContractThreadMachineBinding;
 export type ThreadMachineBinding = ThreadMachineBindingType;
 
-export class MachineServiceError extends Schema.TaggedErrorClass<MachineServiceError>()(
+export class MachineServiceError extends Schema.TaggedError<MachineServiceError>()(
   "MachineServiceError",
   {
     operation: Schema.String,

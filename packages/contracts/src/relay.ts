@@ -1127,8 +1127,62 @@ export const RelayGetEnvironmentStatusEndpoint = HttpApiEndpoint.post(
   },
 ).annotate(OpenApi.Summary, "Check environment status");
 
+const RelayEnvironmentHostParams = Schema.Struct({ environmentId: EnvironmentId });
+
+export const RelayConfigureEnvironmentHostLifecycleEndpoint = HttpApiEndpoint.put(
+  "configureEnvironmentHostLifecycle",
+  "/v1/environments/:environmentId/host-lifecycle",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    payload: RelayEnvironmentHostLifecycleConfigRequest,
+    success: RelayOkResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Configure account-level host lifecycle access");
+
+export const RelayRemoveEnvironmentHostLifecycleEndpoint = HttpApiEndpoint.delete(
+  "removeEnvironmentHostLifecycle",
+  "/v1/environments/:environmentId/host-lifecycle",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    success: RelayOkResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Remove account-level host lifecycle access");
+
+export const RelayGetEnvironmentHostStatusEndpoint = HttpApiEndpoint.post(
+  "getEnvironmentHostStatus",
+  "/v1/environments/:environmentId/host-status",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    success: RelayEnvironmentHostStatusResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Read the compute host state");
+
+export const RelayWakeEnvironmentHostEndpoint = HttpApiEndpoint.post(
+  "wakeEnvironmentHost",
+  "/v1/environments/:environmentId/wake",
+  {
+    headers: RelayDpopRequestHeaders,
+    params: RelayEnvironmentHostParams,
+    success: RelayEnvironmentWakeResponse,
+    error: RelayEnvironmentConnectErrors,
+  },
+).annotate(OpenApi.Summary, "Wake the compute host");
+
 const RelayDpopClientGroup = HttpApiGroup.make("dpopClient")
-  .add(RelayConnectEnvironmentEndpoint, RelayGetEnvironmentStatusEndpoint)
+  .add(
+    RelayConnectEnvironmentEndpoint,
+    RelayGetEnvironmentStatusEndpoint,
+    RelayConfigureEnvironmentHostLifecycleEndpoint,
+    RelayRemoveEnvironmentHostLifecycleEndpoint,
+    RelayGetEnvironmentHostStatusEndpoint,
+    RelayWakeEnvironmentHostEndpoint,
+  )
   .annotate(OpenApi.Description, "DPoP-authenticated client access to linked environments.")
   .middleware(RelayDpopClientAuth);
 

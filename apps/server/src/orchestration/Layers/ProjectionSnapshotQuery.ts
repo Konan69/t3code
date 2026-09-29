@@ -32,6 +32,7 @@ import {
   ThreadLinkedPullRequest,
   ThreadTitleState,
   ThreadId,
+  type ThreadMachineBinding,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
   type ThreadPullRequestLink,

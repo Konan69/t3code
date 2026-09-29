@@ -451,6 +451,22 @@ export const ProjectFaviconPath = TrimmedNonEmptyString.check(
 );
 export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 
+export const ProjectMachineMode = Schema.Literals(["off", "thread"]);
+export type ProjectMachineMode = typeof ProjectMachineMode.Type;
+
+export const ThreadMachineState = Schema.Literals(["running", "stopped", "archived"]);
+export type ThreadMachineState = typeof ThreadMachineState.Type;
+
+export const ThreadMachineBinding = Schema.Struct({
+  machineId: TrimmedNonEmptyString,
+  machineName: TrimmedNonEmptyString,
+  state: ThreadMachineState,
+  projectWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  hostWorkspaceRoot: TrimmedNonEmptyString,
+  guestWorkspaceRoot: TrimmedNonEmptyString,
+});
+export type ThreadMachineBinding = typeof ThreadMachineBinding.Type;
+
 export const ProjectIconColor = Schema.Literals([
   "gray",
   "red",
@@ -547,6 +563,7 @@ export const OrchestrationProject = Schema.Struct({
   // Per-project override for where new threads start. Null/absent means
   // "no override": clients fall back to t3.json, then the global setting.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  machineMode: Schema.optional(ProjectMachineMode),
   // Opt-in because background sync performs network I/O and may move the checkout.
   // Optional on the wire so cached snapshots from older servers still decode.
   autoPull: Schema.optional(Schema.Boolean),
@@ -868,6 +885,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  machineMode: Schema.optional(ProjectMachineMode),
   autoPull: Schema.optional(Schema.Boolean),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
@@ -1661,6 +1679,8 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadMachineBindCommand,
+  ThreadMachineStateSetCommand,
   ThreadAutoSettleCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,

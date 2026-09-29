@@ -30,6 +30,11 @@ const ConnectionCatalogDocumentFields = {
   disabledEnvironmentIds: Schema.Array(EnvironmentId).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed([])),
   ),
+};
+
+const ConnectionCatalogDocumentV1 = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  ...ConnectionCatalogDocumentFields,
 });
 
 const ConnectionCatalogDocumentV2 = Schema.Struct({

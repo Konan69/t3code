@@ -118,6 +118,14 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   displayName: Schema.String,
 });
 
+export const DesktopCloudboxWakeConfigSchema = Schema.Struct({
+  endpoint: Schema.String,
+  name: Schema.String,
+  secret: Schema.String,
+  environmentId: Schema.NullOr(Schema.String),
+});
+export type DesktopCloudboxWakeConfig = typeof DesktopCloudboxWakeConfigSchema.Type;
+
 export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);
 export type DesktopSnapShotMode = typeof DesktopSnapShotMode.Type;
 

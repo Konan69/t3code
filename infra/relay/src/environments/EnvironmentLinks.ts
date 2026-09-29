@@ -94,7 +94,7 @@ export class EnvironmentLinkRevokePersistenceError extends Schema.TaggedError<En
   }
 }
 
-export class EnvironmentHostLifecyclePersistenceError extends Schema.TaggedErrorClass<EnvironmentHostLifecyclePersistenceError>()(
+export class EnvironmentHostLifecyclePersistenceError extends Schema.TaggedError<EnvironmentHostLifecyclePersistenceError>()(
   "EnvironmentHostLifecyclePersistenceError",
   {
     operation: Schema.Literals(["configure", "remove"]),
