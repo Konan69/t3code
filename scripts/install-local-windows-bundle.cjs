@@ -200,6 +200,7 @@ const stampArchiveVersion = (archivePath, version) => {
     archivePath,
     Buffer.concat([sizeBuffer, headerBuffer, archiveBuffer.subarray(packedDataStart), content]),
   );
+  asar.uncache(archivePath);
 };
 
 const verifyArchiveVersion = (archivePath, version) => {

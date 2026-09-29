@@ -439,6 +439,8 @@ describe("DesktopBackendConfiguration", () => {
           assert.deepEqual(config.args, [
             "-d",
             "Ubuntu",
+            "--cd",
+            "~",
             "--exec",
             "env",
             `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${resolvedPath}`,
