@@ -281,7 +281,11 @@ describe("AcpSessionRuntime", () => {
       const runtime = yield* AcpSessionRuntime.make(mockRuntimeOptions);
       yield* runtime.start();
       yield* runtime.notify("_test/exit", {});
-      const events = yield* runtime.getEvents().pipe(Stream.take(1), Stream.runCollect);
+      const events = yield* runtime.getEvents().pipe(
+        Stream.filter((event) => event._tag === "ConnectionTerminated"),
+        Stream.take(1),
+        Stream.runCollect,
+      );
       const event = events[0];
       expect(event).toMatchObject({ _tag: "ConnectionTerminated", error: { code: 19 } });
       if (event?._tag !== "ConnectionTerminated") return;

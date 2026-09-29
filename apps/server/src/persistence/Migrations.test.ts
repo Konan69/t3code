@@ -94,6 +94,7 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
       [51, "ProjectionThreadMessageContext"],
       [52, "ProjectionThreadTitleState"],
       [53, "PullRequestFilesViewed"],
+      [54, "ProjectionThreadsAutoSettleDisabledAt"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT default_model_selection_json, auto_pull FROM projection_projects`,
@@ -113,7 +114,7 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
     );
     const counts =
       yield* sql`SELECT COUNT(*) AS total, COUNT(DISTINCT name) AS distinct_names FROM t3_fork_migrations`;
-    assert.deepStrictEqual(counts, [{ total: 56, distinct_names: 56 }]);
+    assert.deepStrictEqual(counts, [{ total: 57, distinct_names: 57 }]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
