@@ -570,7 +570,9 @@ function trace2ChildKey(record: Record<string, unknown>): string | null {
 const Trace2Record = Schema.Record(Schema.String, Schema.Unknown);
 const decodeTrace2Record = decodeJsonResult(Trace2Record);
 
-const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
+// Untraced because it runs on every git spawn and returns at once without hook
+// callbacks. Its errors fail the runGitCommand span.
+const createTrace2Monitor = Effect.fnUntraced(function* (
   input: Pick<GitVcsDriver.ExecuteGitInput, "operation" | "cwd" | "args">,
   progress: GitVcsDriver.ExecuteGitProgress | undefined,
 ): Effect.fn.Return<
@@ -967,16 +969,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return yield* execution.pipe(
         Effect.timeoutOption(timeoutMs),
         Effect.flatMap((result) =>
-          Option.match(result, {
-            onNone: () =>
-              Effect.fail(
-                new GitCommandError({
-                  ...gitCommandContext(commandInput),
-                  detail: "Git command timed out.",
-                }),
-              ),
-            onSome: Effect.succeed,
-          }),
+          Effect.fromOption(
+            result,
+            () =>
+              new GitCommandError({
+                ...gitCommandContext(commandInput),
+                detail: "Git command timed out.",
+              }),
+          ),
         ),
       );
     },
@@ -1025,11 +1025,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         : {}),
       ...(options.progress ? { progress: options.progress } : {}),
     }).pipe(
-      Effect.flatMap((result) => {
-        if (options.allowNonZeroExit || result.exitCode === 0) {
-          return Effect.succeed(result);
-        }
-        return Effect.fail(
+      Effect.filterOrFail(
+        (result) => options.allowNonZeroExit || result.exitCode === 0,
+        (result) =>
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
             detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
@@ -1037,8 +1035,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
           }),
-        );
-      }),
+      ),
     );
 
   const executeGitWithStableDiagnostics = (
@@ -1151,10 +1148,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   ): Effect.Effect<void, GitCommandError> => {
     const fetchCwd =
       path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
+    // `--no-auto-gc` (a synonym of `--no-auto-maintenance` that older Git also knows) keeps
+    // this poll from starting `git gc --auto`. When that gc fails, for example on a repository
+    // with missing objects, Git retries it on every fetch and leaves a full-size `tmp_pack_*`
+    // behind each time, so a background poll could fill the disk.
     return executeGit(
       "GitVcsDriver.fetchRemoteForStatus",
       fetchCwd,
-      ["--git-dir", gitCommonDir, "fetch", "--quiet", "--no-tags", remoteName],
+      ["--git-dir", gitCommonDir, "fetch", "--quiet", "--no-tags", "--no-auto-gc", remoteName],
       {
         env: STATUS_UPSTREAM_REFRESH_ENV,
         fallbackErrorDetail: "Background Git fetch exited with a non-zero status.",
@@ -2384,9 +2385,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (indexExists) {
       const { mtime } = yield* fileSystem.stat(indexPath);
       yield* fileSystem.copyFile(indexPath, tempIndexPath);
-      // A newer copy timestamp hides racily clean edits. Round down before Git reads or rewrites it.
+      // Node FileSystem.stat truncates bigint timestamps to milliseconds before creating its Date.
+      // Flooring preserves the source second without making preceding-second files racy.
       const indexTime = Option.isSome(mtime)
-        ? Math.max(0, Math.floor((mtime.value.getTime() - 1) / 1000))
+        ? Math.max(0, Math.floor(mtime.value.getTime() / 1000))
         : 0;
       yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
     }

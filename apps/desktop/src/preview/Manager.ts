@@ -943,14 +943,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     delivery: () => Effect.Effect<void>,
   ) =>
     Effect.suspend(delivery).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("Desktop preview event listener failed.", {
-              eventKind,
-              tabId,
-              cause,
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        (cause) =>
+          Effect.logWarning("Desktop preview event listener failed.", {
+            eventKind,
+            tabId,
+            cause,
+          }),
       ),
     );
 
@@ -1116,15 +1116,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       }
       return resolvedPath;
     }).pipe(
-      Effect.flatMap((resolvedPath) =>
-        resolvedPath === null
-          ? Effect.fail(
-              new PreviewArtifactPathOutsideDirectoryError({
-                artifactPath,
-                artifactDirectory: resolvedArtifactDirectory,
-              }),
-            )
-          : Effect.succeed(resolvedPath),
+      Effect.filterOrFail(
+        (resolvedPath) => resolvedPath !== null,
+        () =>
+          new PreviewArtifactPathOutsideDirectoryError({
+            artifactPath,
+            artifactDirectory: resolvedArtifactDirectory,
+          }),
       ),
     );
 
@@ -1405,14 +1403,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               wcDebugger.on("message", onMessage);
               wcDebugger.attach("1.3");
             });
-            yield* Effect.all(
-              ["Runtime.enable", "Accessibility.enable", "Network.enable", "Log.enable"].map(
-                (method) =>
-                  attemptPromise(
-                    { operation: `initializeDebugger.${method}`, webContentsId: wc.id },
-                    () => wcDebugger.sendCommand(method),
-                  ),
-              ),
+            yield* Effect.forEach(
+              ["Runtime.enable", "Accessibility.enable", "Network.enable", "Log.enable"],
+              (method) =>
+                attemptPromise(
+                  { operation: `initializeDebugger.${method}`, webContentsId: wc.id },
+                  () => wcDebugger.sendCommand(method),
+                ),
               { concurrency: "unbounded", discard: true },
             );
             return [
@@ -4057,13 +4054,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         receiptKey: JSON.stringify(`__t3NativeKey_${NodeCrypto.randomUUID()}`),
       })),
       ({ frames, receiptKey }) =>
-        Effect.all(
-          frames.map((frame) =>
+        Effect.forEach(
+          frames,
+          (frame) =>
             evaluate(frame, `globalThis[${receiptKey}]?.dispose()`).pipe(
               Effect.timeoutOption(1_000),
               Effect.ignore,
             ),
-          ),
           { concurrency: "unbounded", discard: true },
         ),
     );

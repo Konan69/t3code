@@ -6,10 +6,12 @@ import type {
   WorktreeSubmodules,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
+  sanitizeNewRefName,
 } from "@t3tools/shared/git";
 
 export interface EnvironmentOption {
@@ -107,10 +109,12 @@ export const THREAD_MACHINE_WORKSPACE_LABEL = "Thread machine";
 
 export function resolveLockedWorkspaceLabel(
   activeWorktreePath: string | null,
+  effectiveEnvMode: EnvMode,
   inThreadMachine = false,
 ): string {
   if (inThreadMachine) return THREAD_MACHINE_WORKSPACE_LABEL;
-  return activeWorktreePath ? "Worktree" : "Local checkout";
+  if (activeWorktreePath) return "Worktree";
+  return effectiveEnvMode === "worktree" ? resolveEnvModeLabel("worktree") : "Local checkout";
 }
 
 export interface PreviousWorktreeSeed {
@@ -164,15 +168,20 @@ export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;
   hasServerThread: boolean;
   draftThreadEnvMode: EnvMode | undefined;
+  /**
+   * The server is still creating this thread's worktree. The thread exists
+   * from the start of that setup but gets its worktree path only at the end.
+   */
+  preparingWorktree?: boolean;
 }): EnvMode {
-  const { activeWorktreePath, hasServerThread, draftThreadEnvMode } = input;
+  const { activeWorktreePath, hasServerThread, draftThreadEnvMode, preparingWorktree } = input;
   if (!hasServerThread) {
     if (activeWorktreePath) {
       return "local";
     }
     return draftThreadEnvMode === "worktree" ? "worktree" : "local";
   }
-  return activeWorktreePath ? "worktree" : "local";
+  return activeWorktreePath || preparingWorktree ? "worktree" : "local";
 }
 
 export function resolveDraftEnvModeAfterBranchChange(input: {
@@ -280,19 +289,6 @@ export function resolveBranchSelectionTarget(input: {
     nextWorktreePath,
     reuseExistingWorktree: false,
   };
-}
-
-// Git rejects ASCII space and the ASCII control characters (tab, newline and
-// friends) in ref names, so the picker's "Create new ref" entry can only fail
-// for a typed name like "new branch". Replacing runs of those with a dash makes
-// the name usable without reimplementing check-ref-format: names invalid for
-// other reasons still surface the git error. Only the whitespace git actually
-// rejects is replaced — git accepts U+00A0 and friends, and rewriting those
-// would silently create a ref the user never asked for. Case and existing
-// dashes are left alone, since ref names are case sensitive and consecutive
-// dashes are valid.
-export function sanitizeNewRefName(rawName: string): string {
-  return rawName.trim().replace(/[ \t\n\r\f\v]+/g, "-");
 }
 
 export function shouldIncludeBranchPickerItem(input: {
