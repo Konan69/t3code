@@ -12,11 +12,14 @@ const fail = (message) => {
   throw new LocalBundleError(`[local-bundle] ${message}`);
 };
 
-const [buildRootArg, resourcesArg, linuxCliArchiveArg] = process.argv.slice(2);
+const [buildRootArg, resourcesArg, linuxCliArchiveArg, versionArg] = process.argv.slice(2);
 if (buildRootArg === undefined || resourcesArg === undefined || linuxCliArchiveArg === undefined) {
   fail(
-    "usage: install-local-windows-bundle.cjs <build-root> <installed-resources-dir> <linux-cli-archive>",
+    "usage: install-local-windows-bundle.cjs <build-root> <resources-dir> <linux-cli-archive> [app-version]",
   );
+}
+if (versionArg !== undefined && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(versionArg)) {
+  fail(`invalid app version: ${versionArg}`);
 }
 
 const buildRoot = path.resolve(buildRootArg);
@@ -173,6 +176,30 @@ const rewriteArchiveSubtree = ({ sourceArchive, archiveRoot, buildDirectory, sta
     stagedArchive,
     Buffer.concat([sizeBuffer, headerBuffer, packedData, ...replacements]),
   );
+};
+
+const stampArchiveVersion = (archivePath, version) => {
+  const rawHeader = asar.getRawHeader(archivePath);
+  const archiveBuffer = fs.readFileSync(archivePath);
+  const packedDataStart = 8 + rawHeader.headerSize;
+  const packageNode = getHeaderNode(rawHeader.header, "package.json");
+  const packageJson = JSON.parse(asar.extractFile(archivePath, "package.json").toString("utf8"));
+  const content = Buffer.from(`${JSON.stringify({ ...packageJson, version }, null, 2)}\n`);
+  packageNode.size = content.length;
+  packageNode.offset = String(archiveBuffer.length - packedDataStart);
+  packageNode.integrity = fileIntegrity(content);
+  const [sizeBuffer, headerBuffer] = encodeHeader(rawHeader.header);
+  fs.writeFileSync(
+    archivePath,
+    Buffer.concat([sizeBuffer, headerBuffer, archiveBuffer.subarray(packedDataStart), content]),
+  );
+};
+
+const verifyArchiveVersion = (archivePath, version) => {
+  const packageJson = JSON.parse(asar.extractFile(archivePath, "package.json").toString("utf8"));
+  if (packageJson.version !== version) {
+    fail(`${archivePath} reports version ${packageJson.version}, expected ${version}`);
+  }
 };
 
 const runTar = (args, options = {}) => {
@@ -401,7 +428,9 @@ try {
     buildDirectory: desktopBuild,
     stagedArchive,
   });
+  if (versionArg !== undefined) stampArchiveVersion(stagedArchive, versionArg);
   verifyDesktopArchive(stagedArchive);
+  if (versionArg !== undefined) verifyArchiveVersion(stagedArchive, versionArg);
 
   console.log("[local-bundle] rewriting compiled server/web archive subtree");
   rewriteArchiveSubtree({
@@ -410,7 +439,9 @@ try {
     buildDirectory: serverBuild,
     stagedArchive: stagedServer,
   });
+  if (versionArg !== undefined) stampArchiveVersion(stagedServer, versionArg);
   verifyServerArchive(stagedServer);
+  if (versionArg !== undefined) verifyArchiveVersion(stagedServer, versionArg);
 
   console.log("[local-bundle] staging Linux CLI archive byte-for-byte");
   fs.copyFileSync(linuxCliArchive, stagedWslRuntimeArchive);
@@ -448,6 +479,10 @@ try {
 
   verifyDesktopArchive(archivePath);
   verifyServerArchive(serverTarget);
+  if (versionArg !== undefined) {
+    verifyArchiveVersion(archivePath, versionArg);
+    verifyArchiveVersion(serverTarget, versionArg);
+  }
   validateLinuxCliArchive(wslRuntimeArchivePath);
   const installedChecksum = fs.readFileSync(wslRuntimeChecksumPath, "utf8").trim();
   if (installedChecksum !== sha256File(wslRuntimeArchivePath)) {
