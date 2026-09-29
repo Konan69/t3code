@@ -2,6 +2,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import {
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
+  RelayEnvironmentWakeScope,
 } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";

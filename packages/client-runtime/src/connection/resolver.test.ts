@@ -4,6 +4,10 @@ import {
   type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
+import {
+  RelayEnvironmentConnectNotAuthorizedError,
+  RelayEnvironmentWakeScope,
+} from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,6 +17,8 @@ import * as Tracer from "effect/Tracer";
 import { afterEach, vi } from "vite-plus/test";
 
 import * as ConnectionResolver from "./resolver.ts";
+import * as WakeIntent from "./wakeIntent.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
@@ -44,6 +50,7 @@ const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const ENDPOINT = {
   httpBaseUrl: "https://environment.example.test",
   wsBaseUrl: "wss://environment.example.test",
+  providerKind: "t3_relay" as const,
 };
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -86,6 +93,8 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
+  readonly connectEnvironment?: ManagedRelay.ManagedRelayClient["Service"]["connectEnvironment"];
+  readonly wakeEnvironmentHost?: ManagedRelay.ManagedRelayClient["Service"]["wakeEnvironmentHost"];
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -186,6 +195,32 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     ),
     Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, remote),
     Layer.succeed(ClientCapabilities.SshEnvironmentGateway, ssh),
+    Layer.succeed(ClientCapabilities.CloudSession, {
+      identity: Effect.succeedNone,
+      clerkToken: Effect.succeed("clerk-session"),
+    }),
+    Layer.succeed(
+      ManagedRelay.ManagedRelayClient,
+      ManagedRelay.ManagedRelayClient.of({
+        relayUrl: "https://relay.example.test",
+        connectEnvironment: options?.connectEnvironment ?? (() => Effect.die("unused")),
+        wakeEnvironmentHost: options?.wakeEnvironmentHost ?? (() => Effect.die("unused")),
+        listEnvironments: () => Effect.die("unused"),
+        listDevices: () => Effect.die("unused"),
+        createEnvironmentLinkChallenge: () => Effect.die("unused"),
+        linkEnvironment: () => Effect.die("unused"),
+        unlinkEnvironment: () => Effect.die("unused"),
+        getEnvironmentStatus: () => Effect.die("unused"),
+        configureEnvironmentHostLifecycle: () => Effect.die("unused"),
+        removeEnvironmentHostLifecycle: () => Effect.die("unused"),
+        getEnvironmentHostStatus: () => Effect.die("unused"),
+        registerDevice: () => Effect.die("unused"),
+        unregisterDevice: () => Effect.die("unused"),
+        registerLiveActivity: () => Effect.die("unused"),
+        getAgentActivitySnapshot: () => Effect.die("unused"),
+        resetTokenCache: Effect.void,
+      }),
+    ),
   );
 
   return Effect.succeed(

@@ -38,7 +38,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
-import { type WakeStatusResult } from "./wakeEndpoint.ts";
+import { type WakeStatusResult, wakeStatus as fetchWakeStatus } from "./wakeEndpoint.ts";
 import * as WakeIntent from "./wakeIntent.ts";
 import {
   GitHubRoutingPermissions,
@@ -114,6 +114,19 @@ export class EnvironmentRegistry extends Context.Service<
       | PlatformEnvironmentRemovalError
     >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    readonly armWake: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    readonly setWakePolicy: (
+      environmentId: EnvironmentId,
+      policy: RelayWakePolicy | null,
+    ) => Effect.Effect<
+      void,
+      | EnvironmentNotRegisteredError
+      | WakePolicyUnsupportedTargetError
+      | Persistence.ConnectionPersistenceError
+    >;
+    readonly wakeStatus: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<EnvironmentWakeStatusResult, EnvironmentNotRegisteredError>;
     /**
      * Switches a saved environment on or off. Off drops the socket, stops the
      * retry ladder, and persists so the next launch stays off. Registration,
@@ -796,6 +809,16 @@ export const make = Effect.gen(function* () {
       Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
       Effect.withSpan("EnvironmentRegistry.retryNow"),
     );
+  const armWake = (environmentId: EnvironmentId) =>
+    wakeIntent.arm(environmentId).pipe(Effect.andThen(retryNow(environmentId)));
+  const wakeStatus = Effect.fn("EnvironmentRegistry.wakeStatus")(function* (
+    environmentId: EnvironmentId,
+  ) {
+    const entry = yield* getEntry(environmentId);
+    return entry.target._tag === "RelayConnectionTarget" && entry.target.wakePolicy !== undefined
+      ? yield* fetchWakeStatus(entry.target.wakePolicy)
+      : ({ _tag: "NoPolicy" } as const);
+  });
   const setEnabled = Effect.fn("EnvironmentRegistry.setEnabled")(function* (
     environmentId: EnvironmentId,
     enabled: boolean,
@@ -934,6 +957,9 @@ export const make = Effect.gen(function* () {
     remove,
     removeRelayEnvironments,
     retryNow,
+    armWake,
+    setWakePolicy,
+    wakeStatus,
     setEnabled,
     setCompatibility,
     state,

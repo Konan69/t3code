@@ -36,6 +36,7 @@ import {
 import * as Connectivity from "./connectivity.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionDriver from "./driver.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 import {
   ConnectionTransientError,
   ConnectionBlockedError,
