@@ -57,6 +57,7 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+vi.mock("../connection/catalog", () => ({ environmentCatalog: { armWake: Symbol("arm-wake") } }));
 
 vi.mock("expo-file-system", () => ({
   Directory: harness.draftFile.Directory,

@@ -14,8 +14,10 @@ const discovery = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   refreshCommand: Symbol("refresh"),
   registerCommand: Symbol("register"),
+  armWakeCommand: Symbol("arm-wake"),
   refresh: vi.fn<() => Promise<AtomCommandResult<void, never>>>(),
   register: vi.fn(),
+  armWake: vi.fn(),
   listEnvironments: vi.fn<() => Promise<DiscoveredEnvironments>>(),
 }));
 
@@ -23,11 +25,18 @@ vi.mock("~/state/relay", () => ({
   relayEnvironmentDiscovery: { refresh: discovery.refreshCommand },
 }));
 vi.mock("~/connection/catalog", () => ({
-  environmentCatalog: { register: discovery.registerCommand },
+  environmentCatalog: {
+    register: discovery.registerCommand,
+    armWake: discovery.armWakeCommand,
+  },
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
-    command === discovery.refreshCommand ? discovery.refresh : discovery.register,
+    command === discovery.refreshCommand
+      ? discovery.refresh
+      : command === discovery.registerCommand
+        ? discovery.register
+        : discovery.armWake,
 }));
 vi.mock("~/state/environments", async () => {
   const { useSyncExternalStore } = await import("react");
@@ -138,6 +147,7 @@ beforeEach(() => {
   };
   discovery.listEnvironments.mockReset().mockResolvedValue(new Map());
   discovery.register.mockReset().mockResolvedValue(AsyncResult.success(undefined));
+  discovery.armWake.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   discovery.refresh.mockReset().mockImplementation(async () => {
     publish({ environments: new Map(), refreshing: true, offline: false, error: Option.none() });
     const environments = await discovery.listEnvironments();
