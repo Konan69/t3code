@@ -251,6 +251,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // automatic seed here, but only a metadata update records an
           // explicit project default.
           defaultModelSelection: null,
+          machineMode: command.machineMode ?? "off",
           faviconPath: null,
           projectIcon: null,
           scripts: [],

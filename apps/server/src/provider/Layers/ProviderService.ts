@@ -1112,22 +1112,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
       return Effect.void;
     }
-    return directory
-      .upsert({
+    return Effect.gen(function* () {
+      const binding = yield* directory.getBinding(event.threadId);
+      if (Option.isNone(binding) || binding.value.providerInstanceId !== source.instanceId) {
+        return;
+      }
+      yield* directory.upsert({
         threadId: event.threadId,
         provider: source.provider,
         providerInstanceId: source.instanceId,
         runtimePayload: { activeTurnId: null },
-      })
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider.session.settle-activity-refresh-failed", {
-            threadId: event.threadId,
-            provider: source.provider,
-            cause,
-          }),
-        ),
-      );
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider.session.settle-activity-refresh-failed", {
+          threadId: event.threadId,
+          provider: source.provider,
+          cause,
+        }),
+      ),
+    );
   };
 
   const processRuntimeEvent = (
