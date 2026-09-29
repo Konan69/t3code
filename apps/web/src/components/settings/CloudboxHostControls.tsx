@@ -437,7 +437,7 @@ function HostStatusLine({
             </span>
           }
         />
-        <TooltipPopup side="top" className="max-w-72 whitespace-pre-wrap leading-tight">
+        <TooltipPopup side="top" className="max-w-72 whitespace-pre-wrap">
           {presentation.detail}
         </TooltipPopup>
       </Tooltip>
@@ -580,7 +580,7 @@ function WakePolicyDialog({
             request before retrying. Background reconnects never wake it.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-4">
+        <DialogPanel>
           <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-foreground">
               Wake service URL
@@ -634,8 +634,8 @@ function WakePolicyDialog({
         <DialogFooter variant="bare">
           {policy !== null ? (
             <Button
-              variant="ghost"
-              className="mr-auto text-destructive"
+              variant="ghost-destructive"
+              className="mr-auto"
               disabled={isSaving}
               onClick={() => void remove()}
             >

@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { EventEmitter } from "node:events";
-import { PassThrough, type Readable, type Writable } from "node:stream";
+import * as NodeEvents from "node:events";
+import * as NodeStream from "node:stream";
 
-import * as NodeStream from "@effect/platform-node/NodeStream";
+import * as EffectNodeStream from "@effect/platform-node/NodeStream";
 import type {
   SpawnedProcess as ClaudeSdkSpawnedProcess,
   SpawnOptions as ClaudeSdkSpawnOptions,
@@ -58,9 +58,9 @@ function asError(cause: unknown): Error {
 
 /** Adapts Effect's process handle to the synchronous process shape required by the Claude SDK. */
 export class ClaudeSpawnedProcess implements ClaudeSdkSpawnedProcess {
-  private readonly events = new EventEmitter<ClaudeSpawnedProcessEvents>();
-  private readonly stdinBridge = new PassThrough();
-  private readonly stdoutBridge = new PassThrough();
+  private readonly events = new NodeEvents.EventEmitter<ClaudeSpawnedProcessEvents>();
+  private readonly stdinBridge = new NodeStream.PassThrough();
+  private readonly stdoutBridge = new NodeStream.PassThrough();
   private readonly forceKillAfter: Duration.Input;
   private readonly abortSignal: AbortSignal;
   private readonly options: ClaudeSpawnedProcessOptions;
@@ -71,8 +71,8 @@ export class ClaudeSpawnedProcess implements ClaudeSdkSpawnedProcess {
   private exited = false;
   private errorEmitted = false;
 
-  readonly stdin: Writable = this.stdinBridge;
-  readonly stdout: Readable = this.stdoutBridge;
+  readonly stdin: NodeStream.Writable = this.stdinBridge;
+  readonly stdout: NodeStream.Readable = this.stdoutBridge;
 
   constructor(options: ClaudeSpawnedProcessOptions) {
     this.options = options;
@@ -150,7 +150,7 @@ export class ClaudeSpawnedProcess implements ClaudeSdkSpawnedProcess {
 
   private consumeStdin(child: ChildProcessSpawner.ChildProcessHandle): void {
     void Effect.runPromise(
-      NodeStream.fromReadable<Uint8Array, Error>({
+      EffectNodeStream.fromReadable<Uint8Array, Error>({
         evaluate: () => this.stdinBridge,
         onError: asError,
       }).pipe(Stream.run(child.stdin)),
@@ -162,7 +162,7 @@ export class ClaudeSpawnedProcess implements ClaudeSdkSpawnedProcess {
   }
 
   private consumeStdout(child: ChildProcessSpawner.ChildProcessHandle): void {
-    const source = NodeStream.toReadableNever(child.stdout);
+    const source = EffectNodeStream.toReadableNever(child.stdout);
     source.once("error", (cause) => this.emitError(asError(cause)));
     source.pipe(this.stdoutBridge);
   }

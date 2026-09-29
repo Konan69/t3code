@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - verifies atomic extension installation on a real temporary filesystem.
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import { installPiMcpExtension, makePiMcpLaunchConfig } from "./PiAdapter.ts";
@@ -37,16 +37,16 @@ describe("PiAdapter T3 MCP launch configuration", () => {
   });
 
   it("atomically installs and updates the T3-owned extension", () => {
-    const directory = mkdtempSync(join(tmpdir(), "t3-pi-mcp-"));
-    const source = join(directory, "source.mjs");
-    const target = join(directory, "extensions", "t3-code-mcp.mjs");
-    writeFileSync(source, "export default () => 'v1';\n");
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pi-mcp-"));
+    const source = NodePath.join(directory, "source.mjs");
+    const target = NodePath.join(directory, "extensions", "t3-code-mcp.mjs");
+    NodeFS.writeFileSync(source, "export default () => 'v1';\n");
 
     installPiMcpExtension(source, target);
-    expect(readFileSync(target, "utf8")).toBe("export default () => 'v1';\n");
+    expect(NodeFS.readFileSync(target, "utf8")).toBe("export default () => 'v1';\n");
 
-    writeFileSync(source, "export default () => 'v2';\n");
+    NodeFS.writeFileSync(source, "export default () => 'v2';\n");
     installPiMcpExtension(source, target);
-    expect(readFileSync(target, "utf8")).toBe("export default () => 'v2';\n");
+    expect(NodeFS.readFileSync(target, "utf8")).toBe("export default () => 'v2';\n");
   });
 });

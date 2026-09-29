@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import type { Readable } from "node:stream";
+import type * as NodeStream from "node:stream";
 
 import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -67,7 +67,7 @@ function makeFakeHandle(input?: { readonly stdout?: string; readonly stderr?: st
   };
 }
 
-async function readAll(readable: Readable): Promise<string> {
+async function readAll(readable: NodeStream.Readable): Promise<string> {
   let result = "";
   for await (const chunk of readable) {
     result += Buffer.from(chunk as Uint8Array).toString("utf8");

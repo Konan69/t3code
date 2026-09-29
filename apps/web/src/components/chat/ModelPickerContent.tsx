@@ -980,7 +980,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   value={selectedSubProvider}
                   onValueChange={(value) => value && setSelectedSubProvider(value)}
                 >
-                  <SelectTrigger size="compact" className="w-full text-xs">
+                  <SelectTrigger size="compact" className="w-full">
                     <SelectValue placeholder="All upstream providers" />
                   </SelectTrigger>
                   <SelectContent

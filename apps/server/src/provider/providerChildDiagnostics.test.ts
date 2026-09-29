@@ -1,3 +1,4 @@
+import { it as effectIt } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
@@ -35,15 +36,15 @@ describe("provider child diagnostics", () => {
     ).toBeLessThanOrEqual(2 * 1024);
   });
 
-  it("retains a terminating signal when the exit-code effect fails", async () => {
-    const exit = await Effect.runPromise(
-      observeProviderProcessExit(
+  effectIt.effect("retains a terminating signal when the exit-code effect fails", () =>
+    Effect.gen(function* () {
+      const exit = yield* observeProviderProcessExit(
         Effect.die("Process interrupted due to receipt of signal: 'SIGKILL'"),
-      ),
-    );
+      );
 
-    expect(exit).toEqual({ exitCode: null, signal: "SIGKILL" });
-  });
+      expect(exit).toEqual({ exitCode: null, signal: "SIGKILL" });
+    }),
+  );
 
   it("logs spawn environment keys without values", () => {
     const fields = processLaunchLogFields({

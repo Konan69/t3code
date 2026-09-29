@@ -51,9 +51,9 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as NodeFS from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeURL from "node:url";
 
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -122,11 +122,11 @@ export function makePiLaunchArgs(input: {
 
 const defaultMcpExtensionSourcePath = (): string =>
   import.meta.url.endsWith(".ts")
-    ? fileURLToPath(new URL("../pi/t3McpExtension.ts", import.meta.url))
-    : fileURLToPath(new URL("./t3McpExtension.mjs", import.meta.url));
+    ? NodeURL.fileURLToPath(new URL("../pi/t3McpExtension.ts", import.meta.url))
+    : NodeURL.fileURLToPath(new URL("./t3McpExtension.mjs", import.meta.url));
 
 const defaultMcpExtensionPath = (): string =>
-  NodePath.join(NodeOs.homedir(), ".pi", "agent", "extensions", "t3-code-mcp.mjs");
+  NodePath.join(NodeOS.homedir(), ".pi", "agent", "extensions", "t3-code-mcp.mjs");
 
 export function installPiMcpExtension(sourcePath: string, targetPath: string): void {
   const source = NodeFS.readFileSync(sourcePath);

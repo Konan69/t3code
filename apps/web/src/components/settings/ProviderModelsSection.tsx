@@ -505,7 +505,7 @@ export function ProviderModelsSection({
         {starButton(model, isFavorite)}
         <span className="flex min-w-0 items-baseline gap-2">
           {model.subProvider ? (
-            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-3xs font-medium text-muted-foreground">
               {model.subProvider}
             </span>
           ) : null}
