@@ -718,6 +718,22 @@ export function applyThreadDetailEvent(
       const lastActivity = thread.activities.at(-1);
       if (
         !supersedesContextWindow &&
+        lastActivity?.id === activity.id &&
+        activityOrder(lastActivity, activity) <= 0
+      ) {
+        if (JSON.stringify(lastActivity) === JSON.stringify(activity)) {
+          return { kind: "unchanged" };
+        }
+        const activities = thread.activities.slice();
+        activities[activities.length - 1] = activity;
+        if (ids !== undefined) activityIdIndex.set(activities, ids);
+        return {
+          kind: "updated",
+          thread: { ...thread, activities, updatedAt: event.occurredAt },
+        };
+      }
+      if (
+        !supersedesContextWindow &&
         ids !== undefined &&
         (lastActivity === undefined || activityOrder(lastActivity, activity) <= 0) &&
         !ids.has(activity.id)

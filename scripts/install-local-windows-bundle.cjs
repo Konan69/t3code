@@ -184,7 +184,14 @@ const stampArchiveVersion = (archivePath, version) => {
   const packedDataStart = 8 + rawHeader.headerSize;
   const packageNode = getHeaderNode(rawHeader.header, "package.json");
   const packageJson = JSON.parse(asar.extractFile(archivePath, "package.json").toString("utf8"));
-  const content = Buffer.from(`${JSON.stringify({ ...packageJson, version }, null, 2)}\n`);
+  const commit = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
+    cwd: buildRoot,
+    encoding: "utf8",
+  });
+  if (commit.status !== 0) fail("could not determine build commit");
+  const content = Buffer.from(
+    `${JSON.stringify({ ...packageJson, version, buildVersion: version, t3codeCommitHash: commit.stdout.trim() }, null, 2)}\n`,
+  );
   packageNode.size = content.length;
   packageNode.offset = String(archiveBuffer.length - packedDataStart);
   packageNode.integrity = fileIntegrity(content);
@@ -197,8 +204,10 @@ const stampArchiveVersion = (archivePath, version) => {
 
 const verifyArchiveVersion = (archivePath, version) => {
   const packageJson = JSON.parse(asar.extractFile(archivePath, "package.json").toString("utf8"));
-  if (packageJson.version !== version) {
-    fail(`${archivePath} reports version ${packageJson.version}, expected ${version}`);
+  if (packageJson.version !== version || packageJson.buildVersion !== version) {
+    fail(
+      `${archivePath} reports version ${packageJson.version}/${packageJson.buildVersion}, expected ${version}`,
+    );
   }
 };
 

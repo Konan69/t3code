@@ -385,7 +385,7 @@ describe("ConnectionResolver", () => {
     Effect.gen(function* () {
       const request = vi.fn().mockResolvedValue({ status: 202 });
       vi.stubGlobal("fetch", request);
-      const relayInputs = yield* Ref.make(0);
+      const authorizedInputs = yield* Ref.make(0);
       const target = new RelayConnectionTarget({
         environmentId: ENVIRONMENT_ID,
         label: "Cloud",
@@ -397,13 +397,18 @@ describe("ConnectionResolver", () => {
         },
       });
       const brokerLayer = yield* makeDependencies({
-        connectEnvironment: (input) =>
-          Ref.update(relayInputs, (count) => count + 1).pipe(
+        authorizeDpop: (input) =>
+          Ref.update(authorizedInputs, (count) => count + 1).pipe(
             Effect.as({
-              environmentId: input.environmentId,
-              endpoint: ENDPOINT,
-              credential: "relay-bootstrap",
-              expiresAt: "2026-06-06T00:00:00.000Z",
+              environmentId: input.expectedEnvironmentId,
+              label: "Authorized relay environment",
+              httpBaseUrl: ENDPOINT.httpBaseUrl,
+              socketUrl: "wss://authorized.example.test/ws?wsTicket=dpop",
+              httpAuthorization: {
+                _tag: "Dpop" as const,
+                accessToken: "dpop-access-token",
+                expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
+              },
             }),
           ),
       });
@@ -424,7 +429,7 @@ describe("ConnectionResolver", () => {
             headers: { Authorization: "Bearer wake-secret" },
           }),
         );
-        expect(yield* Ref.get(relayInputs)).toBe(2);
+        expect(yield* Ref.get(authorizedInputs)).toBe(2);
       }).pipe(Effect.provide(brokerLayer));
     }),
   );
