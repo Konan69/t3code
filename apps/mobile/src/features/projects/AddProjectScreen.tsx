@@ -83,6 +83,7 @@ interface EnvironmentOption {
   readonly connectionErrorTraceId: string | null;
   /** Server runs clones in the background and streams progress; older servers block. */
   readonly supportsCloneTracking: boolean;
+  readonly threadMachines?: boolean;
 }
 
 const environmentOptionOrder = Order.mapInput(

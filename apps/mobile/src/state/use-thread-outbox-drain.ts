@@ -1212,6 +1212,10 @@ export function useThreadOutboxDrain(): void {
         environmentConnected: environment?.connectionState === "connected",
         threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
       });
+      if (deliveryAction === "wake") {
+        requestWake(nextQueuedMessage);
+        continue;
+      }
       // The delivery action resolves first; capability checks apply only to
       // a message that will send. Checking earlier would restore a
       // creation whose startTurn already made the thread as a duplicate draft

@@ -91,7 +91,8 @@ export function useSelectedThreadRequests() {
     threadEnvironment.dismissUserInput,
     "thread user input dismissal",
   );
-  const { selectedThread: selectedThreadShell } = useThreadSelection();
+  const { selectedThread: selectedThreadShell, selectedEnvironmentRuntime } = useThreadSelection();
+  const armEnvironmentWake = useAtomCommand(environmentCatalog.armWake, { reportFailure: false });
   const selectedThread = useSelectedThreadDetail();
   const userInputDraftsByRequestKey = useAtomValue(userInputDraftsByRequestKeyAtom);
   const [respondingApprovalId, setRespondingApprovalId] = useState<ApprovalRequestId | null>(null);

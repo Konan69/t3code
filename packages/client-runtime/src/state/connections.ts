@@ -213,6 +213,9 @@ export function createEnvironmentCatalogAtoms<R, E>(
     remove,
     removeRelayEnvironments,
     retryNow,
+    armWake,
+    setWakePolicy,
+    wakeStatus,
     setEnabled,
   };
 }

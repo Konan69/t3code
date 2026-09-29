@@ -92,6 +92,7 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   return connectionStartupLayer.pipe(
     Layer.provideMerge(connectionServicesLayer),
     Layer.provideMerge(RemoteEnvironmentAuthorization.layer),
+    Layer.provide(WakeIntent.layer),
   );
 }
 

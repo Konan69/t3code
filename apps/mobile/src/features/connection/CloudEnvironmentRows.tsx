@@ -12,7 +12,7 @@ import {
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -251,6 +251,11 @@ function ConnectedCloudEnvironmentRow(props: {
         onToggleError={props.onToggleError}
         disabled={unsupported}
         {...(enabled || unsupported ? {} : { statusText: "Off" })}
+        hostControl={
+          props.relayEnvironment ? (
+            <ConnectedCloudHostControl environment={props.relayEnvironment.environment} />
+          ) : null
+        }
         value={enabled}
       />
     </Pressable>
@@ -348,6 +353,7 @@ function CloudEnvironmentRow(props: {
       onToggleError={props.onToggleError}
       disabled={presentation.connectionState === "unsupported"}
       statusText={presentation.statusText}
+      hostStatusText={hostStatusText}
       value={false}
     />
   );
@@ -366,6 +372,8 @@ function CloudEnvironmentRowShell(props: {
   readonly onToggleError: () => void;
   readonly onValueChange: (enabled: boolean) => void;
   readonly statusText?: string;
+  readonly hostControl?: ReactNode;
+  readonly hostStatusText?: string;
   readonly value: boolean;
 }) {
   const isRetrying =

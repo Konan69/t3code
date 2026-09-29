@@ -125,6 +125,7 @@ export function useThreadDraftForThread(input: {
 }
 
 export function useThreadComposerState() {
+  const armEnvironmentWake = useAtomCommand(environmentCatalog.armWake, { reportFailure: false });
   const {
     selectedThread: selectedThreadShell,
     selectedThreadCreation,
