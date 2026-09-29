@@ -2,6 +2,7 @@ import {
   CommandId,
   EventId,
   ProjectId,
+  ThreadId,
   ProviderInstanceId,
   type ModelSelection,
   type OrchestrationEvent,

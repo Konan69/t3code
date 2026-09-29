@@ -546,6 +546,7 @@ const buildAppUnderTest = (options?: {
     projectSetupScriptRunner?: Partial<
       ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
     >;
+    threadMachineService?: Partial<ThreadMachineService.ThreadMachineService["Service"]>;
     providerSessionDirectory?: Partial<
       ProviderSessionDirectory.ProviderSessionDirectory["Service"]
     >;

@@ -23,6 +23,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  type ThreadMachineBinding,
   TurnId,
 } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
@@ -40,6 +41,7 @@ import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
+import { mapProviderCwdForMachine } from "./ProviderCommandReactor.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 import {
   ProviderAdapterRequestError,
@@ -192,6 +194,7 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+    readonly onStartSession?: () => void;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -504,6 +507,9 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provide(
+        Layer.mock(ThreadMachineService)({ ensureForThread: () => Effect.succeed(Option.none()) }),
+      ),
     );
     runtime = ManagedRuntime.make(layer);
 

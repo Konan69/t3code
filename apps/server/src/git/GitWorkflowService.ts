@@ -343,6 +343,10 @@ export const make = Effect.gen(function* () {
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
         ),
       ),
+    listWorktrees: (input) =>
+      ensureGitCommand("GitWorkflowService.listWorktrees", input.cwd).pipe(
+        Effect.andThen(git.listWorktrees(input)),
+      ),
     createWorktree: (input, options) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
         Effect.andThen(git.createWorktree(input, options)),

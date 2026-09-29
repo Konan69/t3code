@@ -55,6 +55,7 @@ const thread: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  pullRequests: [],
   session: null,
 };
 

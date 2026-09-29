@@ -240,6 +240,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const threadMachines = yield* ThreadMachineService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -1391,6 +1392,7 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        providerCwd: generationCwd,
         ...generationInput,
       }).pipe(Effect.forkScoped);
 

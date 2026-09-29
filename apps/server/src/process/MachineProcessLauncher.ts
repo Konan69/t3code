@@ -1,9 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { MachineService, MachineServiceError } from "../machine/MachineService.ts";
+import { MachineService } from "../machine/MachineService.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   ProcessLauncher,
@@ -17,26 +18,30 @@ export const makeMachineProcessLauncher = (
   machines: Pick<MachineService["Service"], "exec" | "hostReachableUrl">,
   snapshots: Pick<ProjectionSnapshotQuery["Service"], "getThreadDetailById">,
 ): ProcessLauncherShape => {
+  const processError = (error: unknown, method: string) =>
+    PlatformError.systemError({
+      _tag: "Unknown",
+      module: "Process",
+      method,
+      cause: error,
+    });
   const resolveBinding = (threadId: Parameters<ProcessLauncherShape["launch"]>[0]["threadId"]) =>
     threadId === undefined
       ? Effect.succeed(undefined)
       : snapshots.getThreadDetailById(threadId).pipe(
           Effect.map((thread) => Option.getOrUndefined(thread)?.machine ?? undefined),
-          Effect.mapError(
-            (cause) =>
-              new MachineServiceError({
-                operation: "resolve-provider-machine",
-                detail: `Failed to resolve machine binding for thread '${threadId}'.`,
-                cause,
-              }),
-          ),
+          Effect.mapError((cause) => processError(cause, "resolveBinding")),
         );
 
   return ProcessLauncher.of({
     hostReachableUrl: ({ threadId, url }) =>
       resolveBinding(threadId).pipe(
         Effect.flatMap((binding) =>
-          binding === undefined ? Effect.succeed(url) : machines.hostReachableUrl(binding, url),
+          binding === undefined
+            ? Effect.succeed(url)
+            : machines
+                .hostReachableUrl(binding, url)
+                .pipe(Effect.mapError((error) => processError(error, "hostReachableUrl"))),
         ),
       ),
     launch: (input) =>
@@ -50,19 +55,21 @@ export const makeMachineProcessLauncher = (
             machineName: binding.machineName,
           }).pipe(
             Effect.andThen(
-              machines.exec({
-                binding,
-                command: input.command,
-                args: input.args,
-                ...(Object.hasOwn(input, "cwd") ? { cwd: input.cwd } : {}),
-                ...(Object.hasOwn(input, "env") ? { env: input.env } : {}),
-                ...(Object.hasOwn(input, "extendEnv") ? { extendEnv: input.extendEnv } : {}),
-                ...(Object.hasOwn(input, "shell") ? { shell: input.shell } : {}),
-                ...(Object.hasOwn(input, "detached") ? { detached: input.detached } : {}),
-                ...(Object.hasOwn(input, "forceKillAfter")
-                  ? { forceKillAfter: input.forceKillAfter }
-                  : {}),
-              }),
+              machines
+                .exec({
+                  binding,
+                  command: input.command,
+                  args: input.args,
+                  ...(Object.hasOwn(input, "cwd") ? { cwd: input.cwd } : {}),
+                  ...(Object.hasOwn(input, "env") ? { env: input.env } : {}),
+                  ...(Object.hasOwn(input, "extendEnv") ? { extendEnv: input.extendEnv } : {}),
+                  ...(Object.hasOwn(input, "shell") ? { shell: input.shell } : {}),
+                  ...(Object.hasOwn(input, "detached") ? { detached: input.detached } : {}),
+                  ...(Object.hasOwn(input, "forceKillAfter")
+                    ? { forceKillAfter: input.forceKillAfter }
+                    : {}),
+                })
+                .pipe(Effect.mapError((error) => processError(error, "launch"))),
             ),
           );
         }),

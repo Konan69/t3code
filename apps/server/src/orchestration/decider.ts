@@ -315,6 +315,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.defaultThreadEnvMode !== undefined
             ? { defaultThreadEnvMode: command.defaultThreadEnvMode }
             : {}),
+          ...(command.machineMode !== undefined ? { machineMode: command.machineMode } : {}),
           ...(command.autoPull !== undefined ? { autoPull: command.autoPull } : {}),
           ...(command.faviconPath !== undefined ? { faviconPath: command.faviconPath } : {}),
           ...(command.projectIcon !== undefined ? { projectIcon: command.projectIcon } : {}),

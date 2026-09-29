@@ -397,6 +397,9 @@ export function projectEvent(
                   ...(payload.defaultThreadEnvMode !== undefined
                     ? { defaultThreadEnvMode: payload.defaultThreadEnvMode }
                     : {}),
+                  ...(payload.machineMode !== undefined
+                    ? { machineMode: payload.machineMode }
+                    : {}),
                   ...(payload.autoPull !== undefined ? { autoPull: payload.autoPull } : {}),
                   ...(payload.faviconPath !== undefined
                     ? { faviconPath: payload.faviconPath }
