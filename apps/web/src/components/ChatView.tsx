@@ -8906,7 +8906,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       if (activeEnvironmentUnavailable) {
         await handleReconnectActiveEnvironment(activeThread.environmentId);
-        return;
+        return false;
       }
 
       const trimmed = text.trim();

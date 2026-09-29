@@ -145,6 +145,26 @@ export function useManagedRelayEnvironments() {
   };
 }
 
+export function useManagedRelayEnvironmentHostStatus(
+  environmentId: EnvironmentId,
+  enabled: boolean,
+) {
+  const session = useAtomValue(managedRelaySessionAtom);
+  const accountId = session?.accountId ?? null;
+  const input = { accountId: accountId ?? "", environmentId };
+  const atom =
+    accountId && enabled
+      ? managedRelayQueryManager.environmentHostStatusAtom(input)
+      : EMPTY_HOST_STATUS_ATOM;
+  const snapshot = readManagedRelaySnapshotState(useAtomValue(atom));
+  const refresh = useCallback(() => {
+    if (accountId && enabled) {
+      managedRelayQueryManager.refreshEnvironmentHostStatus(appAtomRegistry, input);
+    }
+  }, [accountId, enabled, environmentId]);
+  return { ...snapshot, accountId, refresh };
+}
+
 export function useManagedRelayDevices() {
   const session = useAtomValue(managedRelaySessionAtom);
   const accountId = session?.accountId ?? null;

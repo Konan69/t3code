@@ -39,6 +39,8 @@ import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ProcessLauncher from "./process/ProcessLauncher.ts";
+import * as MachineServiceLive from "./machine/MachineServiceLive.ts";
+import * as ThreadMachineService from "./machine/ThreadMachineService.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";

@@ -17,6 +17,7 @@ import {
   ThreadLinkedPullRequest,
   ThreadTitleState,
   ThreadId,
+  ThreadMachineState,
   TurnId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";

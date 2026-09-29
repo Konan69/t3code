@@ -36,18 +36,6 @@ import {
 } from "../../process/ProcessLauncher.ts";
 
 import {
-  formatProviderChildExitReason,
-  logUnexpectedProviderChildExit,
-  makeProviderStderrBuffer,
-  observeProviderProcessExit,
-} from "../providerChildDiagnostics.ts";
-import {
-  HostProcessLauncherLive,
-  ProcessLauncher,
-  type ProcessLaunchInput,
-} from "../../process/ProcessLauncher.ts";
-
-import {
   collectSessionConfigOptionValues,
   decideToolCallUpdateEmission,
   extractModelConfigId,

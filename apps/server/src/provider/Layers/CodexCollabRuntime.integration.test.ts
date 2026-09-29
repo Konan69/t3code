@@ -32,10 +32,6 @@ const NodeServices = {
   layer: HostProcessLauncherLive.pipe(Layer.provideMerge(NodeServicesBase.layer)),
 };
 
-const NodeServices = {
-  layer: HostProcessLauncherLive.pipe(Layer.provideMerge(NodeServicesBase.layer)),
-};
-
 const ROOT = wireFixture.rootThreadId;
 const [CHILD_A, CHILD_B] = wireFixture.childThreadIds as [string, string];
 const MEMORY = "memory-consolidation-thread";

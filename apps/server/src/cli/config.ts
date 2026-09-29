@@ -150,6 +150,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  machineIdentityManifest: Config.String("T3_MACHINE_IDENTITY_MANIFEST").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   logWebSocketEvents: Config.Boolean("T3CODE_LOG_WS_EVENTS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
