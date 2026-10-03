@@ -893,7 +893,7 @@ describe("environment RPC", () => {
         Effect.flip,
         Effect.forkChild,
       );
-      yield* TestClock.adjust("121 seconds");
+      yield* TestClock.adjust("181 seconds");
       const error = yield* Fiber.join(fiber);
       expect(error._tag).toBe("EnvironmentRpcUnavailableError");
       expect(yield* Ref.get(wakeCount)).toBe(1);

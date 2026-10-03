@@ -164,15 +164,16 @@ const WAKE_ON_UNAVAILABLE_METHODS: ReadonlySet<string> = new Set([
 
 /**
  * How long a wake-worthy request waits for the host to come back. A suspended
- * GCE instance resumes in well under a minute; the rest covers relay
+ * GCE instance resumes in well under a minute and a Boat sandbox restores from
+ * its snapshot in one to two; the rest covers relay
  * authorization and the websocket handshake. Past this the request fails with
  * the usual unavailable error and the user can retry.
  */
-const WAKE_SESSION_TIMEOUT = Duration.seconds(120);
+const WAKE_SESSION_TIMEOUT = Duration.seconds(180);
 
 /**
  * Resolves the session for a unary request. A connected host answers at once.
- * A disconnected relay host is woken first for wake-worthy methods; every
+ * A disconnected relay or SSH host is woken first for wake-worthy methods; every
  * other case keeps the original fail-fast behavior.
  */
 const sessionForRequest = Effect.fn("EnvironmentRpc.sessionForRequest")(function* (tag: string) {
@@ -181,7 +182,14 @@ const sessionForRequest = Effect.fn("EnvironmentRpc.sessionForRequest")(function
   if (Option.isSome(current)) {
     return current.value;
   }
-  if (supervisor.target._tag !== "RelayConnectionTarget" || !WAKE_ON_UNAVAILABLE_METHODS.has(tag)) {
+  // Relay hosts (a suspended Cloudbox VM) wake through the armed wake policy.
+  // SSH hosts (a Boat sandbox) resume when the SSH ProxyCommand reconnects, so
+  // an immediate retry is their wake. Primary and bearer hosts have no way to
+  // be brought back by the client and keep failing fast.
+  const canWake =
+    supervisor.target._tag === "RelayConnectionTarget" ||
+    supervisor.target._tag === "SshConnectionTarget";
+  if (!canWake || !WAKE_ON_UNAVAILABLE_METHODS.has(tag)) {
     return yield* currentSession();
   }
   yield* Effect.annotateCurrentSpan({ "environment.wake_requested": true });
