@@ -128,6 +128,38 @@ export const DesktopCloudboxWakeConfigSchema = Schema.Struct({
 });
 export type DesktopCloudboxWakeConfig = typeof DesktopCloudboxWakeConfigSchema.Type;
 
+export const DesktopBoatBoxState = Schema.Literals([
+  "starting",
+  "running",
+  "stopping",
+  "stopped",
+  "error",
+]);
+export type DesktopBoatBoxState = typeof DesktopBoatBoxState.Type;
+
+export const DesktopBoatBox = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  state: DesktopBoatBoxState,
+  rawState: Schema.String,
+  machineType: Schema.NullOr(Schema.String),
+  vcpu: Schema.NullOr(Schema.Number),
+  memoryGB: Schema.NullOr(Schema.Number),
+  stopsAt: Schema.NullOr(Schema.String),
+  creditBalanceHours: Schema.NullOr(Schema.Number),
+});
+export type DesktopBoatBox = typeof DesktopBoatBox.Type;
+
+export const DesktopBoatStatus = Schema.TaggedUnion({
+  NotConfigured: {
+    missing: Schema.Array(Schema.Literals(["BOAT_API_KEY", "CLOUDBOX_BOAT_NAME"])),
+  },
+  NotFound: { name: Schema.String },
+  Box: { box: DesktopBoatBox },
+  RequestFailed: { message: Schema.String },
+});
+export type DesktopBoatStatus = typeof DesktopBoatStatus.Type;
+
 export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);
 export type DesktopSnapShotMode = typeof DesktopSnapShotMode.Type;
 
@@ -1164,6 +1196,12 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   getCloudboxWakeConfig?: () => Promise<DesktopCloudboxWakeConfig | null>;
+  getBoatStatus?: () => Promise<DesktopBoatStatus>;
+  resumeBoatBox?: () => Promise<DesktopBoatStatus>;
+  stopBoatBox?: () => Promise<DesktopBoatStatus>;
+  setBoatBoxLifetime?: (input: {
+    readonly ttlSeconds: number | null;
+  }) => Promise<DesktopBoatStatus>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   /** Resolves a suggested SSH alias before populating the connection form. */
   resolveSshHost: (alias: string) => Promise<DesktopSshEnvironmentTarget>;

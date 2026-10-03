@@ -5,6 +5,7 @@ import * as DesktopIpc from "./DesktopIpc.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
 import { getCloudboxWakeConfig } from "./methods/cloudboxWake.ts";
+import { getBoatStatus, resumeBoatBox, stopBoatBox, setBoatBoxLifetime } from "./methods/boat.ts";
 import {
   clearConnectionCatalog,
   getConnectionCatalog,
@@ -107,6 +108,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setConnectionCatalog);
   yield* ipc.handle(clearConnectionCatalog);
   yield* ipc.handle(getCloudboxWakeConfig);
+  yield* ipc.handle(getBoatStatus);
+  yield* ipc.handle(resumeBoatBox);
+  yield* ipc.handle(stopBoatBox);
+  yield* ipc.handle(setBoatBoxLifetime);
 
   yield* ipc.handle(discoverSshHosts);
   yield* ipc.handle(resolveSshHost);

@@ -2,6 +2,7 @@ import { OtlpHeadersFromString, OtlpProtocol } from "@t3tools/shared/observabili
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 
 const trimNonEmptyOption = (value: string): Option.Option<string> => {
   const trimmed = value.trim();
@@ -49,6 +50,16 @@ export const DesktopConfig = Config.all({
   cloudboxWakeName: trimmedString("CLOUDBOX_WAKE_NAME"),
   cloudboxWakeSecret: trimmedString("CLOUDBOX_WAKE_SECRET"),
   cloudboxWakeEnvironmentId: trimmedString("CLOUDBOX_WAKE_ENVIRONMENT_ID"),
+  boatApiKey: Config.Redacted("BOAT_API_KEY").pipe(
+    Config.option,
+    Config.map(
+      Option.flatMap((key) =>
+        trimNonEmptyOption(Redacted.value(key)).pipe(Option.map(Redacted.make)),
+      ),
+    ),
+  ),
+  cloudboxBoatName: trimmedString("CLOUDBOX_BOAT_NAME"),
+  cloudboxBoatTtlSeconds: Config.Int("CLOUDBOX_BOAT_TTL_SECONDS").pipe(Config.withDefault(7200)),
   otlpTracesUrl: trimmedString("T3CODE_OTLP_TRACES_URL"),
   otlpMetricsUrl: trimmedString("T3CODE_OTLP_METRICS_URL"),
   otlpLogsUrl: trimmedString("T3CODE_OTLP_LOGS_URL"),

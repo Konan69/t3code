@@ -1,5 +1,6 @@
 import type {
   DesktopBridge,
+  DesktopBoatStatus,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewRecordingFrame,
@@ -61,6 +62,15 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
   }
   return result as Awaited<ReturnType<DesktopBridge["ensureSshEnvironment"]>>;
 }
+
+const invokeBoat = (
+  channel: string,
+  input?: { readonly ttlSeconds: number | null },
+): Promise<DesktopBoatStatus> =>
+  ipcRenderer.invoke(channel, input).catch(() => ({
+    _tag: "RequestFailed",
+    message: "Boat request failed.",
+  }));
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getAppBranding: () => {
@@ -127,6 +137,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CONNECTION_CATALOG_CHANNEL, catalog),
   clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
   getCloudboxWakeConfig: () => ipcRenderer.invoke(IpcChannels.GET_CLOUDBOX_WAKE_CONFIG_CHANNEL),
+  getBoatStatus: () => invokeBoat(IpcChannels.GET_BOAT_STATUS_CHANNEL),
+  resumeBoatBox: () => invokeBoat(IpcChannels.RESUME_BOAT_BOX_CHANNEL),
+  stopBoatBox: () => invokeBoat(IpcChannels.STOP_BOAT_BOX_CHANNEL),
+  setBoatBoxLifetime: (input) => invokeBoat(IpcChannels.SET_BOAT_BOX_LIFETIME_CHANNEL, input),
   discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
   resolveSshHost: (alias) => ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, alias),
   ensureSshEnvironment: async (target, options) =>
