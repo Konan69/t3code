@@ -84,9 +84,6 @@ import {
   setPendingConnectionError,
   useRemoteConnectionStatus,
 } from "./use-remote-environment-registry";
-import { environmentCatalog } from "../connection/catalog";
-
-const THREAD_OUTBOX_WAKE_RETRY_DELAY_MS = 16_000;
 
 // Ordinary offline behavior (a socket dropping mid-request, a retryable
 // attachment upload failure) must not spam `console.warn` on every backoff
@@ -634,7 +631,6 @@ async function preserveUploadedAttachmentsForEditor(
 }
 
 export function useThreadOutboxDrain(): void {
-  const wakeEnvironment = useAtomCommand(environmentCatalog.armWake, { reportFailure: false });
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
@@ -719,8 +715,6 @@ export function useThreadOutboxDrain(): void {
     },
     [],
   );
-  const wakeRequestedMessageIdsRef = useRef(new Set<MessageId>());
-  const wakeRetryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
     let mounted = true;
@@ -746,38 +740,8 @@ export function useThreadOutboxDrain(): void {
         blocked.unsubscribe();
       }
       blockedRecoverySubscriptionsRef.current.clear();
-      for (const timer of wakeRetryTimersRef.current.values()) {
-        clearTimeout(timer);
-      }
-      wakeRetryTimersRef.current.clear();
     };
   }, []);
-
-  const clearWakeRequest = useCallback((messageId: MessageId) => {
-    wakeRequestedMessageIdsRef.current.delete(messageId);
-    const timer = wakeRetryTimersRef.current.get(messageId);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      wakeRetryTimersRef.current.delete(messageId);
-    }
-  }, []);
-
-  const requestWake = useCallback(
-    (queuedMessage: QueuedThreadMessage) => {
-      if (wakeRequestedMessageIdsRef.current.has(queuedMessage.messageId)) {
-        return;
-      }
-      wakeRequestedMessageIdsRef.current.add(queuedMessage.messageId);
-      const timer = setTimeout(() => {
-        wakeRetryTimersRef.current.delete(queuedMessage.messageId);
-        wakeRequestedMessageIdsRef.current.delete(queuedMessage.messageId);
-        setRetryTick((current) => current + 1);
-      }, THREAD_OUTBOX_WAKE_RETRY_DELAY_MS);
-      wakeRetryTimersRef.current.set(queuedMessage.messageId, timer);
-      void wakeEnvironment(queuedMessage.environmentId);
-    },
-    [wakeEnvironment],
-  );
 
   const makeDeliveryHelpers = useCallback((queuedMessage: QueuedThreadMessage) => {
     const reportFailure = (
@@ -1203,10 +1167,6 @@ export function useThreadOutboxDrain(): void {
         environmentConnected: environment?.connectionState === "connected",
         threadBusy: threadRuntimeIsActive(thread?.runtime),
       });
-      if (deliveryAction === "wake") {
-        requestWake(nextQueuedMessage);
-        continue;
-      }
       // The delivery action resolves first; capability checks apply only to
       // a message that will send. Checking earlier would restore a
       // creation whose startTurn already made the thread as a duplicate draft
@@ -1343,7 +1303,6 @@ export function useThreadOutboxDrain(): void {
       void delivery
         .then((sent) => {
           if (sent) {
-            clearWakeRequest(nextQueuedMessage.messageId);
             retryAttemptRef.current.delete(nextQueuedMessage.messageId);
             retryNotBeforeRef.current.delete(nextQueuedMessage.messageId);
             const pendingTimer = retryTimersRef.current.get(nextQueuedMessage.messageId);
@@ -1354,10 +1313,6 @@ export function useThreadOutboxDrain(): void {
             return;
           }
 
-          // A transport can still look connected briefly after a suspended
-          // host disappears. Re-arm wake from the failed explicit delivery so
-          // recovery does not depend on eager connection-state convergence.
-          requestWake(nextQueuedMessage);
           scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
         })
         .finally(() => {
@@ -1367,13 +1322,11 @@ export function useThreadOutboxDrain(): void {
     }
   }, [
     connectedEnvironments,
-    clearWakeRequest,
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,
     projects,
     queuedMessagesByThreadKey,
     retryTick,
-    requestWake,
     restoreQueuedMessage,
     scheduleQueuedMessageRetry,
     sendQueuedCreation,

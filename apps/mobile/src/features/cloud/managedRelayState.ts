@@ -4,17 +4,13 @@ import {
   deregisterManagedRelayEnvironment,
   managedRelaySessionAtom,
   readManagedRelaySnapshotState,
-  wakeManagedRelayEnvironmentHost,
 } from "@t3tools/client-runtime/relay";
 import {
   createAtomCommandScheduler,
   createRuntimeCommand,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
-import type {
-  RelayClientEnvironmentRecord,
-  RelayEnvironmentHostStatusResponse,
-} from "@t3tools/contracts/relay";
+import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect } from "react";
 
@@ -48,10 +44,6 @@ export const deregisterManagedRelayEnvironmentCommand = createRuntimeCommand(
 const EMPTY_ENVIRONMENTS_ATOM = Atom.make(
   AsyncResult.success<ReadonlyArray<RelayClientEnvironmentRecord>>([]),
 ).pipe(Atom.keepAlive, Atom.withLabel("managed-relay:mobile:environments:null"));
-
-const EMPTY_HOST_STATUS_ATOM = Atom.make(
-  AsyncResult.initial<RelayEnvironmentHostStatusResponse, never>(false),
-).pipe(Atom.keepAlive, Atom.withLabel("managed-relay:mobile:host-status:null"));
 
 export function useManagedRelayEnvironments() {
   const session = useAtomValue(managedRelaySessionAtom);
@@ -87,21 +79,4 @@ export function refreshManagedRelayEnvironments(): void {
   if (session) {
     managedRelayQueryManager.refreshEnvironments(appAtomRegistry, session.accountId);
   }
-}
-
-export function useManagedRelayEnvironmentHostStatus(environment: RelayClientEnvironmentRecord) {
-  const session = useAtomValue(managedRelaySessionAtom);
-  const accountId = session?.accountId ?? null;
-  const input = { accountId: accountId ?? "", environmentId: environment.environmentId };
-  const atom =
-    accountId && environment.hostLifecycle
-      ? managedRelayQueryManager.environmentHostStatusAtom(input)
-      : EMPTY_HOST_STATUS_ATOM;
-  const snapshot = readManagedRelaySnapshotState(useAtomValue(atom));
-  const refresh = useCallback(() => {
-    if (accountId && environment.hostLifecycle) {
-      managedRelayQueryManager.refreshEnvironmentHostStatus(appAtomRegistry, input);
-    }
-  }, [accountId, environment.environmentId, environment.hostLifecycle]);
-  return { ...snapshot, refresh };
 }

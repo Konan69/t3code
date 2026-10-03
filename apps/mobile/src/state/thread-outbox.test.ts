@@ -1303,15 +1303,6 @@ describe("thread outbox", () => {
       resolveThreadOutboxDeliveryAction({
         isCreation: false,
         threadExists: false,
-        shellStatus: "cached",
-        environmentConnected: false,
-        threadBusy: false,
-      }),
-    ).toBe("wake");
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        isCreation: false,
-        threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
         threadBusy: false,
@@ -1337,7 +1328,7 @@ describe("thread outbox", () => {
     ).toBe("send");
   });
 
-  it("wakes disconnected environments with queued existing-thread work", () => {
+  it("sends existing-thread messages whenever connected so queued messages can steer", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
         isCreation: false,
@@ -1355,7 +1346,7 @@ describe("thread outbox", () => {
         environmentConnected: false,
         threadBusy: true,
       }),
-    ).toBe("wake");
+    ).toBe("wait");
   });
 
   it("sends queued creations once connected and live, removing already-created ones", () => {
@@ -1367,7 +1358,7 @@ describe("thread outbox", () => {
         environmentConnected: false,
         threadBusy: false,
       }),
-    ).toBe("wake");
+    ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
     // simply not be visible yet — sending now could duplicate the thread.
     expect(

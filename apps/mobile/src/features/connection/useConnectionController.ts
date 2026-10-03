@@ -73,21 +73,16 @@ export function useConnectionController() {
     [connectPairingUrlMutation],
   );
   const connectRelayEnvironment = useCallback(
-    async (environment: RelayClientEnvironmentRecord) => {
-      const result = await registerEnvironment(
+    (environment: RelayClientEnvironmentRecord) =>
+      registerEnvironment(
         new RelayConnectionRegistration({
           target: new RelayConnectionTarget({
             environmentId: environment.environmentId,
             label: environment.label,
           }),
         }),
-      );
-      if (result._tag === "Success") {
-        await retryEnvironmentMutation(environment.environmentId);
-      }
-      return result;
-    },
-    [registerEnvironment, retryEnvironmentMutation],
+      ),
+    [registerEnvironment],
   );
   const removeEnvironment = useCallback(
     (environmentId: EnvironmentId) => removeEnvironmentMutation(environmentId),
