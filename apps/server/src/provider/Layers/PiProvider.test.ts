@@ -1,107 +1,80 @@
-import { describe, expect, it } from "@effect/vitest";
-import { PiSettings } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import {
-  parseExcludedPiProviders,
-  parsePiModelDiscovery,
-  piModelsFromDiscovery,
-  piModelsFromSettings,
-  piProviderLabel,
-} from "./PiProvider.ts";
+import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./PiProvider.ts";
 
-const decodePiSettings = Schema.decodeSync(PiSettings);
+const encoder = new TextEncoder();
 
-const discoveryJsonl = [
-  JSON.stringify({ type: "extension_ui_request", id: "ignored", method: "setStatus" }),
-  JSON.stringify({
-    id: "t3-pi-models",
-    type: "response",
-    command: "get_available_models",
-    success: true,
-    data: {
-      models: [
-        { provider: "google", id: "gemini-3-flash", name: "Gemini 3 Flash" },
-        { provider: "openai", id: "gpt-5", name: "GPT-5 API" },
-        { provider: "anthropic", id: "claude-api", name: "Claude API" },
-        { provider: "opencode-go", id: "gpt-5", name: "GPT-5 Go" },
-        {
-          provider: "openai-codex",
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          reasoning: true,
-        },
-        {
-          provider: "claude-bridge",
-          id: "claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          reasoning: true,
-        },
-        { provider: "openrouter", id: "qwen/qwen3-coder", name: "Qwen3 Coder" },
-        { provider: "opencode", id: "gpt-5", name: "GPT-5" },
-        { provider: "openrouter", id: "qwen/qwen3-coder", name: "Duplicate" },
-        { provider: "", id: "bad", name: "Invalid" },
-      ],
-    },
-  }),
-  "not-json",
-  JSON.stringify({
-    id: "t3-pi-state",
-    type: "response",
-    command: "get_state",
-    success: true,
-    data: { model: { provider: "openai-codex", id: "gpt-5.6-sol" } },
-  }),
-  "",
-].join("\n");
-
-describe("pi model discovery", () => {
-  it("decodes model and active-state responses while ignoring unrelated lines", () => {
-    const discovery = parsePiModelDiscovery(discoveryJsonl);
-    expect(discovery?.models).toHaveLength(9);
-    expect(discovery?.currentModelSlug).toBe("openai-codex/gpt-5.6-sol");
+function processHandle(input: {
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly exitCode?: number;
+}) {
+  const bytes = (value: string | undefined) =>
+    value === undefined || value.length === 0
+      ? Stream.empty
+      : Stream.succeed(encoder.encode(value));
+  return ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(900_000_001),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(input.exitCode ?? 0)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.drain,
+    stdout: bytes(input.stdout),
+    stderr: bytes(input.stderr),
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
   });
+}
 
-  it("uses exact provider exclusions and preserves subscription bridges", () => {
-    const discovery = parsePiModelDiscovery(discoveryJsonl)!;
-    const excluded = parseExcludedPiProviders("google, openai, anthropic, opencode-go");
-    const models = piModelsFromDiscovery(discovery, excluded);
-
-    expect(models.map((model) => model.slug)).toEqual([
-      "claude-bridge/claude-sonnet-5",
-      "openai-codex/gpt-5.6-sol",
-      "opencode/gpt-5",
-      "openrouter/qwen/qwen3-coder",
-    ]);
-    expect(models.find((model) => model.slug === "openai-codex/gpt-5.6-sol")).toMatchObject({
-      subProvider: "OpenAI Codex",
-      isDefault: true,
-    });
-    expect(models.find((model) => model.slug === "claude-bridge/claude-sonnet-5")).toMatchObject({
-      subProvider: "Claude Bridge",
-    });
-  });
-
-  it("defaults this fork to excluding raw-key and opencode-go providers", () => {
-    const settings = decodePiSettings({});
-    expect(settings.excludedProviders).toBe("google, openai, anthropic, opencode-go");
-
-    const models = piModelsFromSettings(
-      settings,
-      piModelsFromDiscovery(
-        parsePiModelDiscovery(discoveryJsonl)!,
-        parseExcludedPiProviders(settings.excludedProviders),
-      ),
+function piProbeSpawner(version: string) {
+  return ChildProcessSpawner.make((command) => {
+    const args = ChildProcess.isStandardCommand(command) ? command.args : [];
+    return Effect.succeed(
+      args.includes("--version")
+        ? processHandle({ stdout: `pi ${version}\n` })
+        : processHandle({ stderr: "RPC startup failed", exitCode: 1 }),
     );
-    expect(models.map((model) => model.subProvider)).toEqual([
-      "Claude Bridge",
-      "OpenAI Codex",
-      "OpenCode",
-      "OpenRouter",
-    ]);
   });
+}
 
-  it("humanizes unknown provider ids without losing the exact slug", () => {
-    expect(piProviderLabel("some-new_provider")).toBe("Some New Provider");
-  });
+const settings = {
+  enabled: true,
+  binaryPath: "pi",
+  launchArgs: "",
+  customModels: [],
+} as const;
+
+describe("PiProvider", () => {
+  it.effect("requires the first published Pi version with entries and settlement hooks", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* checkPiProviderStatus(settings).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, piProbeSpawner("0.80.3")),
+      );
+      assert.equal(snapshot.status, "error");
+      assert.equal(snapshot.version, "0.80.3");
+      assert.include(snapshot.message ?? "", `Pi ${MINIMUM_PI_VERSION} or newer`);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps compatible Pi selectable when optional discovery fails", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* checkPiProviderStatus(settings).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, piProbeSpawner("0.84.3")),
+      );
+      assert.equal(snapshot.status, "ready");
+      assert.equal(snapshot.auth.status, "unknown");
+      assert.deepEqual(
+        snapshot.models.map((model) => model.slug),
+        ["default"],
+      );
+      assert.include(snapshot.message ?? "", "could not refresh its models and commands");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

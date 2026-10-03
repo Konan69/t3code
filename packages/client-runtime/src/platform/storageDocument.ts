@@ -1,7 +1,6 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   type ConnectionRegistration,
@@ -18,7 +17,8 @@ export const StoredConnectionCredential = Schema.Struct({
 });
 export type StoredConnectionCredential = typeof StoredConnectionCredential.Type;
 
-const ConnectionCatalogDocumentFields = {
+export const ConnectionCatalogDocument = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
   targets: Schema.Array(PersistedConnectionTarget),
   profiles: Schema.Array(ConnectionProfile),
   credentials: Schema.Array(StoredConnectionCredential),
@@ -30,40 +30,11 @@ const ConnectionCatalogDocumentFields = {
   disabledEnvironmentIds: Schema.Array(EnvironmentId).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed([])),
   ),
-};
-
-const ConnectionCatalogDocumentV1 = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  ...ConnectionCatalogDocumentFields,
 });
-
-const ConnectionCatalogDocumentV2 = Schema.Struct({
-  schemaVersion: Schema.Literal(2),
-  ...ConnectionCatalogDocumentFields,
-});
-
-export const ConnectionCatalogDocument = Schema.Union([
-  ConnectionCatalogDocumentV1,
-  ConnectionCatalogDocumentV2,
-]).pipe(
-  Schema.decodeTo(
-    Schema.toType(ConnectionCatalogDocumentV2),
-    SchemaTransformation.transform({
-      decode: (document) =>
-        document.schemaVersion === 1
-          ? {
-              ...document,
-              schemaVersion: 2 as const,
-            }
-          : document,
-      encode: (document) => document,
-    }),
-  ),
-);
 export type ConnectionCatalogDocument = typeof ConnectionCatalogDocument.Type;
 
 export const EMPTY_CONNECTION_CATALOG_DOCUMENT: ConnectionCatalogDocument = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 1,
   targets: [],
   profiles: [],
   credentials: [],

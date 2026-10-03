@@ -26,7 +26,7 @@ layer("027_028_ProviderInstanceIdColumns", (it) => {
         readonly name: string;
       }>`
         SELECT migration_id, name
-        FROM t3_fork_migrations
+        FROM effect_sql_migrations
         WHERE migration_id IN (27, 28)
         ORDER BY migration_id
       `;

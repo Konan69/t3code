@@ -28,11 +28,13 @@ import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/co
 import {
   codexModelFamily,
   createModelCapabilities,
+  formatCodexModelName,
   readCustomModelEntries,
 } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
+  AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   type ServerProviderDraft,
@@ -47,7 +49,6 @@ import {
 } from "./codexUsageLimits.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
-const CODEX_PROVIDER_PROBE_TIMEOUT_MS = 60_000;
 const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
 
 type CodexRateLimitsProbe =
@@ -221,19 +222,12 @@ export function mapCodexModelCapabilities(
   });
 }
 
-const toDisplayName = (model: CodexSchema.V2ModelListResponse__Model): string => {
-  // Capitalize 'gpt' to 'GPT-' and capitalize any letter following a dash
-  return model.displayName
-    .replace(/^gpt/i, "GPT") // Handle start with 'gpt' or 'GPT'
-    .replace(/-([a-z])/g, (_, c) => "-" + c.toUpperCase());
-};
-
 function parseCodexModelListResponse(
   response: CodexSchema.V2ModelListResponse,
 ): ReadonlyArray<ServerProviderModel> {
   return response.data.map((model) => ({
     slug: model.model,
-    name: toDisplayName(model),
+    name: formatCodexModelName(model.displayName),
     isCustom: false,
     ...(model.isDefault ? { isDefault: true } : {}),
     capabilities: mapCodexModelCapabilities(model),
@@ -379,7 +373,7 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
   // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
   // "CODEX_HOME points to '~/.codex_work', but that path does not exist".
-  // Expand here for parity with `CodexTextGeneration`/`CodexSessionRuntime`.
+  // Expand here for parity with `CodexTextGeneration`.
   const resolvedHomePath = input.homePath ? expandHomePath(input.homePath) : undefined;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = {
@@ -571,16 +565,6 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
   return { status: "ready", auth };
 }
 
-function resolveCodexProviderProbeCwd(environment: NodeJS.ProcessEnv): string {
-  const home = environment.HOME?.trim();
-  if (home) return home;
-
-  const userProfile = environment.USERPROFILE?.trim();
-  if (userProfile) return userProfile;
-
-  return process.cwd();
-}
-
 export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(function* (
   codexSettings: CodexSettings,
   probe: (input: {
@@ -628,13 +612,13 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     binaryPath: codexSettings.binaryPath,
     homePath: codexSettings.homePath,
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
-    cwd: resolveCodexProviderProbeCwd(resolvedEnvironment),
+    cwd: process.cwd(),
     customModels: codexSettings.customModels,
     environment: resolvedEnvironment,
     ...(managedAuth ? { skipNativeUsage: true } : {}),
   }).pipe(
     Effect.scoped,
-    Effect.timeoutOption(Duration.millis(CODEX_PROVIDER_PROBE_TIMEOUT_MS)),
+    Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS)),
     Effect.result,
   );
 

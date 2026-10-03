@@ -4,21 +4,14 @@ import {
   type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
-import {
-  RelayEnvironmentConnectNotAuthorizedError,
-  RelayEnvironmentWakeScope,
-} from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Tracer from "effect/Tracer";
-import { afterEach, vi } from "vite-plus/test";
 
 import * as ConnectionResolver from "./resolver.ts";
-import * as WakeIntent from "./wakeIntent.ts";
-import * as ManagedRelay from "../relay/managedRelay.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
@@ -50,12 +43,7 @@ const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const ENDPOINT = {
   httpBaseUrl: "https://environment.example.test",
   wsBaseUrl: "wss://environment.example.test",
-  providerKind: "t3_relay" as const,
 };
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
 const SSH_TARGET: DesktopSshEnvironmentTarget = {
   alias: "development",
   hostname: "development.example.test",
@@ -93,8 +81,6 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
-  readonly connectEnvironment?: ManagedRelay.ManagedRelayClient["Service"]["connectEnvironment"];
-  readonly wakeEnvironmentHost?: ManagedRelay.ManagedRelayClient["Service"]["wakeEnvironmentHost"];
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -195,43 +181,30 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     ),
     Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, remote),
     Layer.succeed(ClientCapabilities.SshEnvironmentGateway, ssh),
-    Layer.succeed(ClientCapabilities.CloudSession, {
-      identity: Effect.succeedNone,
-      clerkToken: Effect.succeed("clerk-session"),
-    }),
-    Layer.succeed(
-      ManagedRelay.ManagedRelayClient,
-      ManagedRelay.ManagedRelayClient.of({
-        relayUrl: "https://relay.example.test",
-        connectEnvironment: options?.connectEnvironment ?? (() => Effect.die("unused")),
-        wakeEnvironmentHost: options?.wakeEnvironmentHost ?? (() => Effect.die("unused")),
-        listEnvironments: () => Effect.die("unused"),
-        listDevices: () => Effect.die("unused"),
-        createEnvironmentLinkChallenge: () => Effect.die("unused"),
-        linkEnvironment: () => Effect.die("unused"),
-        unlinkEnvironment: () => Effect.die("unused"),
-        getEnvironmentStatus: () => Effect.die("unused"),
-        configureEnvironmentHostLifecycle: () => Effect.die("unused"),
-        removeEnvironmentHostLifecycle: () => Effect.die("unused"),
-        getEnvironmentHostStatus: () => Effect.die("unused"),
-        registerDevice: () => Effect.die("unused"),
-        unregisterDevice: () => Effect.die("unused"),
-        registerLiveActivity: () => Effect.die("unused"),
-        getAgentActivitySnapshot: () => Effect.die("unused"),
-        resetTokenCache: Effect.void,
-      }),
-    ),
   );
 
-  return Effect.succeed(
-    ConnectionResolver.layer.pipe(
-      Layer.provideMerge(WakeIntent.layer),
-      Layer.provide(dependencies),
-    ),
-  );
+  return Effect.succeed(ConnectionResolver.layer.pipe(Layer.provide(dependencies)));
 });
 
 describe("ConnectionResolver", () => {
+  it.effect("blocks an old host during discovery before opening orchestration RPC", () =>
+    Effect.gen(function* () {
+      const brokerLayer = yield* makeDependencies({ descriptorProtocolVersion: null });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Primary",
+        httpBaseUrl: "http://127.0.0.1:3777",
+        wsBaseUrl: "ws://127.0.0.1:3777",
+      });
+
+      const error = yield* Effect.flip(broker.prepare(catalogEntry(target)));
+
+      expect(error).toMatchObject({ reason: "unsupported" });
+      expect(error.message).toContain("Update T3 Code on Compatible environment");
+    }),
+  );
+
   it.effect("blocks an incompatible host during discovery before opening orchestration RPC", () =>
     Effect.gen(function* () {
       const brokerLayer = yield* makeDependencies({
@@ -268,7 +241,7 @@ describe("ConnectionResolver", () => {
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
         socketUrl:
-          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=1",
+          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2",
         httpAuthorization: null,
         target,
       });
@@ -306,7 +279,7 @@ describe("ConnectionResolver", () => {
       });
 
       expect(yield* broker.prepare(catalogEntry(target))).toMatchObject({
-        socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=1",
+        socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=2",
         httpAuthorization: { _tag: "Bearer", token: "desktop-bearer" },
         target,
       });
@@ -378,130 +351,6 @@ describe("ConnectionResolver", () => {
         },
         target,
       });
-    }),
-  );
-
-  it.effect("wakes once for an armed relay connect and never for a plain retry", () =>
-    Effect.gen(function* () {
-      const request = vi.fn().mockResolvedValue({ status: 202 });
-      vi.stubGlobal("fetch", request);
-      const authorizedInputs = yield* Ref.make(0);
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-        wakePolicy: {
-          endpoint: "https://wake.example.test",
-          name: "cloudbox",
-          secret: "wake-secret",
-          mode: "explicit-intent",
-        },
-      });
-      const brokerLayer = yield* makeDependencies({
-        authorizeDpop: (input) =>
-          Ref.update(authorizedInputs, (count) => count + 1).pipe(
-            Effect.as({
-              environmentId: input.expectedEnvironmentId,
-              label: "Authorized relay environment",
-              httpBaseUrl: ENDPOINT.httpBaseUrl,
-              socketUrl: "wss://authorized.example.test/ws?wsTicket=dpop",
-              httpAuthorization: {
-                _tag: "Dpop" as const,
-                accessToken: "dpop-access-token",
-                expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-              },
-            }),
-          ),
-      });
-
-      yield* Effect.gen(function* () {
-        const broker = yield* ConnectionResolver.ConnectionResolver;
-        const wakeIntent = yield* WakeIntent.WakeIntent;
-        yield* wakeIntent.arm(ENVIRONMENT_ID);
-
-        yield* broker.prepare(catalogEntry(target));
-        yield* broker.prepare(catalogEntry(target));
-
-        expect(request).toHaveBeenCalledTimes(1);
-        expect(request).toHaveBeenCalledWith(
-          "https://wake.example.test/wake/cloudbox",
-          expect.objectContaining({
-            method: "POST",
-            headers: { Authorization: "Bearer wake-secret" },
-          }),
-        );
-        expect(yield* Ref.get(authorizedInputs)).toBe(2);
-      }).pipe(Effect.provide(brokerLayer));
-    }),
-  );
-
-  it.effect("uses the account relay wake once for an armed relay without a local secret", () =>
-    Effect.gen(function* () {
-      const wakeInputs = yield* Ref.make<ReadonlyArray<Record<string, unknown>>>([]);
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const brokerLayer = yield* makeDependencies({
-        wakeEnvironmentHost: (input) =>
-          Ref.update(wakeInputs, (values) => [...values, input]).pipe(
-            Effect.as({
-              environmentId: input.environmentId,
-              provider: "gcp" as const,
-              state: "resuming" as const,
-              requestedAt: "2026-06-06T00:00:00.000Z",
-            }),
-          ),
-      });
-
-      yield* Effect.gen(function* () {
-        const broker = yield* ConnectionResolver.ConnectionResolver;
-        const wakeIntent = yield* WakeIntent.WakeIntent;
-        yield* wakeIntent.arm(ENVIRONMENT_ID);
-
-        yield* broker.prepare(catalogEntry(target));
-        yield* broker.prepare(catalogEntry(target));
-
-        expect(yield* Ref.get(wakeInputs)).toEqual([
-          {
-            clerkToken: "clerk-session",
-            scopes: [RelayEnvironmentWakeScope],
-            environmentId: ENVIRONMENT_ID,
-          },
-        ]);
-      }).pipe(Effect.provide(brokerLayer));
-    }),
-  );
-
-  it.effect("still connects when an armed relay has no account wake configuration", () =>
-    Effect.gen(function* () {
-      const relayError = new RelayEnvironmentConnectNotAuthorizedError({
-        code: "environment_connect_not_authorized",
-        reason: "host_lifecycle_not_configured",
-        traceId: "trace-no-host-lifecycle",
-      });
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const brokerLayer = yield* makeDependencies({
-        wakeEnvironmentHost: () =>
-          Effect.fail(
-            new ManagedRelay.ManagedRelayRequestFailedError({
-              action: "wake relay environment host",
-              cause: relayError,
-              relayError,
-              traceId: relayError.traceId,
-            }),
-          ),
-      });
-
-      yield* Effect.gen(function* () {
-        const broker = yield* ConnectionResolver.ConnectionResolver;
-        const wakeIntent = yield* WakeIntent.WakeIntent;
-        yield* wakeIntent.arm(ENVIRONMENT_ID);
-
-        expect((yield* broker.prepare(catalogEntry(target))).environmentId).toBe(ENVIRONMENT_ID);
-      }).pipe(Effect.provide(brokerLayer));
     }),
   );
 
@@ -595,8 +444,9 @@ describe("ConnectionResolver", () => {
     }),
   );
 
-  for (const scenario of ["unchanged", "changed", "revocation-failed"] as const) {
-    it.effect(`handles ${scenario} SSH routing consent before saving or authorizing`, () =>
+  it.effect.each(["unchanged", "changed", "revocation-failed"] as const)(
+    "handles %s SSH routing consent before saving or authorizing",
+    (scenario) =>
       Effect.gen(function* () {
         const calls: string[] = [];
         const target = new SshConnectionTarget({
@@ -688,8 +538,7 @@ describe("ConnectionResolver", () => {
         }
         expect(yield* permissions.get(entry)).toBe(scenario === "changed" ? "off" : "read-write");
       }),
-    );
-  }
+  );
 
   it.effect("preserves relay authorization failure classification and trace details", () =>
     Effect.gen(function* () {

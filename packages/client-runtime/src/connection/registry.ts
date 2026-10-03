@@ -18,34 +18,40 @@ import {
   type ConnectionRegistration,
   type PlatformConnectionRegistration,
   type PrimaryConnectionRegistration,
-  RelayConnectionRegistration,
   SshConnectionProfile,
   connectionRegistrationCatalogEntry,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as Connectivity from "./connectivity.ts";
-import {
-  type ConnectionAttemptError,
-  type ConnectionTarget,
-  type NetworkStatus,
-  RelayConnectionTarget,
-  type RelayWakePolicy,
-  type SupervisorConnectionState,
+import type {
+  ConnectionAttemptError,
+  ConnectionTarget,
+  NetworkStatus,
+  SupervisorConnectionState,
 } from "./model.ts";
 import { ConnectionBlockedError } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
-import { type WakeStatusResult, wakeStatus as fetchWakeStatus } from "./wakeEndpoint.ts";
-import * as WakeIntent from "./wakeIntent.ts";
 import {
   GitHubRoutingPermissions,
   gitHubRoutingConnectionKey,
 } from "./githubRoutingPermissions.ts";
 
 const isSshConnectionProfile = Schema.is(SshConnectionProfile);
+
+function unsupportedState(
+  entry: ConnectionCatalogEntry,
+): Pick<ConnectionCatalogEntry, "unsupportedReason" | "serverUpdateRequired"> {
+  return {
+    ...(entry.unsupportedReason === undefined
+      ? {}
+      : { unsupportedReason: entry.unsupportedReason }),
+    ...(entry.serverUpdateRequired === true ? { serverUpdateRequired: true } : {}),
+  };
+}
 
 export class EnvironmentNotRegisteredError extends Schema.TaggedError<EnvironmentNotRegisteredError>()(
   "EnvironmentNotRegisteredError",
@@ -68,20 +74,6 @@ export class PlatformEnvironmentRemovalError extends Schema.TaggedError<Platform
     return `Platform-managed environment ${this.environmentId} cannot be removed.`;
   }
 }
-
-export class WakePolicyUnsupportedTargetError extends Schema.TaggedError<WakePolicyUnsupportedTargetError>()(
-  "WakePolicyUnsupportedTargetError",
-  {
-    environmentId: EnvironmentId,
-    targetTag: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Environment ${this.environmentId} uses ${this.targetTag}, not a relay connection target.`;
-  }
-}
-
-export type EnvironmentWakeStatusResult = WakeStatusResult | { readonly _tag: "NoPolicy" };
 
 export class EnvironmentRegistry extends Context.Service<
   EnvironmentRegistry,
@@ -114,19 +106,6 @@ export class EnvironmentRegistry extends Context.Service<
       | PlatformEnvironmentRemovalError
     >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
-    readonly armWake: (environmentId: EnvironmentId) => Effect.Effect<void>;
-    readonly setWakePolicy: (
-      environmentId: EnvironmentId,
-      policy: RelayWakePolicy | null,
-    ) => Effect.Effect<
-      void,
-      | EnvironmentNotRegisteredError
-      | WakePolicyUnsupportedTargetError
-      | Persistence.ConnectionPersistenceError
-    >;
-    readonly wakeStatus: (
-      environmentId: EnvironmentId,
-    ) => Effect.Effect<EnvironmentWakeStatusResult, EnvironmentNotRegisteredError>;
     /**
      * Switches a saved environment on or off. Off drops the socket, stops the
      * retry ladder, and persists so the next launch stays off. Registration,
@@ -193,7 +172,6 @@ export const make = Effect.gen(function* () {
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
-  const wakeIntent = yield* WakeIntent.WakeIntent;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const persistedTargets = yield* storage.list;
   const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
@@ -488,7 +466,7 @@ export const make = Effect.gen(function* () {
                 enabled: previous.enabled,
                 ...(previous.unsupportedReason !== undefined &&
                 gitHubRoutingConnectionKey(previous) === gitHubRoutingConnectionKey(registered)
-                  ? { unsupportedReason: previous.unsupportedReason }
+                  ? unsupportedState(previous)
                   : {}),
               };
         if (
@@ -516,40 +494,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const setWakePolicy = Effect.fn("EnvironmentRegistry.setWakePolicy")(function* (
-    environmentId: EnvironmentId,
-    policy: RelayWakePolicy | null,
-  ) {
-    yield* withLeaseLock(
-      environmentId,
-      Effect.gen(function* () {
-        const entry = yield* getEntry(environmentId);
-        if (entry.target._tag !== "RelayConnectionTarget") {
-          return yield* new WakePolicyUnsupportedTargetError({
-            environmentId,
-            targetTag: entry.target._tag,
-          });
-        }
-        const target = new RelayConnectionTarget({
-          environmentId: entry.target.environmentId,
-          label: entry.target.label,
-          ...(policy === null ? {} : { wakePolicy: policy }),
-        });
-        yield* registrations.register(new RelayConnectionRegistration({ target }));
-        yield* Ref.update(persistedTargetsByEnvironment, (current) => {
-          const next = new Map(current);
-          next.set(environmentId, target);
-          return next;
-        });
-        yield* SubscriptionRef.update(entries, (current) => {
-          const next = new Map(current);
-          next.set(environmentId, { ...entry, target });
-          return next;
-        });
-      }),
-    );
-  });
-
   const installPlatformRegistration = Effect.fn("EnvironmentRegistry.installPlatformRegistration")(
     function* (registration: PlatformConnectionRegistration) {
       const registered = connectionRegistrationCatalogEntry(registration);
@@ -561,7 +505,7 @@ export const make = Effect.gen(function* () {
           const entry: ConnectionCatalogEntry =
             previous?.unsupportedReason !== undefined &&
             gitHubRoutingConnectionKey(previous) === gitHubRoutingConnectionKey(registered)
-              ? { ...registered, enabled: false, unsupportedReason: previous.unsupportedReason }
+              ? { ...registered, enabled: false, ...unsupportedState(previous) }
               : registered;
           const persistedTarget = (yield* Ref.get(persistedTargetsByEnvironment)).get(
             target.environmentId,
@@ -809,16 +753,6 @@ export const make = Effect.gen(function* () {
       Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
       Effect.withSpan("EnvironmentRegistry.retryNow"),
     );
-  const armWake = (environmentId: EnvironmentId) =>
-    wakeIntent.arm(environmentId).pipe(Effect.andThen(retryNow(environmentId)));
-  const wakeStatus = Effect.fn("EnvironmentRegistry.wakeStatus")(function* (
-    environmentId: EnvironmentId,
-  ) {
-    const entry = yield* getEntry(environmentId);
-    return entry.target._tag === "RelayConnectionTarget" && entry.target.wakePolicy !== undefined
-      ? yield* fetchWakeStatus(entry.target.wakePolicy)
-      : ({ _tag: "NoPolicy" } as const);
-  });
   const setEnabled = Effect.fn("EnvironmentRegistry.setEnabled")(function* (
     environmentId: EnvironmentId,
     enabled: boolean,
@@ -921,11 +855,26 @@ export const make = Effect.gen(function* () {
       environmentId,
       Effect.gen(function* () {
         const entry = (yield* SubscriptionRef.get(entries)).get(environmentId);
-        if (entry === undefined || entry.unsupportedReason === (error?.message ?? undefined))
+        if (
+          entry === undefined ||
+          (entry.unsupportedReason === (error?.message ?? undefined) &&
+            entry.serverUpdateRequired === (error?.serverUpdateRequired ?? undefined))
+        )
           return;
-        const { unsupportedReason: _previousReason, ...rest } = entry;
+        const {
+          unsupportedReason: _previousReason,
+          serverUpdateRequired: _previousUpdateRequired,
+          ...rest
+        } = entry;
         const next: ConnectionCatalogEntry =
-          error === null ? rest : { ...rest, enabled: false, unsupportedReason: error.message };
+          error === null
+            ? rest
+            : {
+                ...rest,
+                enabled: false,
+                unsupportedReason: error.message,
+                ...(error.serverUpdateRequired === true ? { serverUpdateRequired: true } : {}),
+              };
         if (
           error !== null &&
           entry.enabled &&
@@ -957,9 +906,6 @@ export const make = Effect.gen(function* () {
     remove,
     removeRelayEnvironments,
     retryNow,
-    armWake,
-    setWakePolicy,
-    wakeStatus,
     setEnabled,
     setCompatibility,
     state,

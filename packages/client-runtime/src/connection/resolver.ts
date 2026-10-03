@@ -1,16 +1,17 @@
-import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
-import { RelayEnvironmentWakeScope } from "@t3tools/contracts/relay";
+import type {
+  AuthClientPresentationMetadata,
+  ExecutionEnvironmentDescriptor,
+} from "@t3tools/contracts";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { appendClientConnectionParams } from "../authorization/remote.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
-import * as ManagedRelay from "../relay/managedRelay.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
   BearerConnectionCredential,
@@ -23,7 +24,6 @@ import {
   credentialMissingError,
   environmentMismatchError,
   mapRemoteEnvironmentError,
-  mapManagedRelayError,
   profileMissingError,
 } from "./errors.ts";
 import {
@@ -40,8 +40,6 @@ import type {
 } from "./model.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
-import { wakeEndpoint } from "./wakeEndpoint.ts";
-import * as WakeIntent from "./wakeIntent.ts";
 import {
   appendOrchestrationProtocol,
   orchestrationProtocolCompatibilityError,
@@ -54,20 +52,23 @@ export class ConnectionResolver extends Context.Service<
     readonly prepare: (
       entry: ConnectionCatalogEntry,
     ) => Effect.Effect<PreparedConnection, ConnectionAttemptError>;
+    /**
+     * Authorizes a socket without the orchestration protocol gate, for hosts
+     * too old to connect normally. Only update RPCs may run over it.
+     */
+    readonly prepareForUpdate: (entry: ConnectionCatalogEntry) => Effect.Effect<
+      {
+        readonly prepared: PreparedConnection;
+        readonly descriptor: ExecutionEnvironmentDescriptor;
+      },
+      ConnectionAttemptError
+    >;
   }
 >()("@t3tools/client-runtime/connection/resolver/ConnectionResolver") {}
 
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 const isSshProfile = Schema.is(SshConnectionProfile);
 const isBearerCredential = Schema.is(BearerConnectionCredential);
-
-function isMissingRelayHostLifecycle(error: ManagedRelay.ManagedRelayClientError): boolean {
-  return (
-    error._tag === "ManagedRelayRequestFailedError" &&
-    error.relayError?._tag === "RelayEnvironmentConnectNotAuthorizedError" &&
-    error.relayError.reason === "host_lifecycle_not_configured"
-  );
-}
 
 function primarySocketUrl(
   target: PrimaryConnectionTarget,
@@ -168,32 +169,10 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
 });
 
 const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(function* () {
-  const relay = yield* ManagedRelay.ManagedRelayClient;
-  const session = yield* ClientCapabilities.CloudSession;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-  const wakeIntent = yield* WakeIntent.WakeIntent;
 
   return Effect.fnUntraced(
     function* (target: RelayConnectionTarget) {
-      if (yield* wakeIntent.consume(target.environmentId)) {
-        if (target.wakePolicy !== undefined) {
-          yield* wakeEndpoint(target.wakePolicy);
-        } else {
-          const clerkToken = yield* session.clerkToken.pipe(
-            Effect.withSpan("relay.connection.wake.cloudSessionToken.resolve"),
-          );
-          yield* relay
-            .wakeEnvironmentHost({
-              clerkToken,
-              scopes: [RelayEnvironmentWakeScope],
-              environmentId: target.environmentId,
-            })
-            .pipe(
-              Effect.catchIf(isMissingRelayHostLifecycle, () => Effect.void),
-              Effect.mapError(mapManagedRelayError),
-            );
-        }
-      }
       const authorized = yield* remote.authorizeDpop({
         expectedEnvironmentId: target.environmentId,
       });
@@ -280,7 +259,7 @@ export const make = Effect.gen(function* () {
   const ssh = yield* makeSshBroker();
   const httpClient = yield* HttpClient.HttpClient;
 
-  const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
+  const authorize = Effect.fn("clientRuntime.connection.broker.authorize")(function* (
     entry: ConnectionCatalogEntry,
   ) {
     const target: ConnectionTarget = entry.target;
@@ -312,14 +291,24 @@ export const make = Effect.gen(function* () {
         actual: descriptor.environmentId,
       });
     }
+    return { prepared, descriptor };
+  });
+
+  const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
+    entry: ConnectionCatalogEntry,
+  ) {
+    const { prepared, descriptor } = yield* authorize(entry);
     const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
     if (compatibilityError !== null) {
       return yield* compatibilityError;
     }
-    return { ...prepared, socketUrl: appendOrchestrationProtocol(prepared.socketUrl) };
+    return {
+      ...prepared,
+      socketUrl: appendOrchestrationProtocol(prepared.socketUrl),
+    };
   });
 
-  return ConnectionResolver.of({ prepare });
+  return ConnectionResolver.of({ prepare, prepareForUpdate: authorize });
 });
 
 export const layer = Layer.effect(ConnectionResolver, make);

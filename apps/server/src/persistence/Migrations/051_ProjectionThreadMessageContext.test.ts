@@ -27,7 +27,7 @@ layer("051_ProjectionThreadMessageContext", (it) => {
       const context = columns.find((column) => column.name === "context_json");
       const migrations = yield* sql<{ readonly migration_id: number }>`
         SELECT migration_id
-        FROM t3_fork_migrations
+        FROM effect_sql_migrations
         WHERE migration_id = 51
       `;
 

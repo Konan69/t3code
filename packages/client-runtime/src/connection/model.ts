@@ -23,19 +23,10 @@ export class BearerConnectionTarget extends Schema.TaggedClass<BearerConnectionT
   },
 ) {}
 
-export const RelayWakePolicy = Schema.Struct({
-  endpoint: Schema.String,
-  name: Schema.String,
-  secret: Schema.String,
-  mode: Schema.Literal("explicit-intent"),
-});
-export type RelayWakePolicy = typeof RelayWakePolicy.Type;
-
 export class RelayConnectionTarget extends Schema.TaggedClass<RelayConnectionTarget>()(
   "RelayConnectionTarget",
   {
     ...ConnectionTargetBase,
-    wakePolicy: Schema.optionalKey(RelayWakePolicy),
   },
 ) {}
 
@@ -103,6 +94,8 @@ export class ConnectionBlockedError extends Schema.TaggedError<ConnectionBlocked
     reason: ConnectionBlockedReason,
     detail: Schema.String,
     traceId: Schema.optionalKey(Schema.String),
+    /** The host speaks an older orchestration protocol; updating it restores the connection. */
+    serverUpdateRequired: Schema.optionalKey(Schema.Boolean),
   },
 ) {
   override get message(): string {

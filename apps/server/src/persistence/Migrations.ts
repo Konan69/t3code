@@ -1,15 +1,16 @@
 /**
- * Migration runner with a static registry.
+ * Migration runner with an inline loader.
  *
+ * Uses Migrator.make with fromRecord to define migrations inline.
  * All migrations are statically imported - no dynamic file system loading.
  *
  * `runMigrations` is called by the SQLite persistence layer at startup, so the
  * schema is always up to date before the application starts.
  */
 
-import * as Effect from "effect/Effect";
-
 import { type MigrationEntry, runMigrationsByName } from "./NameBasedMigrator.ts";
+import * as Effect from "effect/Effect";
+import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -66,12 +67,14 @@ import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
 import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import Migration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
+import Migration0055 from "./Migrations/055_OrchestrationV2.ts";
+import Migration0056 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import Migration0900 from "./Migrations/900_ProjectionMachineBindings.ts";
 import Migration0901 from "./Migrations/901_ProjectionMachineProjectWorkspaceRoot.ts";
 import Migration0902 from "./Migrations/902_RepairProjectionProjectsAutoPull.ts";
 
-// Names are permanent identities; ids determine execution order only.
-const migrationEntries = [
+// Names identify migrations; ids determine execution order.
+export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -126,6 +129,10 @@ const migrationEntries = [
   [52, "ProjectionThreadTitleState", Migration0052],
   [53, "PullRequestFilesViewed", Migration0053],
   [54, "ProjectionThreadsAutoSettleDisabledAt", Migration0054],
+  // Released as 53 and 54 in V2 previews; reconcileV2PreviewMigration preserves their ledger.
+  // Preserve this migration's schema. Future V2 schema changes need new migrations.
+  [55, "OrchestrationV2", Migration0055],
+  [56, "RemoveRedundantProjectionIndexes", Migration0056],
   [900, "ProjectionMachineBindings", Migration0900],
   [901, "ProjectionMachineProjectWorkspaceRoot", Migration0901],
   [902, "RepairProjectionProjectsAutoPull", Migration0902],
@@ -140,8 +147,7 @@ export interface RunMigrationsOptions {
 /**
  * Run all pending migrations.
  *
- * Bootstraps legacy names into t3_fork_migrations, then runs untracked names
- * in ascending id order without modifying effect_sql_migrations.
+ * Tracks applied names in t3_fork_migrations and runs pending names in id order.
  *
  * Returns array of [id, name] tuples for migrations that were run.
  *
@@ -150,10 +156,18 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const executedMigrations = yield* runMigrationsByName(migrationEntries, toMigrationInclusive);
+  const previewMigrations =
+    toMigrationInclusive === undefined || toMigrationInclusive >= 55
+      ? yield* reconcileV2PreviewMigration()
+      : [];
+  const executedMigrations = [
+    ...previewMigrations,
+    ...(yield* runMigrationsByName(migrationEntries, toMigrationInclusive)),
+  ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+
   return executedMigrations;
 });

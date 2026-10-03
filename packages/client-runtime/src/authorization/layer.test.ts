@@ -175,10 +175,6 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
     linkEnvironment: unexpected,
     unlinkEnvironment: unexpected,
     getEnvironmentStatus: unexpected,
-    configureEnvironmentHostLifecycle: unexpected,
-    removeEnvironmentHostLifecycle: unexpected,
-    getEnvironmentHostStatus: unexpected,
-    wakeEnvironmentHost: unexpected,
     connectEnvironment: (request) =>
       Effect.gen(function* () {
         yield* Ref.update(bootstrapCalls, (count) => count + 1);

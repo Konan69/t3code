@@ -14,7 +14,6 @@ import * as PlatformConnectionSource from "../platform/source.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
-import * as WakeIntent from "./wakeIntent.ts";
 
 export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscoveredCompatibility")(
   function* () {
@@ -68,7 +67,7 @@ export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscovere
 
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   const driverLayer = ConnectionDriver.layer.pipe(
-    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layerWithOptions(options))),
+    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layer(options))),
   );
   const registryLayer = EnvironmentRegistry.layer.pipe(Layer.provide(driverLayer));
   const onboardingLayer = ConnectionOnboarding.layer.pipe(Layer.provide(registryLayer));
@@ -76,6 +75,8 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
     registryLayer,
     RelayEnvironmentDiscovery.layer,
     onboardingLayer,
+    // Exposed for updating hosts too old to connect through the driver.
+    ConnectionResolver.layer,
   );
   const connectionStartupLayer = Layer.effectDiscard(
     Effect.gen(function* () {
@@ -92,7 +93,6 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   return connectionStartupLayer.pipe(
     Layer.provideMerge(connectionServicesLayer),
     Layer.provideMerge(RemoteEnvironmentAuthorization.layer),
-    Layer.provide(WakeIntent.layer),
   );
 }
 

@@ -1,9 +1,9 @@
 import {
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
+  type OrchestrationV2ShellSnapshot,
   ORCHESTRATION_PROTOCOL_VERSION,
   type ExecutionEnvironmentDescriptor,
-  type OrchestrationShellSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -36,14 +36,12 @@ import {
 import * as Connectivity from "./connectivity.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionDriver from "./driver.ts";
-import * as WakeIntent from "./wakeIntent.ts";
 import {
   ConnectionTransientError,
   ConnectionBlockedError,
   BearerConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
-  type RelayWakePolicy,
   SshConnectionTarget,
   type ConnectionTarget,
   type PreparedConnection,
@@ -63,6 +61,7 @@ import { watchDiscoveredCompatibility } from "./layer.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import type { RelayEnvironmentStatusResponse } from "@t3tools/contracts/relay";
 import { runDesktopCommitWithReconnectObserver } from "../state/server.ts";
+import { v2ShellSnapshot } from "../state/orchestrationV2TestFixtures.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -94,12 +93,6 @@ const SECOND_RELAY_TARGET = new RelayConnectionTarget({
   environmentId: EnvironmentId.make("environment-relay-2"),
   label: "Second relay environment",
 });
-const WAKE_POLICY: RelayWakePolicy = {
-  endpoint: "https://wake.example.test",
-  name: "cloudbox",
-  secret: "local-secret",
-  mode: "explicit-intent",
-};
 
 const BEARER_TARGET = new BearerConnectionTarget({
   environmentId: EnvironmentId.make("environment-bearer"),
@@ -135,11 +128,9 @@ const SSH_PROFILE = new SshConnectionProfile({
   target: SSH_TARGET,
 });
 
-const CACHED_SNAPSHOT: OrchestrationShellSnapshot = {
+const CACHED_SNAPSHOT: OrchestrationV2ShellSnapshot = {
+  ...v2ShellSnapshot,
   snapshotSequence: 1,
-  projects: [],
-  threads: [],
-  updatedAt: "2026-06-06T00:00:00.000Z",
 };
 
 interface SessionControl {
@@ -422,7 +413,6 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
           ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.never }),
         ),
         Layer.succeed(ConnectionDriver.ConnectionDriver, driver),
-        WakeIntent.layer,
         cacheLayer,
         Layer.succeed(Persistence.EnvironmentOwnedDataCleanup, ownedDataCleanup),
       ),
@@ -1450,6 +1440,46 @@ describe("EnvironmentRegistry", () => {
             ?.unsupportedReason,
         ).toBeUndefined();
       }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("keeps one session per environment across concurrent registrations and retries", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const registration = new PrimaryConnectionRegistration({ target: TARGET });
+        yield* Effect.all(
+          Array.from({ length: 5 }, () => registry.registerPlatform(registration)),
+          { concurrency: "unbounded", discard: true },
+        );
+        yield* awaitConnectionState(
+          registry,
+          TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+
+        // Platform polls and explicit retries reach a healthy connection at once.
+        yield* Effect.all(
+          [
+            ...Array.from({ length: 5 }, () => registry.registerPlatform(registration)),
+            ...Array.from({ length: 5 }, () => registry.retryNow(TARGET.environmentId)),
+            registry.reconcilePlatform([registration]),
+          ],
+          { concurrency: "unbounded", discard: true },
+        );
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          yield* Effect.yieldNow;
+        }
+
+        expect(yield* Ref.get(harness.sessions)).toHaveLength(1);
+        expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
+        expect(yield* registry.state(TARGET.environmentId)).toMatchObject({
+          phase: "connected",
+          generation: 1,
+        });
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
   );
 
