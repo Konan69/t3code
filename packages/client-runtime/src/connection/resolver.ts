@@ -1,3 +1,4 @@
+import { RelayEnvironmentWakeScope } from "@t3tools/contracts/relay";
 import type {
   AuthClientPresentationMetadata,
   ExecutionEnvironmentDescriptor,
@@ -11,6 +12,9 @@ import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { appendClientConnectionParams } from "../authorization/remote.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
+import { wakeEndpoint } from "./wakeEndpoint.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
@@ -169,10 +173,30 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
 });
 
 const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(function* () {
+  const relay = yield* ManagedRelay.ManagedRelayClient;
+  const session = yield* ClientCapabilities.CloudSession;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+  const wakeIntent = yield* WakeIntent.WakeIntent;
+  const wakeScope = yield* Effect.scope;
 
   return Effect.fnUntraced(
     function* (target: RelayConnectionTarget) {
+      if (yield* wakeIntent.consume(target.environmentId)) {
+        // Wake is an optional hint. Older relays reject its scope or route;
+        // neither a rejection nor a hung request may hold up authorization.
+        yield* Effect.gen(function* () {
+          if (target.wakePolicy !== undefined) {
+            yield* wakeEndpoint(target.wakePolicy);
+          } else {
+            const clerkToken = yield* session.clerkToken;
+            yield* relay.wakeEnvironmentHost({
+              clerkToken,
+              scopes: [RelayEnvironmentWakeScope],
+              environmentId: target.environmentId,
+            });
+          }
+        }).pipe(Effect.ignoreCause, Effect.forkIn(wakeScope));
+      }
       const authorized = yield* remote.authorizeDpop({
         expectedEnvironmentId: target.environmentId,
       });

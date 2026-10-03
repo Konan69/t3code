@@ -36,6 +36,7 @@ import {
 import * as Connectivity from "./connectivity.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionDriver from "./driver.ts";
+import * as WakeIntent from "./wakeIntent.ts";
 import {
   ConnectionTransientError,
   ConnectionBlockedError,
@@ -413,6 +414,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
           ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.never }),
         ),
         Layer.succeed(ConnectionDriver.ConnectionDriver, driver),
+        WakeIntent.layer,
         cacheLayer,
         Layer.succeed(Persistence.EnvironmentOwnedDataCleanup, ownedDataCleanup),
       ),
