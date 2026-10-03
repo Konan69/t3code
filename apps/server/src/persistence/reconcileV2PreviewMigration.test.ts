@@ -10,10 +10,19 @@ import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
 
+// These fixtures represent upstream preview databases, before fork name tracking.
+const seedUpstreamLedger = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* runMigrations({ toMigrationInclusive: 52 });
+  yield* sql`CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at DATETIME DEFAULT current_timestamp)`;
+  yield* sql`INSERT INTO effect_sql_migrations SELECT migration_id, name, created_at FROM t3_fork_migrations`;
+  yield* sql`DROP TABLE t3_fork_migrations`;
+});
+
 // The V2 schema is unchanged from the published September 15–16 previews.
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* runMigrations({ toMigrationInclusive: 52 });
+  yield* seedUpstreamLedger;
   yield* Migrator.make({})({
     loader: Migrator.fromRecord({ "53_OrchestrationV2": OrchestrationV2 }),
   });
@@ -37,11 +46,14 @@ describe("V2 preview upgrade", () => {
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [900, "ProjectionMachineBindings"],
+        [901, "ProjectionMachineProjectWorkspaceRoot"],
+        [902, "RepairProjectionProjectsAutoPull"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
-        SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
+        SELECT migration_id, name FROM t3_fork_migrations ORDER BY migration_id
       `;
       assert.deepStrictEqual(
         history.map((row) => [row.migration_id, row.name] as const),
@@ -65,7 +77,7 @@ describe("V2 preview upgrade", () => {
     (withIndexes) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* seedUpstreamLedger;
         yield* Migrator.make({})({
           loader: Migrator.fromRecord({
             "53_PullRequestFilesViewed": PullRequestFilesViewed,
@@ -80,7 +92,7 @@ describe("V2 preview upgrade", () => {
         const history = yield* sql<{
           readonly migration_id: number;
           readonly name: string;
-        }>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
+        }>`SELECT migration_id, name FROM t3_fork_migrations ORDER BY migration_id`;
         assert.deepStrictEqual(
           history.map((row) => [row.migration_id, row.name] as const),
           migrationManifest,
@@ -116,6 +128,9 @@ describe("V2 preview upgrade", () => {
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [900, "ProjectionMachineBindings"],
+        [901, "ProjectionMachineProjectWorkspaceRoot"],
+        [902, "RepairProjectionProjectsAutoPull"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

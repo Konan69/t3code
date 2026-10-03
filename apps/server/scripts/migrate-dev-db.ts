@@ -15,10 +15,9 @@
  *      Auth sessions, pairing links, command receipts, and provider
  *      runtime rows are dropped — pair a fresh browser against dev.
  *   3. Runs migrations on the result. Because the clone carries the real
- *      `effect_sql_migrations` table, this proves a new migration applies
- *      on top of the real applied set, and the slot check below catches
- *      the silent failure where two branches claim the same
- *      `Migrations/NNN_` id (the second one's CREATE TABLE is skipped).
+ *      `t3_fork_migrations` table, this proves a new migration applies
+ *      on top of the real applied names; verification checks that every
+ *      migration registered in this checkout was recorded.
  *
  * The event log (`orchestration_events`) is pruned per stream while
  * `sqlite_sequence` and the projection cursors carry over untouched, so new events keep appending
@@ -375,18 +374,19 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
   };
 });
 
-/** Compare this checkout's migration registry against what the cloned
- * database recorded: same slot under a different name means the migration
- * was skipped, not applied. */
-const verifyMigrationSlots = Effect.fn("verifyMigrationSlots")(function* () {
+/** Verify each registry name was applied; ids only determine order in this fork. */
+const verifyMigrationNames = Effect.fn("verifyMigrationNames")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const applied = yield* sql<{ migration_id: number; name: string }>`
-    SELECT migration_id, name FROM effect_sql_migrations`;
-  const appliedById = new Map(applied.map((row) => [Number(row.migration_id), row.name]));
+    SELECT migration_id, name FROM t3_fork_migrations`;
+  const names = new Set(applied.map((row) => row.name));
   for (const [slot, codeName] of migrationManifest) {
-    const appliedName = appliedById.get(slot);
-    if (appliedName !== undefined && appliedName !== codeName) {
-      return yield* new MigrateDevDbSlotCollisionError({ slot, codeName, appliedName });
+    if (!names.has(codeName)) {
+      return yield* new MigrateDevDbSlotCollisionError({
+        slot,
+        codeName,
+        appliedName: applied.find((row) => row.migration_id === slot)?.name ?? "<missing>",
+      });
     }
   }
 });
@@ -484,10 +484,8 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
       wrapPhase("migrate", snapshotPath),
     );
 
-    // Verify while the snapshot is still the only thing touched: a slot
-    // collision must abort before the old worktree db gets replaced with a
-    // schema whose colliding migration was silently skipped.
-    yield* verifyMigrationSlots().pipe(
+    // Verify the snapshot's applied names before replacing the worktree database.
+    yield* verifyMigrationNames().pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),
       Effect.catchTags({
         SqlError: (cause) =>

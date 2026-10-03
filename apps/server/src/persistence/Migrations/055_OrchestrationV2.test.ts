@@ -12,7 +12,7 @@ layer("055_OrchestrationV2", (it) => {
   it.effect("keeps released migrations contiguous", () =>
     Effect.sync(() => {
       assert.deepStrictEqual(
-        migrationEntries.map(([id]) => id),
+        migrationEntries.filter(([id]) => id < 900).map(([id]) => id),
         Array.from({ length: 56 }, (_, index) => index + 1),
       );
     }),
@@ -28,6 +28,9 @@ layer("055_OrchestrationV2", (it) => {
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [55, "OrchestrationV2"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [900, "ProjectionMachineBindings"],
+        [901, "ProjectionMachineProjectWorkspaceRoot"],
+        [902, "RepairProjectionProjectsAutoPull"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -36,7 +39,7 @@ layer("055_OrchestrationV2", (it) => {
         readonly name: string;
       }>`
         SELECT migration_id, name
-        FROM effect_sql_migrations
+        FROM t3_fork_migrations
         WHERE migration_id >= 48
         ORDER BY migration_id
       `;
@@ -50,6 +53,9 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
         { migration_id: 55, name: "OrchestrationV2" },
         { migration_id: 56, name: "RemoveRedundantProjectionIndexes" },
+        { migration_id: 900, name: "ProjectionMachineBindings" },
+        { migration_id: 901, name: "ProjectionMachineProjectWorkspaceRoot" },
+        { migration_id: 902, name: "RepairProjectionProjectsAutoPull" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

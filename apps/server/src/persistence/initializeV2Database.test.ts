@@ -86,7 +86,7 @@ it.effect(
       const v1 = new NodeSqlite.DatabaseSync(sourcePath);
       try {
         assert.equal(
-          v1.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get()?.id,
+          v1.prepare("SELECT MAX(migration_id) AS id FROM t3_fork_migrations").get()?.id,
           52,
         );
         assert.equal(
