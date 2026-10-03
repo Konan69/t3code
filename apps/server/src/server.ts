@@ -1,3 +1,7 @@
+import * as MachineServiceLive from "./machine/MachineServiceLive.ts";
+import * as MachineProcessLauncher from "./process/MachineProcessLauncher.ts";
+import { ProcessLauncher } from "./process/ProcessLauncher.ts";
+import { ProviderProcessLauncher } from "./process/ProviderProcessLauncher.ts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
@@ -442,11 +446,23 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const MachineRuntimeLive = Layer.effect(ProviderProcessLauncher, ProcessLauncher).pipe(
+  Layer.provideMerge(MachineProcessLauncher.layer),
+  Layer.provideMerge(MachineServiceLive.layer),
+  Layer.provide(ProjectionStoreV2.layer),
+);
+
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(ProviderEventIngestor.analyticsLive),
   Layer.provide(CheckpointStoreLayerLive),
   Layer.provide(GitWorkflowLayerLive),
-  Layer.provide(ResourceCleanupService.live),
+  Layer.provide(
+    ResourceCleanupService.live.pipe(
+      Layer.provide(
+        Layer.mergeAll(ProjectionStoreV2.layer, GitWorkflowLayerLive, MachineServiceLive.layer),
+      ),
+    ),
+  ),
   Layer.provide(
     RunFinalizationService.observerLive.pipe(
       Layer.provide(ProjectionStoreV2.layer),
@@ -529,6 +545,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
 ).pipe(
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
+  Layer.provideMerge(MachineRuntimeLive),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(ServerSettingsLayerLive),

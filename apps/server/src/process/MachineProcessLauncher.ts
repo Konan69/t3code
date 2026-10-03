@@ -1,11 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { MachineService } from "../machine/MachineService.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import {
   ProcessLauncher,
   makeHostProcessLauncher,
@@ -16,7 +15,7 @@ import {
 export const makeMachineProcessLauncher = (
   host: ProcessLauncherShape,
   machines: Pick<MachineService["Service"], "exec" | "hostReachableUrl">,
-  snapshots: Pick<ProjectionSnapshotQuery["Service"], "getThreadDetailById">,
+  snapshots: Pick<ProjectionStoreV2["Service"], "getThread">,
 ): ProcessLauncherShape => {
   const processError = (error: unknown, method: string) =>
     PlatformError.systemError({
@@ -28,8 +27,8 @@ export const makeMachineProcessLauncher = (
   const resolveBinding = (threadId: Parameters<ProcessLauncherShape["launch"]>[0]["threadId"]) =>
     threadId === undefined
       ? Effect.succeed(undefined)
-      : snapshots.getThreadDetailById(threadId).pipe(
-          Effect.map((thread) => Option.getOrUndefined(thread)?.machine ?? undefined),
+      : snapshots.getThread(threadId).pipe(
+          Effect.map((thread) => thread.machine ?? undefined),
           Effect.mapError((cause) => processError(cause, "resolveBinding")),
         );
 
@@ -68,6 +67,9 @@ export const makeMachineProcessLauncher = (
                   ...(Object.hasOwn(input, "forceKillAfter")
                     ? { forceKillAfter: input.forceKillAfter }
                     : {}),
+                  ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+                  ...(input.stdout === undefined ? {} : { stdout: input.stdout }),
+                  ...(input.stderr === undefined ? {} : { stderr: input.stderr }),
                 })
                 .pipe(Effect.mapError((error) => processError(error, "launch"))),
             ),
@@ -82,7 +84,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const machines = yield* MachineService;
-    const snapshots = yield* ProjectionSnapshotQuery;
+    const snapshots = yield* ProjectionStoreV2;
     return makeMachineProcessLauncher(makeHostProcessLauncher(spawner), machines, snapshots);
   }),
 );

@@ -231,8 +231,20 @@ it.effect(
         commandId: CommandId.make("workspace-control"),
         threadId,
         worktreePath: "/new-repo",
+        machine: {
+          machineId: "thread-control",
+          machineName: "thread-control",
+          state: "running",
+          hostWorkspaceRoot: "/new-repo",
+          guestWorkspaceRoot: "/home/kixey/ws",
+        },
       });
       const thread = yield* projections.getThread(threadId);
+      assert.equal(thread.machine?.machineId, "thread-control");
+      assert.equal(
+        (yield* projections.getThreadShell(threadId))?.machine?.machineId,
+        "thread-control",
+      );
       assert.equal(thread.title, "After");
       assert.equal(thread.modelSelection.model, "gpt-6");
       assert.equal(thread.runtimeMode, "approval-required");
@@ -271,6 +283,13 @@ it.effect(
         commandId: CommandId.make("archive-with-old-history"),
         threadId,
       });
+      assert.equal((yield* projections.getThread(threadId)).machine?.state, "archived");
+      yield* orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("unarchive-machine"),
+        threadId,
+      });
+      assert.equal((yield* projections.getThread(threadId)).machine?.state, "stopped");
       yield* orchestrator.dispatch({
         type: "thread.delete",
         commandId: CommandId.make("delete-with-old-history"),

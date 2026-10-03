@@ -22,6 +22,7 @@ interface ProjectProjectionRow {
   readonly workspace_root: string;
   readonly default_model_selection_json: string | null;
   readonly scripts_json: string;
+  readonly machine_mode?: "off" | "thread";
   readonly created_at: string;
   readonly updated_at: string;
   readonly deleted_at: string | null;
@@ -127,16 +128,7 @@ export default Effect.gen(function* () {
   // boundary was restored. Re-baseline every current row into the shared log so
   // projection rebuilds preserve the exact pre-migration project state.
   const projectRows = yield* sql<ProjectProjectionRow>`
-    SELECT
-      project_id,
-      title,
-      workspace_root,
-      default_model_selection_json,
-      scripts_json,
-      created_at,
-      updated_at,
-      deleted_at
-    FROM projection_projects
+    SELECT * FROM projection_projects
     ORDER BY created_at ASC, project_id ASC
   `;
   yield* Effect.forEach(
@@ -153,6 +145,7 @@ export default Effect.gen(function* () {
               ? null
               : yield* decodeJson(project.default_model_selection_json),
           scripts: yield* decodeJson(project.scripts_json),
+          ...(project.machine_mode === undefined ? {} : { machineMode: project.machine_mode }),
           createdAt: project.created_at,
           updatedAt: project.updated_at,
         };

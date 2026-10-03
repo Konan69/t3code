@@ -1,3 +1,4 @@
+import { ProjectMachineMode } from "./machine.ts";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
@@ -135,6 +136,7 @@ export const ProjectIconOverride = Schema.Union([
 export type ProjectIconOverride = typeof ProjectIconOverride.Type;
 
 export const Project = Schema.Struct({
+  machineMode: Schema.optional(ProjectMachineMode),
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
@@ -169,6 +171,7 @@ export const ProjectChange = Schema.Union([
 export type ProjectChange = typeof ProjectChange.Type;
 
 export const ProjectCreatePayload = Schema.Struct({
+  machineMode: Schema.optional(ProjectMachineMode),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
@@ -178,6 +181,7 @@ export const ProjectCreatePayload = Schema.Struct({
 export type ProjectCreatePayload = typeof ProjectCreatePayload.Type;
 
 export const ProjectUpdatePayload = Schema.Struct({
+  machineMode: Schema.optional(ProjectMachineMode),
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),

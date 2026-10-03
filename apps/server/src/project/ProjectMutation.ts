@@ -22,6 +22,7 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         ...(mutation.defaultModelSelection === undefined
           ? {}
           : { defaultModelSelection: mutation.defaultModelSelection }),
+        ...(mutation.machineMode === undefined ? {} : { machineMode: mutation.machineMode }),
         ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
       });
 
@@ -40,6 +41,7 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         ...(mutation.defaultThreadEnvMode === undefined
           ? {}
           : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
+        ...(mutation.machineMode === undefined ? {} : { machineMode: mutation.machineMode }),
         ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
       });
 

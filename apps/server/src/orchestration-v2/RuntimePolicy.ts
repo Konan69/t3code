@@ -67,7 +67,8 @@ export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2
     Effect.succeed({
       runtimeMode: input.thread.runtimeMode,
       interactionMode: input.thread.interactionMode,
-      cwd: input.thread.worktreePath,
+      cwd: input.thread.machine?.hostWorkspaceRoot ?? input.thread.worktreePath,
+      ...(input.thread.machine === undefined ? {} : { machine: input.thread.machine }),
     }),
 });
 
@@ -104,6 +105,7 @@ export const layerFromProjectStore: Layer.Layer<
             ? undefined
             : (yield* instance.snapshot.getSnapshot).supportedRuntimeModes;
         const cwd =
+          input.thread.machine?.hostWorkspaceRoot ??
           input.thread.worktreePath ??
           (yield* projects.get(input.thread.projectId).pipe(
             Effect.mapError(
@@ -132,6 +134,7 @@ export const layerFromProjectStore: Layer.Layer<
           runtimeMode: providerRuntimeMode(input.thread.runtimeMode, supportedRuntimeModes),
           interactionMode: input.thread.interactionMode,
           cwd,
+          ...(input.thread.machine === undefined ? {} : { machine: input.thread.machine }),
         });
       }),
     });

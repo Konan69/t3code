@@ -2540,9 +2540,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const updatedThread: OrchestrationV2AppThread = (() => {
       switch (command.type) {
         case "thread.archive":
-          return { ...thread, archivedAt: now, titleRegeneration: null, updatedAt: now };
+          return {
+            ...thread,
+            ...(thread.machine
+              ? { machine: { ...thread.machine, state: "archived" as const } }
+              : {}),
+            archivedAt: now,
+            titleRegeneration: null,
+            updatedAt: now,
+          };
         case "thread.unarchive":
-          return { ...thread, archivedAt: null, updatedAt: now };
+          return {
+            ...thread,
+            ...(thread.machine
+              ? { machine: { ...thread.machine, state: "stopped" as const } }
+              : {}),
+            archivedAt: null,
+            updatedAt: now,
+          };
         case "thread.settle": {
           // Settling is "I'm done with this": it clears a pin the same way it
           // parks the thread (mirrors the v1 decider's settle/pin exclusion).
@@ -2694,6 +2709,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     Date.parse(thread.limitRecovery.resetAt)
                 ? { snoozedUntil: null, snoozedAt: null }
                 : {}),
+            ...(command.machine === undefined ? {} : { machine: command.machine }),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
             ...(command.linkedPullRequest === undefined

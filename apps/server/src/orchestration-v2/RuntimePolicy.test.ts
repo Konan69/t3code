@@ -110,6 +110,26 @@ const TestLayer = RuntimePolicy.layerFromProjectStore.pipe(
 );
 
 it.layer(TestLayer)("RuntimePolicyV2", (it) => {
+  it.effect("uses the machine host workspace and carries the guest binding to adapters", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const machine = {
+        machineId: "thread-one",
+        machineName: "thread-one",
+        state: "stopped" as const,
+        hostWorkspaceRoot: "/tank/threads/one/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+      };
+      const resolved = yield* policy.resolve({
+        thread: { ...makeThread({ now, worktreePath: "/other" }), machine },
+        modelSelection,
+      });
+      assert.equal(resolved.cwd, machine.hostWorkspaceRoot);
+      assert.deepStrictEqual(resolved.machine, machine);
+    }),
+  );
+
   it.effect("uses the project root for local-checkout threads", () =>
     Effect.gen(function* () {
       const policy = yield* RuntimePolicy.RuntimePolicyV2;

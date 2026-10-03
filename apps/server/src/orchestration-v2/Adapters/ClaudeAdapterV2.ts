@@ -1,3 +1,10 @@
+import { providerRuntimeCwd } from "../../process/ProviderProcessLauncher.ts";
+import { ProviderProcessLauncher } from "../../process/ProviderProcessLauncher.ts";
+import {
+  ClaudeSpawnedProcess,
+  makeClaudeProcessLaunchInput,
+} from "../../process/ClaudeSpawnedProcess.ts";
+import * as Scope from "effect/Scope";
 import * as NodeCrypto from "node:crypto";
 
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -2941,11 +2948,12 @@ export function makeClaudeAdapterV2(
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        const machineLauncher = yield* ProviderProcessLauncher;
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
           providerInstanceId: adapterOptions.instanceId,
-          cwd: input.runtimePolicy.cwd,
+          cwd: providerRuntimeCwd(input.runtimePolicy),
           model: input.modelSelection.model,
           now,
         });
@@ -6891,27 +6899,50 @@ export function makeClaudeAdapterV2(
             .open({
               threadId: turnInput.threadId,
               providerSessionId: input.providerSessionId,
-              options: makeClaudeQueryOptions({
-                modelSelection: turnInput.modelSelection,
-                nativeThreadId,
-                resume: shouldResume,
-                ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
-                cwd: turnInput.runtimePolicy.cwd,
-                attachmentsDir,
-                settings: adapterOptions.settings,
-                environment: adapterOptions.environment,
-                tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
-                ...mcpOverrides,
-                permissionMode: queryPolicy.permissionMode,
-                ...(queryPolicy.allowDangerouslySkipPermissions === undefined
+              options: {
+                ...makeClaudeQueryOptions({
+                  modelSelection: turnInput.modelSelection,
+                  nativeThreadId,
+                  resume: shouldResume,
+                  ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
+                  cwd: providerRuntimeCwd(turnInput.runtimePolicy),
+                  attachmentsDir,
+                  settings: adapterOptions.settings,
+                  environment: adapterOptions.environment,
+                  tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
+                  ...mcpOverrides,
+                  permissionMode: queryPolicy.permissionMode,
+                  ...(queryPolicy.allowDangerouslySkipPermissions === undefined
+                    ? {}
+                    : {
+                        allowDangerouslySkipPermissions:
+                          queryPolicy.allowDangerouslySkipPermissions,
+                      }),
+                  canUseTool,
+                  onUserDialog,
+                  supportedDialogKinds: ["resume_return"],
+                }),
+                ...(machineLauncher === undefined
                   ? {}
                   : {
-                      allowDangerouslySkipPermissions: queryPolicy.allowDangerouslySkipPermissions,
+                      spawnClaudeCodeProcess: (
+                        options: import("@anthropic-ai/claude-agent-sdk").SpawnOptions,
+                      ) =>
+                        new ClaudeSpawnedProcess({
+                          launch: Effect.runPromise(
+                            machineLauncher
+                              .launch(
+                                makeClaudeProcessLaunchInput({
+                                  threadId: turnInput.threadId,
+                                  options,
+                                }),
+                              )
+                              .pipe(Effect.provideService(Scope.Scope, sessionScope)),
+                          ),
+                          signal: options.signal,
+                        }),
                     }),
-                canUseTool,
-                onUserDialog,
-                supportedDialogKinds: ["resume_return"],
-              }),
+              },
             })
             .pipe(
               Effect.tapError(() =>

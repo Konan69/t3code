@@ -17,6 +17,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  ThreadMachineBinding,
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
   TurnItemId,
@@ -45,6 +46,7 @@ interface LegacyThreadRow {
   readonly interaction_mode: string;
   readonly branch: string | null;
   readonly worktree_path: string | null;
+  readonly machine_json?: string | null;
   readonly created_at: string;
   readonly updated_at: string;
   readonly archived_at: string | null;
@@ -119,6 +121,7 @@ export class LegacyV1ThreadImporter extends Context.Service<
   LegacyV1ThreadImporterShape
 >()("t3/orchestration-v2/legacy/LegacyV1ThreadImporter") {}
 
+const decodeMachine = Schema.decodeUnknownSync(Schema.NullOr(ThreadMachineBinding));
 const decodeModelSelection = Schema.decodeUnknownOption(ModelSelection);
 const decodeAttachments = Schema.decodeUnknownOption(Schema.Array(ChatAttachment));
 const decodePullRequests = Schema.decodeUnknownOption(Schema.Array(ThreadPullRequestLink));
@@ -214,6 +217,7 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
     interactionMode: interactionModeFor(row.interaction_mode),
     branch,
     worktreePath,
+    machine: decodeMachine(row.machine_json == null ? null : parseJson(row.machine_json)),
     linkedPullRequest,
     pullRequests: importedPullRequests,
     branchPullRequest: branchPullRequestFor(row),
@@ -452,6 +456,13 @@ const make = Effect.gen(function* () {
         thread.interaction_mode,
         thread.branch,
         thread.worktree_path,
+        CASE WHEN thread.machine_id IS NULL THEN NULL ELSE json_object(
+          'machineId', thread.machine_id, 'machineName', thread.machine_name,
+          'state', thread.machine_state,
+          'hostWorkspaceRoot', thread.machine_host_workspace_root,
+          'guestWorkspaceRoot', thread.machine_guest_workspace_root,
+          'projectWorkspaceRoot', COALESCE(thread.machine_project_workspace_root, (SELECT workspace_root FROM projection_projects WHERE project_id = thread.project_id))
+        ) END AS machine_json,
         thread.created_at,
         thread.updated_at,
         thread.archived_at,
@@ -483,6 +494,7 @@ const make = Effect.gen(function* () {
          OR json_type(projection.payload_json, '$.pullRequests') IS NULL
          OR json_type(projection.payload_json, '$.branchPullRequest') IS NULL
          OR json_type(projection.payload_json, '$.activeOrderKey') IS NULL
+         OR (thread.machine_id IS NOT NULL AND json_type(projection.payload_json, '$.machine') IS NULL)
       ORDER BY thread.created_at ASC, thread.thread_id ASC
     `;
     let repairedThreadCount = 0;
@@ -494,6 +506,7 @@ const make = Effect.gen(function* () {
       const legacyPullRequests = legacy.pullRequests ?? [];
       const repaired: OrchestrationV2AppThread = {
         ...current,
+        ...(current.machine === undefined ? { machine: legacy.machine } : {}),
         pinnedAt: current.pinnedAt === undefined ? legacy.pinnedAt : current.pinnedAt,
         autoSettleDisabledAt:
           current.autoSettleDisabledAt === undefined
@@ -556,6 +569,13 @@ const make = Effect.gen(function* () {
         thread.interaction_mode,
         thread.branch,
         thread.worktree_path,
+        CASE WHEN thread.machine_id IS NULL THEN NULL ELSE json_object(
+          'machineId', thread.machine_id, 'machineName', thread.machine_name,
+          'state', thread.machine_state,
+          'hostWorkspaceRoot', thread.machine_host_workspace_root,
+          'guestWorkspaceRoot', thread.machine_guest_workspace_root,
+          'projectWorkspaceRoot', COALESCE(thread.machine_project_workspace_root, (SELECT workspace_root FROM projection_projects WHERE project_id = thread.project_id))
+        ) END AS machine_json,
         thread.created_at,
         thread.updated_at,
         thread.archived_at,

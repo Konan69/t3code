@@ -1,7 +1,7 @@
 import {
   CommandId,
   type OrchestrationProjectShell,
-  type OrchestrationThread,
+  type OrchestrationV2AppThread,
   type ProjectId,
   type ThreadId,
   type ThreadMachineBinding,
@@ -17,8 +17,9 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import { MachineService } from "./MachineService.ts";
 import * as Context from "effect/Context";
 
@@ -117,8 +118,9 @@ export const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const machines = yield* MachineService;
   const ensureSemaphore = yield* Semaphore.make(1);
-  const orchestrationEngine = yield* OrchestrationEngineService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const orchestrationEngine = yield* OrchestratorV2;
+  const projectionStore = yield* ProjectionStoreV2;
+  const projects = yield* ProjectStoreV2;
   const commandId = (operation: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.orDie,
@@ -126,7 +128,7 @@ export const make = Effect.gen(function* () {
     );
 
   const ensureWorktree = Effect.fn("ThreadMachineService.ensureWorktree")(function* (
-    thread: OrchestrationThread,
+    thread: OrchestrationV2AppThread,
     project: OrchestrationProjectShell,
     binding: ThreadMachineBinding,
     preparation?: MachineWorktreePreparation,
@@ -192,7 +194,7 @@ export const make = Effect.gen(function* () {
     });
     if (thread.branch !== worktree.worktree.refName) {
       yield* orchestrationEngine.dispatch({
-        type: "thread.meta.update",
+        type: "thread.metadata.update",
         commandId: yield* commandId("worktree"),
         threadId: thread.id,
         branch: worktree.worktree.refName,
@@ -204,20 +206,11 @@ export const make = Effect.gen(function* () {
     threadId: ThreadId,
     preparation?: MachineWorktreePreparation,
   ) {
-    const thread = yield* projectionSnapshotQuery
-      .getThreadDetailById(threadId)
+    const thread = yield* projectionStore.getThread(threadId);
+    const project = yield* projects
+      .getShell(thread.projectId)
       .pipe(Effect.map(Option.getOrUndefined));
-    if (!thread) {
-      return yield* new ThreadMachineServiceError({
-        operation: "resolve-thread",
-        threadId,
-        detail: `Thread '${threadId}' was not found.`,
-      });
-    }
-    const project = yield* projectionSnapshotQuery
-      .getProjectShellById(thread.projectId)
-      .pipe(Effect.map(Option.getOrUndefined));
-    if (project?.machineMode !== "thread") {
+    if (!project || (project.machineMode !== "thread" && !thread.machine)) {
       return Option.none();
     }
 
@@ -228,10 +221,11 @@ export const make = Effect.gen(function* () {
     const cleanupBinding = { ...workspace.value, state: "stopped" as const };
     if (!sameMachineIdentity(thread.machine, cleanupBinding)) {
       yield* orchestrationEngine.dispatch({
-        type: "thread.machine.bind",
+        type: "thread.metadata.update",
         commandId: yield* commandId("bind-workspace"),
         threadId,
-        binding: cleanupBinding,
+        machine: cleanupBinding,
+        worktreePath: cleanupBinding.hostWorkspaceRoot,
       });
     }
     yield* ensureWorktree(thread, project, workspace.value, preparation);
@@ -243,17 +237,18 @@ export const make = Effect.gen(function* () {
     const binding = { ...created.value, state: "running" as const };
     if (!sameMachineIdentity(thread.machine, binding)) {
       yield* orchestrationEngine.dispatch({
-        type: "thread.machine.bind",
+        type: "thread.metadata.update",
         commandId: yield* commandId("bind"),
         threadId,
-        binding,
+        machine: binding,
+        worktreePath: binding.hostWorkspaceRoot,
       });
     } else if (thread.machine?.state !== binding.state) {
       yield* orchestrationEngine.dispatch({
-        type: "thread.machine.state.set",
+        type: "thread.metadata.update",
         commandId: yield* commandId("state"),
         threadId,
-        state: binding.state,
+        machine: binding,
       });
     }
     return Option.some(binding);
@@ -277,8 +272,8 @@ export const make = Effect.gen(function* () {
   const runSetupForThreadRaw = Effect.fn("ThreadMachineService.runSetupForThread")(function* (
     input: Parameters<ThreadMachineServiceShape["runSetupForThread"]>[0],
   ) {
-    const project = yield* projectionSnapshotQuery
-      .getProjectShellById(input.projectId)
+    const project = yield* projects
+      .getShell(input.projectId)
       .pipe(Effect.map(Option.getOrUndefined));
     if (!project) {
       return yield* new ThreadMachineServiceError({

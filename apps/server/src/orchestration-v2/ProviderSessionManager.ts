@@ -1,3 +1,4 @@
+import { ProviderProcessLauncher } from "../process/ProviderProcessLauncher.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   ModelSelection,
@@ -308,6 +309,7 @@ export const layerWithOptions = (
     Effect.gen(function* () {
       const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
       const fileSystem = yield* FileSystem.FileSystem;
+      const machineLauncher = yield* ProviderProcessLauncher;
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
       /**
        * Optional so the many focused tests that assemble this layer by hand do
@@ -1711,6 +1713,16 @@ export const layerWithOptions = (
                     }),
                 ),
               );
+              if (
+                input.runtimePolicy.machine &&
+                !["codex", "claudeAgent", "pi"].includes(adapter.driver)
+              ) {
+                return yield* new ProviderSessionOpenError({
+                  instanceId: input.modelSelection.instanceId,
+                  providerSessionId: input.providerSessionId,
+                  cause: `Thread machines are not supported by the ${adapter.driver} V2 driver.`,
+                });
+              }
               const prepared = yield* prepareMcpSession(
                 input.threadId,
                 input.modelSelection.instanceId,
@@ -1749,6 +1761,7 @@ export const layerWithOptions = (
                 })
                 .pipe(
                   Effect.provideService(Scope.Scope, sessionScope),
+                  Effect.provideService(ProviderProcessLauncher, machineLauncher),
                   Effect.tapError(() =>
                     Scope.close(sessionScope, Exit.void).pipe(
                       Effect.ignore,

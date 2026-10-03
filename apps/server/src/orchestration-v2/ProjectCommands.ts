@@ -4,6 +4,7 @@ import {
   MAX_SCRIPT_ID_LENGTH,
   type ModelSelection,
   type ProjectIconOverride,
+  type ProjectMachineMode,
   ProjectId,
   type ProjectScript,
   SCRIPT_RUN_COMMAND_PATTERN,
@@ -22,6 +23,7 @@ export interface ProjectCreateCommand {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly workspaceRoot: string;
+  readonly machineMode?: ProjectMachineMode;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
 
@@ -36,6 +38,7 @@ export interface ProjectMetaUpdateCommand {
   readonly autoPull?: boolean;
   readonly faviconPath?: string | null;
   readonly projectIcon?: ProjectIconOverride | null;
+  readonly machineMode?: ProjectMachineMode;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
 
@@ -171,6 +174,7 @@ export function planProjectCommand(input: {
           // Project creation has no user model choice. Older clients sent an
           // automatic seed, but only a metadata update records an explicit default.
           defaultModelSelection: null,
+          machineMode: command.machineMode ?? "off",
           faviconPath: null,
           projectIcon: null,
           scripts: command.scripts ?? [],
@@ -219,6 +223,7 @@ export function planProjectCommand(input: {
           ...(command.defaultThreadEnvMode === undefined
             ? {}
             : { defaultThreadEnvMode: command.defaultThreadEnvMode }),
+          ...(command.machineMode === undefined ? {} : { machineMode: command.machineMode }),
           ...(command.autoPull === undefined ? {} : { autoPull: command.autoPull }),
           ...(command.faviconPath === undefined ? {} : { faviconPath: command.faviconPath }),
           ...(command.projectIcon === undefined ? {} : { projectIcon: command.projectIcon }),

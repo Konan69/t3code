@@ -17,6 +17,9 @@ export interface ProcessLaunchInput {
   readonly shell?: boolean | string | undefined;
   readonly detached?: boolean | undefined;
   readonly forceKillAfter?: Duration.Input | undefined;
+  readonly stdin?: ChildProcess.CommandInput | ChildProcess.StdinConfig | undefined;
+  readonly stdout?: ChildProcess.CommandOutput | ChildProcess.StdoutConfig | undefined;
+  readonly stderr?: ChildProcess.CommandOutput | ChildProcess.StderrConfig | undefined;
 }
 
 export function processLaunchLogFields(input: ProcessLaunchInput) {
@@ -65,6 +68,9 @@ export const makeHostProcessLauncher = (
               ...(Object.hasOwn(input, "forceKillAfter")
                 ? { forceKillAfter: input.forceKillAfter }
                 : {}),
+              ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+              ...(input.stdout === undefined ? {} : { stdout: input.stdout }),
+              ...(input.stderr === undefined ? {} : { stderr: input.stderr }),
             }),
           ),
         ),

@@ -98,6 +98,7 @@ export function makeReplayServerConfig(
 
     return {
       logLevel: "Error",
+      machineIdentityManifest: undefined,
       traceMinLevel: "Info",
       traceTimingEnabled: true,
       traceBatchWindowMs: 200,

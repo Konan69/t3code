@@ -1,3 +1,4 @@
+import type * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import { MigrationError } from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -6,7 +7,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 export type MigrationEntry = readonly [
   id: number,
   name: string,
-  migration: Effect.Effect<void, SqlError, SqlClient.SqlClient>,
+  migration: Effect.Effect<void, SqlError | Schema.SchemaError, SqlClient.SqlClient>,
 ];
 
 const LEGACY_DELIBERATELY_SKIPPED_MIGRATIONS = [

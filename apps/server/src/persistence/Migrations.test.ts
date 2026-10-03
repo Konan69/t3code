@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-import { migrationManifest, runMigrations } from "./Migrations.ts";
+import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
 import { type MigrationEntry, runMigrationsByName } from "./NameBasedMigrator.ts";
 import repairSettlement from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
 import projectIcon from "./Migrations/047_ProjectionProjectIcon.ts";
@@ -22,34 +22,32 @@ const createLegacyTable = Effect.gen(function* () {
   `;
 });
 
-for (const legacyTableExists of [false, true]) {
-  it.effect(
-    `runs every migration on a fresh database (legacy table exists: ${legacyTableExists})`,
-    () =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        if (legacyTableExists) yield* createLegacyTable;
-        const executed = yield* runMigrations();
-        assert.deepStrictEqual(executed, migrationManifest);
-        assert.ok(executed.some(([, name]) => name === "ClearAutomaticProjectModelDefaults"));
-        assert.deepStrictEqual(yield* runMigrations(), []);
-        const tracked =
-          yield* sql`SELECT name, migration_id FROM t3_fork_migrations ORDER BY migration_id`;
+it.effect.each([false, true])(
+  "runs every migration on a fresh database (legacy table exists: %s)",
+  (legacyTableExists) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      if (legacyTableExists) yield* createLegacyTable;
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed, migrationManifest);
+      assert.ok(executed.some(([, name]) => name === "ClearAutomaticProjectModelDefaults"));
+      assert.deepStrictEqual(yield* runMigrations(), []);
+      const tracked =
+        yield* sql`SELECT name, migration_id FROM t3_fork_migrations ORDER BY migration_id`;
+      assert.deepStrictEqual(
+        tracked,
+        migrationManifest.map(([migration_id, name]) => ({ name, migration_id })),
+      );
+      if (legacyTableExists) {
+        assert.deepStrictEqual(yield* sql`SELECT * FROM effect_sql_migrations`, []);
+      } else {
         assert.deepStrictEqual(
-          tracked,
-          migrationManifest.map(([migration_id, name]) => ({ name, migration_id })),
+          yield* sql`SELECT name FROM sqlite_master WHERE name = 'effect_sql_migrations'`,
+          [],
         );
-        if (legacyTableExists) {
-          assert.deepStrictEqual(yield* sql`SELECT * FROM effect_sql_migrations`, []);
-        } else {
-          assert.deepStrictEqual(
-            yield* sql`SELECT name FROM sqlite_master WHERE name = 'effect_sql_migrations'`,
-            [],
-          );
-        }
-      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-}
+      }
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
 
 it.effect("recovers upstream migrations from legacy reused ids and preserves model defaults", () =>
   Effect.gen(function* () {
@@ -95,14 +93,17 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
       [52, "ProjectionThreadTitleState"],
       [53, "PullRequestFilesViewed"],
       [54, "ProjectionThreadsAutoSettleDisabledAt"],
+      [55, "OrchestrationV2"],
+      [56, "RemoveRedundantProjectionIndexes"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT default_model_selection_json, auto_pull FROM projection_projects`,
       [{ default_model_selection_json: model, auto_pull: 1 }],
     );
-    assert.deepStrictEqual(yield* sql`SELECT payload_json FROM orchestration_events`, [
-      { payload_json: payload },
-    ]);
+    assert.deepStrictEqual(
+      yield* sql`SELECT payload_json FROM orchestration_events WHERE event_id = 'event-1'`,
+      [{ payload_json: payload }],
+    );
     const columns = yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`;
     assert.ok(columns.some(({ name }) => name === "branch_pull_request_json"));
     assert.ok(columns.some(({ name }) => name === "active_order_key"));
@@ -114,7 +115,7 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
     );
     const counts =
       yield* sql`SELECT COUNT(*) AS total, COUNT(DISTINCT name) AS distinct_names FROM t3_fork_migrations`;
-    assert.deepStrictEqual(counts, [{ total: 57, distinct_names: 57 }]);
+    assert.deepStrictEqual(counts, [{ total: 59, distinct_names: 59 }]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
@@ -144,7 +145,7 @@ it.effect("runs lower ids after legacy id 905 and after fork tracking has been i
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-for (const [label, entries, message] of [
+it.effect.each([
   [
     "ids",
     [
@@ -161,8 +162,9 @@ for (const [label, entries, message] of [
     ],
     "Duplicate migration name: Same",
   ],
-] as const satisfies ReadonlyArray<readonly [string, ReadonlyArray<MigrationEntry>, string]>) {
-  it.effect(`rejects duplicate ${label} even outside the requested id range`, () =>
+] as const satisfies ReadonlyArray<readonly [string, ReadonlyArray<MigrationEntry>, string]>)(
+  "rejects duplicate %s even outside the requested id range",
+  ([_label, entries, message]) =>
     Effect.gen(function* () {
       const error = yield* runMigrationsByName(entries, 0).pipe(Effect.flip);
       assert.equal(error._tag, "MigrationError");
@@ -176,8 +178,7 @@ for (const [label, entries, message] of [
         [],
       );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-}
+);
 
 it.effect(
   "rolls back migration writes and bootstrap when a migration fails, then permits retry",
@@ -199,4 +200,32 @@ it.effect(
         [1, "CreateTable"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("upgrades V1 with applied fork ids 900–902 before importing V2", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrationsByName(migrationEntries.filter(([id]) => id !== 55 && id !== 56));
+    yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, machine_mode, created_at, updated_at)
+      VALUES ('machine-project', 'Machine', '/repo', '[]', 'thread', '2026-01-01', '2026-01-01')`;
+    assert.deepStrictEqual(yield* runMigrations(), [
+      [55, "OrchestrationV2"],
+      [56, "RemoveRedundantProjectionIndexes"],
+    ]);
+    assert.deepStrictEqual(
+      yield* sql`SELECT json_extract(payload_json, '$.machineMode') AS mode FROM orchestration_events WHERE application_event_version = 2 AND event_type = 'project.created'`,
+      [{ mode: "thread" }],
+    );
+    assert.ok(
+      (yield* sql<{ name: string }>`PRAGMA table_info(projection_threads)`).some(
+        (c) => c.name === "machine_id",
+      ),
+    );
+    assert.ok(
+      (yield* sql<{ name: string }>`PRAGMA table_info(orchestration_v2_projection_threads)`).some(
+        (c) => c.name === "payload_json",
+      ),
+    );
+    assert.deepStrictEqual(yield* runMigrations(), []);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

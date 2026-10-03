@@ -63,6 +63,10 @@ export const MachineIdentityManifest = Schema.Struct({
   mounts: Schema.Array(MachineIdentityMount),
 });
 export type MachineIdentityManifest = typeof MachineIdentityManifest.Type;
+const decodeMachineIdentityManifest = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(MachineIdentityManifest),
+  { onExcessProperty: "error" },
+);
 
 export interface EffectiveIds {
   readonly uid: number;
@@ -274,10 +278,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
               ),
             ),
           );
-        const manifest = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(MachineIdentityManifest),
-          { onExcessProperty: "error" },
-        )(raw).pipe(
+        const manifest = yield* decodeMachineIdentityManifest(raw).pipe(
           Effect.mapError((cause) =>
             commandError(
               "identity.manifest.parse",
@@ -829,6 +830,44 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       },
     );
 
+    // Upstream Pi materializes its permission/MCP extension in this host cache.
+    const ensureProviderCacheDevice = Effect.fn("IncusMachineService.ensureProviderCacheDevice")(
+      function* (binding: ThreadMachineBinding) {
+        const source = serverConfig.providerStatusCacheDir;
+        yield* fileSystem.makeDirectory(source, { recursive: true }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new MachineServiceError({
+                operation: "provider-cache.create",
+                detail: "Could not create the provider extension cache.",
+                cause,
+              }),
+          ),
+        );
+        const existing = yield* runCommand("provider-cache.inspect", INCUS_BINARY, [
+          "config",
+          "device",
+          "get",
+          binding.machineName,
+          "provider-cache",
+          "source",
+        ]);
+        if (existing.code === 0) return;
+        yield* runChecked("provider-cache.add", INCUS_BINARY, [
+          "config",
+          "device",
+          "add",
+          binding.machineName,
+          "provider-cache",
+          "disk",
+          `source=${source}`,
+          `path=${source}`,
+          "readonly=true",
+          "shift=true",
+        ]);
+      },
+    );
+
     const ensureIdentityDevices = Effect.fn("IncusMachineService.ensureIdentityDevices")(function* (
       binding: ThreadMachineBinding,
       manifest: MachineIdentityManifest,
@@ -1043,6 +1082,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
       yield* ensureDependencyDevices(binding);
       yield* ensureIdentityDevices(binding, manifest);
       yield* ensureAttachmentsDevice(binding);
+      yield* ensureProviderCacheDevice(binding);
       yield* ensureT3McpProxyDevice(binding);
       yield* start(binding);
       return Option.some(binding);
@@ -1099,6 +1139,7 @@ const makeWithEffectiveIds = (options: IncusMachineServiceOptions) =>
         yield* ensureIdentityDevices(binding, manifest);
         yield* start(binding);
         yield* ensureAttachmentsDevice(binding);
+        yield* ensureProviderCacheDevice(binding);
         yield* ensureT3McpProxyDevice(binding);
         const cwd = input.cwd
           ? containsPath(binding.guestWorkspaceRoot, input.cwd)

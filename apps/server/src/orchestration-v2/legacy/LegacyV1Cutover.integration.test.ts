@@ -101,6 +101,10 @@ const seedV1Database = (fixturePath: string, workspace: string) =>
       yield* sql`PRAGMA foreign_keys = ON;`;
       yield* sql`PRAGMA journal_mode = WAL;`;
       yield* runMigrations({ toMigrationInclusive: 40 });
+      // The fixture models an upstream V1 install, which tracked ids in this ledger.
+      yield* sql`CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at DATETIME DEFAULT current_timestamp)`;
+      yield* sql`INSERT INTO effect_sql_migrations SELECT migration_id, name, created_at FROM t3_fork_migrations`;
+      yield* sql`DROP TABLE t3_fork_migrations`;
       yield* sql`
         INSERT INTO effect_sql_migrations (migration_id, name)
         VALUES (41, 'ThreadSummaryTimeline')
@@ -923,21 +927,11 @@ describe("orchestration v2 legacy v1 cutover", () => {
             ),
           );
 
-          // The copied database recorded a site-local migration under id 41, so
-          // the migrator skipped this build's AuthSessionClientConnection by
-          // id. The divergence is surfaced at startup while the rest of the
-          // cutover still runs.
-          const divergenceLog = boot1Logs.find((log) =>
-            String(log.message).includes("migration history diverges"),
-          );
-          assert.deepStrictEqual(divergenceLog?.annotations.divergent, [
-            "41:ThreadSummaryTimeline (this build: AuthSessionClientConnection)",
-          ]);
+          // Name tracking preserves the original ledger and applies this build's
+          // migration even when an unrelated site-local migration reused its id.
           assert.equal(firstBoot.migration41Name, "ThreadSummaryTimeline");
-          // The skipped migration's columns never landed; the schema gap is
-          // what the startup warning points at.
-          assert.notInclude(firstBoot.authSessionColumnNames, "client_surface");
-          assert.notInclude(firstBoot.authSessionColumnNames, "client_app_version");
+          assert.include(firstBoot.authSessionColumnNames, "client_surface");
+          assert.include(firstBoot.authSessionColumnNames, "client_app_version");
 
           assert.equal(firstBoot.importRows.length, ALL_THREADS.length);
           const unhydratedRows = firstBoot.importRows.filter(
@@ -1034,9 +1028,8 @@ describe("orchestration v2 legacy v1 cutover", () => {
             ),
           );
 
-          // The recorded-name divergence persists across restarts; the warning
-          // fires again so it cannot be missed between upgrades.
-          assert.isTrue(
+          // Name tracking heals the schema gap; restart does not report an id divergence.
+          assert.isFalse(
             boot2Logs.some((log) => String(log.message).includes("migration history diverges")),
           );
         }).pipe(Effect.provide(NodeServices.layer)),

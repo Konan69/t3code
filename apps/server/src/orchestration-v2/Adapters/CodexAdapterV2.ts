@@ -1,3 +1,8 @@
+import { providerRuntimeCwd } from "../../process/ProviderProcessLauncher.ts";
+import {
+  ProviderProcessLauncher,
+  threadProcessSpawner,
+} from "../../process/ProviderProcessLauncher.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -756,7 +761,7 @@ export function buildCodexTurnStartParams(input: {
       threadId: input.nativeThreadId,
       input: input.codexInput,
       ...(additionalContext ? { additionalContext } : {}),
-      cwd: input.runtimePolicy.cwd,
+      cwd: providerRuntimeCwd(input.runtimePolicy),
       model: input.modelSelection.model,
       // Model catalogues can default summaries to "none". Request them on every
       // turn, including resumed threads, for T3's reasoning timeline.
@@ -1208,7 +1213,9 @@ export function codexThreadRuntimeParams(input: {
   const mcpSession =
     input.threadId === null ? undefined : McpProviderSession.readMcpProviderSession(input.threadId);
   return {
-    ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
+    ...(input.runtimePolicy?.cwd == null
+      ? {}
+      : { cwd: providerRuntimeCwd(input.runtimePolicy) ?? input.runtimePolicy.cwd }),
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
@@ -1390,6 +1397,11 @@ export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
       open: (input) =>
         Effect.gen(function* () {
           const scope = yield* Scope.Scope;
+          const sessionSpawner = threadProcessSpawner(
+            spawner,
+            yield* ProviderProcessLauncher,
+            input.threadId,
+          );
           const environment = {
             ...input.environment,
             ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
@@ -1400,8 +1412,9 @@ export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
               resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
             ),
             env: environment,
+            ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
           });
-          const handle = yield* spawner.spawn(command).pipe(
+          const handle = yield* sessionSpawner.spawn(command).pipe(
             Effect.provideService(Scope.Scope, scope),
             Effect.mapError(
               (cause) =>
@@ -1626,7 +1639,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         const session = providerSession({
           providerSessionId: input.providerSessionId,
           providerInstanceId: adapterOptions.instanceId,
-          cwd: input.runtimePolicy.cwd,
+          cwd: providerRuntimeCwd(input.runtimePolicy),
           model: input.modelSelection.model,
           now,
         });

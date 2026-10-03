@@ -1,3 +1,4 @@
+import * as ThreadMachineService from "../machine/ThreadMachineService.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -149,6 +150,7 @@ const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const git = yield* GitWorkflow.GitWorkflowService;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const threadMachines = yield* Effect.serviceOption(ThreadMachineService.ThreadMachineService);
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
@@ -279,7 +281,30 @@ const make = Effect.gen(function* () {
         input.workspaceStrategy.type === "existing_worktree"
           ? input.workspaceStrategy.worktreePath
           : null;
-      if (input.workspaceStrategy.type === "worktree") {
+      const machine = Option.isSome(threadMachines)
+        ? yield* threadMachines.value
+            .ensureForThread(
+              threadId,
+              input.workspaceStrategy.type === "worktree"
+                ? {
+                    projectCwd: project.workspaceRoot,
+                    baseBranch: input.workspaceStrategy.baseRef,
+                    ...(branch === null ? {} : { branch }),
+                    ...(input.workspaceStrategy.startFromOrigin === undefined
+                      ? {}
+                      : {
+                          startFromOrigin: input.workspaceStrategy.startFromOrigin,
+                        }),
+                  }
+                : undefined,
+            )
+            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
+        : Option.none();
+      if (Option.isSome(machine)) {
+        worktreePath = machine.value.hostWorkspaceRoot;
+        branch = (yield* threads.getThreadRecords(threadId, [])).thread.branch;
+      }
+      if (input.workspaceStrategy.type === "worktree" && Option.isNone(machine)) {
         if (runId !== null) {
           yield* threads
             .dispatch({
@@ -423,8 +448,15 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
       }
       yield* setupTracker.stageStatus(threadId, "setup-script", "running");
-      const setup = yield* setupScripts
-        .runForThread({
+      const setup = yield* Effect.gen(function* () {
+        if (Option.isSome(machine) && Option.isSome(threadMachines)) {
+          return yield* threadMachines.value.runSetupForThread({
+            threadId,
+            projectId: input.projectId,
+            binding: machine.value,
+          });
+        }
+        return yield* setupScripts.runForThread({
           threadId,
           projectId: input.projectId,
           projectCwd: project.workspaceRoot,
@@ -442,8 +474,8 @@ const make = Effect.gen(function* () {
             workspaceRoot: project.workspaceRoot,
             scripts: project.scripts,
           },
-        })
-        .pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)));
+        });
+      }).pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)));
 
       let awaitAsyncSetup = Effect.void;
       if (setup.status === "started") {
@@ -486,7 +518,11 @@ const make = Effect.gen(function* () {
           yield* setupTracker.stageStatus(threadId, "setup-script", "done");
         }
       } else {
-        yield* setupTracker.stageStatus(threadId, "setup-script", "skipped");
+        yield* setupTracker.stageStatus(
+          threadId,
+          "setup-script",
+          setup.status === "completed" ? "done" : "skipped",
+        );
       }
       yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");

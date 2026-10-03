@@ -983,7 +983,23 @@ describe("IncusMachineService", () => {
         expect(commands.some((entry) => entry.command === "zfs")).toBe(false);
         expect(
           commands.filter((entry) => entry.args.slice(0, 3).join(" ") === "config device add"),
-        ).toHaveLength(5);
+        ).toHaveLength(6);
+        expect(commands).toContainEqual({
+          command: "incus",
+          args: [
+            "config",
+            "device",
+            "add",
+            "thread-thread-1",
+            "provider-cache",
+            "disk",
+            expect.stringMatching(/^source=.+/),
+            expect.stringMatching(/^path=.+/),
+            "readonly=true",
+            "shift=true",
+          ],
+          stdin: "ignore",
+        });
         expect(commands).toContainEqual({
           command: "incus",
           args: [

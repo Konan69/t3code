@@ -1,3 +1,4 @@
+import { ThreadMachineBinding } from "@t3tools/contracts";
 import type { OrchestrationV2HistoricalMessage } from "@t3tools/contracts";
 import {
   ChatAttachment,
@@ -45,6 +46,7 @@ import type {
 } from "./ProviderSelectionTransition.ts";
 
 export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
+  machine: Schema.optional(Schema.NullOr(ThreadMachineBinding)),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   cwd: Schema.NullOr(Schema.String),

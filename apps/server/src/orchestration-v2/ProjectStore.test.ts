@@ -34,11 +34,27 @@ it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)))(
             workspaceRoot: "/tmp/project-null-options",
             defaultModelSelection: modelSelection,
             scripts: [],
+            machineMode: "thread",
             createdAt: "2026-03-24T00:00:00.000Z",
             updatedAt: "2026-03-24T00:00:00.000Z",
           },
         });
 
+        assert.equal(Option.getOrNull(yield* projects.getShell(projectId))?.machineMode, "thread");
+        yield* projects.apply({
+          sequence: 2,
+          eventId: EventId.make("event-disable-machine"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: "2026-03-24T00:00:01.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "project.meta-updated",
+          payload: { projectId, machineMode: "off", updatedAt: "2026-03-24T00:00:01.000Z" },
+        });
+        assert.equal(Option.getOrNull(yield* projects.getShell(projectId))?.machineMode, "off");
         const rows = yield* sql<{ readonly defaultModelSelection: string | null }>`
           SELECT default_model_selection_json AS "defaultModelSelection"
           FROM projection_projects

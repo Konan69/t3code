@@ -224,6 +224,11 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       `;
 
       assert.equal(yield* importer.pendingThreadCount, 1);
+      yield* sql`UPDATE projection_threads SET
+        machine_id = 'thread-legacy', machine_name = 'thread-legacy', machine_state = 'stopped',
+        machine_host_workspace_root = '/tank/threads/legacy/ws',
+        machine_guest_workspace_root = '/home/kixey/ws'
+        WHERE thread_id = ${threadId}`;
       const shellImport = yield* importer.reconcileShells;
       assert.equal(yield* importer.pendingThreadCount, 1);
       assert.deepStrictEqual(shellImport, {
@@ -241,6 +246,14 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
 
       assert.isTrue((yield* maintenance.verify).valid);
       const shellProjection = yield* projections.getThreadProjection(threadId);
+      assert.deepStrictEqual(shellProjection.thread.machine, {
+        machineId: "thread-legacy",
+        machineName: "thread-legacy",
+        state: "stopped",
+        hostWorkspaceRoot: "/tank/threads/legacy/ws",
+        guestWorkspaceRoot: "/home/kixey/ws",
+        projectWorkspaceRoot: "/tmp/legacy-project",
+      });
       assert.equal(shellProjection.thread.historyOrigin, "v1_import");
       assert.equal(shellProjection.thread.branch, "main");
       assert.equal(shellProjection.thread.worktreePath, "/tmp/legacy-project");
@@ -272,6 +285,10 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         [threadId],
       );
       const shellSnapshot = yield* projections.getShellSnapshot();
+      assert.deepStrictEqual(
+        shellSnapshot.threads.find((t) => t.id === threadId)?.machine,
+        shellProjection.thread.machine,
+      );
       assert.equal(
         shellSnapshot.threads.find((thread) => thread.id === threadId)?.historyOrigin,
         "v1_import",
@@ -356,6 +373,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         UPDATE orchestration_v2_projection_threads
         SET payload_json = json_remove(
           payload_json,
+          '$.machine',
           '$.snoozedUntil',
           '$.snoozedAt',
           '$.unsettledAt',
@@ -369,6 +387,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         importedMessageCount: 0,
       });
       const repaired = yield* projections.getThreadProjection(threadId);
+      assert.deepStrictEqual(repaired.thread.machine, shellProjection.thread.machine);
       assert.isNull(repaired.thread.pinnedAt);
       assert.isNull(repaired.thread.pinOrderKey);
       assert.deepEqual(

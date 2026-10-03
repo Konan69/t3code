@@ -1,3 +1,8 @@
+import { providerRuntimeCwd } from "../../process/ProviderProcessLauncher.ts";
+import {
+  ProviderProcessLauncher,
+  threadProcessSpawner,
+} from "../../process/ProviderProcessLauncher.ts";
 /**
  * PiAdapterV2 — orchestrator-v2 adapter for the Pi coding agent
  * (https://pi.dev), driving `pi --mode rpc` over stdio JSONL via `PiRpc.ts`.
@@ -388,7 +393,12 @@ export function makePiAdapterV2(
       input: ProviderAdapter.ProviderAdapterV2OpenSessionInput,
     ) {
       const scope = yield* Effect.scope;
-      const cwd = input.runtimePolicy.cwd ?? options.serverConfig.cwd;
+      const cwd = providerRuntimeCwd(input.runtimePolicy) ?? options.serverConfig.cwd;
+      const spawner = threadProcessSpawner(
+        options.spawner,
+        yield* ProviderProcessLauncher,
+        input.threadId,
+      );
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
       const provideCacheFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
         effect.pipe(
@@ -425,7 +435,7 @@ export function makePiAdapterV2(
         cwd,
         env: launch.env,
       }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, options.spawner),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.mapError(
           (cause) =>
             new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -2775,7 +2785,7 @@ export function makePiAdapterV2(
                 }
                 return file;
               }),
-            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, options.spawner));
+            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
             const now = yield* DateTime.now;
             return yield* registerThread(
               {

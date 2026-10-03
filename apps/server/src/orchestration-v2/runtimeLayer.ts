@@ -1,3 +1,4 @@
+import * as ThreadMachineService from "../machine/ThreadMachineService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
@@ -241,11 +242,16 @@ export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.p
 const managedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(ProjectServiceLayerLive),
 );
+const threadMachineProvided = ThreadMachineService.layer.pipe(
+  Layer.provide(Layer.mergeAll(orchestratorProvided, projectionStoreLayer, ProjectStore.layer)),
+);
+
 const threadLaunchProvided = threadLaunchServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
       ProjectServiceLayerLive,
       ProjectSetupScriptRunnerLayerLive,
+      threadMachineProvided,
       managedProjectFoldersProvided,
       threadManagementProvided,
       commandReceiptStoreProvided,

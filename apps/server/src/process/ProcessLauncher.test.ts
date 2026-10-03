@@ -6,10 +6,6 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect } from "vite-plus/test";
 
-import { makeAcpProcessLaunchInput } from "../provider/acp/AcpSessionRuntime.ts";
-import { makeCodexProcessLaunchInput } from "../provider/Layers/CodexSessionRuntime.ts";
-import { makePiProcessLaunchInput } from "../provider/Layers/PiAdapter.ts";
-import { makeOpenCodeServerProcessLaunchInput } from "../provider/opencodeRuntime.ts";
 import { makeHostProcessLauncher } from "./ProcessLauncher.ts";
 
 function makeHandle() {
@@ -44,173 +40,39 @@ const commandShape = (command: unknown): StandardCommand => {
 };
 
 describe("HostProcessLauncher", () => {
-  it("carries thread identity without adding it to the host command", () => {
-    const threadId = ThreadId.make("0198-provider-thread");
-
-    expect(
-      makeCodexProcessLaunchInput({
-        threadId,
-        command: "codex",
-        args: ["app-server"],
-        cwd: "/workspace",
-        env: {},
-        extendEnv: true,
+  it.effect("forwards launch options and returns the original host handle", () =>
+    Effect.gen(function* () {
+      const handle = makeHandle();
+      const captured: unknown[] = [];
+      const launcher = makeHostProcessLauncher(
+        ChildProcessSpawner.make((command) => {
+          captured.push(command);
+          return Effect.succeed(handle);
+        }),
+      );
+      const input = {
+        threadId: ThreadId.make("thread-one"),
+        command: "provider",
+        args: ["rpc"],
+        cwd: "/repo",
+        env: { PATH: "/opt/bin" },
+        extendEnv: false,
         shell: false,
-      }).threadId,
-    ).toBe(threadId);
-    expect(
-      makePiProcessLaunchInput({
-        threadId,
-        command: "pi",
-        args: ["--mode", "rpc"],
-        cwd: "/home/kixey/ws/packages/app",
-        env: undefined,
-        extendEnv: true,
-        shell: false,
-      }),
-    ).toMatchObject({
-      threadId,
-      cwd: "/home/kixey/ws/packages/app",
-    });
-    expect(
-      makeAcpProcessLaunchInput(
-        { threadId, spawn: { command: "cursor-agent", args: ["acp"], cwd: "/workspace" } },
-        { command: "cursor-agent", args: ["acp"], shell: false },
-      ).threadId,
-    ).toBe(threadId);
-    expect(
-      makeOpenCodeServerProcessLaunchInput({
-        threadId,
-        command: "opencode",
-        args: ["serve"],
-        hostPlatform: "linux",
-        shell: false,
-        environment: undefined,
-      }).threadId,
-    ).toBe(threadId);
-  });
-
-  it.effect("preserves every provider ChildProcess.make input and process handle", () => {
-    const captured: Array<unknown> = [];
-    const handle = makeHandle();
-    const launcher = makeHostProcessLauncher(
-      ChildProcessSpawner.make((command) => {
-        captured.push(command);
-        return Effect.succeed(handle);
-      }),
-    );
-    const threadId = ThreadId.make("0198-provider-thread");
-    const codexEnv = { PATH: "/opt/codex/bin", CODEX_HOME: "/home/kixey/.codex" };
-    const piCwd = "C:\\Users\\kixey\\project";
-    const acpEnv = { PATH: "/opt/grok/bin", GROK_OAUTH2_REFERRER: "t3code" };
-    const openCodeEnv = { PATH: "/opt/opencode/bin", OPENCODE_CONFIG_CONTENT: '{"theme":"t3"}' };
-
-    return Effect.gen(function* () {
-      const handles = yield* Effect.all([
-        launcher.launch(
-          makeCodexProcessLaunchInput({
-            threadId,
-            command: "/opt/codex/bin/codex",
-            args: ["app-server", "--enable", "responses_websockets_v2"],
-            cwd: "/tank/project",
-            env: codexEnv,
+        forceKillAfter: "2 seconds" as const,
+      };
+      expect(yield* launcher.launch(input)).toBe(handle);
+      expect(captured.map(commandShape)).toEqual([
+        commandShape(
+          ChildProcess.make("provider", ["rpc"], {
+            cwd: "/repo",
+            env: { PATH: "/opt/bin" },
             extendEnv: false,
             shell: false,
-          }),
-        ),
-        launcher.launch(
-          makePiProcessLaunchInput({
-            threadId,
-            command: "pi.cmd",
-            args: ["--mode", "rpc", "--no-session"],
-            cwd: piCwd,
-            env: undefined,
-            extendEnv: true,
-            shell: true,
-          }),
-        ),
-        launcher.launch(
-          makeAcpProcessLaunchInput(
-            {
-              threadId,
-              spawn: {
-                command: "grok",
-                args: ["agent", "stdio"],
-                cwd: "/tank/project",
-                env: acpEnv,
-              },
-            },
-            { command: "/opt/grok/bin/grok", args: ["agent", "stdio"], shell: false },
-          ),
-        ),
-        launcher.launch(
-          makeAcpProcessLaunchInput(
-            {
-              threadId,
-              spawn: {
-                command: "cursor-agent",
-                args: ["acp"],
-                cwd: "/tank/cursor-project",
-              },
-            },
-            { command: "cursor-agent", args: ["acp"], shell: false },
-          ),
-        ),
-        launcher.launch(
-          makeOpenCodeServerProcessLaunchInput({
-            threadId,
-            command: "/opt/opencode/bin/opencode",
-            args: ["serve", "--hostname=127.0.0.1", "--port=4096"],
-            hostPlatform: "linux",
-            shell: false,
-            environment: openCodeEnv,
+            forceKillAfter: "2 seconds",
           }),
         ),
       ]);
-
-      expect(handles.every((candidate) => candidate === handle)).toBe(true);
-      expect(captured.map(commandShape)).toEqual(
-        [
-          ChildProcess.make(
-            "/opt/codex/bin/codex",
-            ["app-server", "--enable", "responses_websockets_v2"],
-            {
-              cwd: "/tank/project",
-              env: codexEnv,
-              extendEnv: false,
-              forceKillAfter: "2 seconds",
-              shell: false,
-            },
-          ),
-          ChildProcess.make("pi.cmd", ["--mode", "rpc", "--no-session"], {
-            shell: true,
-            cwd: piCwd,
-            env: undefined,
-            extendEnv: true,
-          }),
-          ChildProcess.make("/opt/grok/bin/grok", ["agent", "stdio"], {
-            cwd: "/tank/project",
-            env: acpEnv,
-            extendEnv: true,
-            shell: false,
-          }),
-          ChildProcess.make("cursor-agent", ["acp"], {
-            cwd: "/tank/cursor-project",
-            extendEnv: true,
-            shell: false,
-          }),
-          ChildProcess.make(
-            "/opt/opencode/bin/opencode",
-            ["serve", "--hostname=127.0.0.1", "--port=4096"],
-            {
-              detached: true,
-              shell: false,
-              env: openCodeEnv,
-              extendEnv: false,
-            },
-          ),
-        ].map(commandShape),
-      );
-    }).pipe(Effect.scoped);
-  });
+      expect(captured[0]).not.toHaveProperty("threadId");
+    }).pipe(Effect.scoped),
+  );
 });

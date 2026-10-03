@@ -5,11 +5,12 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationProjectShell,
-  type OrchestrationThread,
+  type OrchestrationV2AppThread,
   type ThreadMachineBinding,
 } from "@t3tools/contracts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
@@ -18,8 +19,9 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect } from "vite-plus/test";
 
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import { MachineService } from "./MachineService.ts";
 import { ThreadMachineService, layer } from "./ThreadMachineService.ts";
 
@@ -34,7 +36,7 @@ const binding = {
   guestWorkspaceRoot: "/home/kixey/ws",
 } satisfies ThreadMachineBinding;
 
-const thread: OrchestrationThread = {
+const thread: OrchestrationV2AppThread = {
   id: threadId,
   projectId,
   title: "Machine thread",
@@ -44,19 +46,20 @@ const thread: OrchestrationThread = {
   branch: null,
   worktreePath: null,
   machine: null,
-  latestTurn: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  createdBy: "user",
+  creationSource: "web",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  activeProviderThreadId: null,
+  lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+  forkedFrom: null,
+  lastVisitedAt: null,
+  createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+  updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
   deletedAt: null,
-  messages: [],
-  proposedPlans: [],
-  activities: [],
-  checkpoints: [],
   pullRequests: [],
-  session: null,
 };
 
 const project = (machineMode: "off" | "thread"): OrchestrationProjectShell => ({
@@ -136,16 +139,18 @@ const makeLayer = (input: {
   return layer.pipe(
     Layer.provide(machineLayer),
     Layer.provide(
-      Layer.mock(ProjectionSnapshotQuery)({
-        getThreadDetailById: () =>
-          Effect.succeed(
-            Option.some({
-              ...thread,
-              branch: input.threadBranch ?? thread.branch,
-              machine: input.existingMachine ?? thread.machine,
-            }),
-          ),
-        getProjectShellById: () => Effect.succeed(Option.some(project(input.machineMode))),
+      Layer.mock(ProjectionStoreV2)({
+        getThread: () =>
+          Effect.succeed({
+            ...thread,
+            branch: input.threadBranch ?? thread.branch,
+            machine: input.existingMachine ?? thread.machine,
+          }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(ProjectStoreV2)({
+        getShell: () => Effect.succeed(Option.some(project(input.machineMode))),
       }),
     ),
     Layer.provide(
@@ -208,10 +213,10 @@ const makeLayer = (input: {
       }),
     ),
     Layer.provide(
-      Layer.mock(OrchestrationEngineService)({
+      Layer.mock(OrchestratorV2)({
         dispatch: (command) => {
           input.onDispatch?.(command);
-          return Effect.succeed({ sequence: 1 });
+          return Effect.succeed({ sequence: 1, storedEvents: [] });
         },
       }),
     ),
@@ -241,8 +246,8 @@ describe("ThreadMachineService", () => {
       expect(Option.getOrThrow(result).projectWorkspaceRoot).toBe("/repo");
       expect(dispatched).toContainEqual(
         expect.objectContaining({
-          type: "thread.machine.bind",
-          binding: expect.objectContaining({ projectWorkspaceRoot: "/repo" }),
+          type: "thread.metadata.update",
+          machine: expect.objectContaining({ projectWorkspaceRoot: "/repo" }),
         }),
       );
     }).pipe(
@@ -275,16 +280,16 @@ describe("ThreadMachineService", () => {
       });
       expect(dispatched).toContainEqual(
         expect.objectContaining({
-          type: "thread.meta.update",
+          type: "thread.metadata.update",
           threadId,
           branch: "t3/thread-thread-1",
         }),
       );
       expect(dispatched).toContainEqual(
         expect.objectContaining({
-          type: "thread.machine.bind",
+          type: "thread.metadata.update",
           threadId,
-          binding,
+          machine: binding,
         }),
       );
     }).pipe(
@@ -319,7 +324,7 @@ describe("ThreadMachineService", () => {
       });
       expect(dispatched).toContainEqual(
         expect.objectContaining({
-          type: "thread.meta.update",
+          type: "thread.metadata.update",
           threadId,
           branch: "t3/thread-thread-1",
         }),
@@ -352,7 +357,8 @@ describe("ThreadMachineService", () => {
       });
       expect(dispatched).not.toContainEqual(
         expect.objectContaining({
-          type: "thread.meta.update",
+          type: "thread.metadata.update",
+          branch: expect.any(String),
         }),
       );
     }).pipe(
@@ -377,9 +383,9 @@ describe("ThreadMachineService", () => {
       expect(result._tag).toBe("Failure");
       expect(dispatched).toContainEqual(
         expect.objectContaining({
-          type: "thread.machine.bind",
+          type: "thread.metadata.update",
           threadId,
-          binding: { ...binding, state: "stopped" },
+          machine: { ...binding, state: "stopped" },
         }),
       );
     }).pipe(
@@ -431,9 +437,9 @@ describe("ThreadMachineService", () => {
       yield* service.ensureForThread(threadId);
       expect(dispatched).toContainEqual(
         expect.objectContaining({
-          type: "thread.machine.state.set",
+          type: "thread.metadata.update",
           threadId,
-          state: "running",
+          machine: { ...binding, state: "running" },
         }),
       );
     }).pipe(

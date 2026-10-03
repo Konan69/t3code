@@ -2,12 +2,12 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  type OrchestrationThread,
+  type OrchestrationV2AppThread,
   type ThreadMachineBinding,
 } from "@t3tools/contracts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
+import * as DateTime from "effect/DateTime";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -35,20 +35,21 @@ const thread = {
   branch: "t3/machine-launch",
   worktreePath: null,
   machine: binding,
-  latestTurn: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  createdBy: "user",
+  creationSource: "web",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  activeProviderThreadId: null,
+  lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+  forkedFrom: null,
+  lastVisitedAt: null,
+  createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+  updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
   deletedAt: null,
-  messages: [],
-  proposedPlans: [],
-  activities: [],
-  checkpoints: [],
   pullRequests: [],
-  session: null,
-} satisfies OrchestrationThread;
+} satisfies OrchestrationV2AppThread;
 
 function makeHandle() {
   return ChildProcessSpawner.makeHandle({
@@ -90,7 +91,7 @@ describe("MachineProcessLauncher", () => {
           return Effect.succeed("http://10.42.0.18:4301/");
         },
       },
-      { getThreadDetailById: () => Effect.succeed(Option.some(thread)) },
+      { getThread: () => Effect.succeed(thread) },
     );
 
     return Effect.gen(function* () {
@@ -142,8 +143,7 @@ describe("MachineProcessLauncher", () => {
         hostReachableUrl: () => Effect.die("machine URL resolution should not run"),
       },
       {
-        getThreadDetailById: () =>
-          Effect.succeed(Option.some({ ...thread, machine: null } satisfies OrchestrationThread)),
+        getThread: () => Effect.succeed({ ...thread, machine: null }),
       },
     );
 

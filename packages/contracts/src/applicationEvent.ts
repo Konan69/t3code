@@ -1,3 +1,4 @@
+import { ProjectMachineMode } from "./machine.ts";
 import * as Schema from "effect/Schema";
 
 import {
@@ -45,6 +46,7 @@ export const ApplicationProjectCreatedPayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  machineMode: Schema.optional(ProjectMachineMode),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start; optional so persisted
   // events from older servers still decode.
@@ -63,6 +65,7 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  machineMode: Schema.optional(ProjectMachineMode),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   // Absent = leave unchanged; null = clear the override.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
