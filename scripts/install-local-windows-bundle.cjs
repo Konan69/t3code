@@ -363,12 +363,15 @@ const verifyDesktopArchive = (candidateArchive) => {
   }
 };
 
+// Orchestrator V2 builds split the server into chunks, so the markers are
+// looked up across every top-level module instead of in bin.mjs alone. They
+// prove the candidate carries the fork overlay (preview cookie tool, thread
+// machines) on top of upstream's V2 server and its own Pi provider.
 const serverMarkers = [
-  "shouldRefreshThreadShellSummary",
   "preview_set_cookie",
-  "subscribeChanges",
+  "T3_MACHINE_IDENTITY_MANIFEST",
+  "orchestrationProtocolVersion",
   "pi --mode rpc",
-  "claude-bridge",
 ];
 
 const verifyServerMarkers = (server, source) => {
@@ -379,23 +382,14 @@ const verifyServerMarkers = (server, source) => {
   }
 };
 
-const verifyPiMcpExtension = (extension, source) => {
-  for (const marker of ["T3_CODE_MCP_ENDPOINT", "registerT3McpTools"]) {
-    if (!extension.includes(marker)) {
-      fail(`${source} is missing pi MCP marker: ${marker}`);
-    }
-  }
-};
-
 const verifyServerArchive = (candidateArchive) => {
-  const server = asar.extractFile(candidateArchive, "apps/server/dist/bin.mjs").toString("utf8");
+  const server = asar
+    .listPackage(candidateArchive)
+    .map((entry) => entry.replace(/^[\\/]+/, "").replace(/\\/g, "/"))
+    .filter((entry) => /^apps\/server\/dist\/[^/]+\.mjs$/.test(entry))
+    .map((entry) => asar.extractFile(candidateArchive, entry).toString("utf8"))
+    .join("\n");
   verifyServerMarkers(server, "candidate server bundle");
-  verifyPiMcpExtension(
-    asar
-      .extractFile(candidateArchive, "apps/server/dist/provider/pi/t3McpExtension.mjs")
-      .toString("utf8"),
-    "candidate server bundle",
-  );
   verifyAsarClientAssets(candidateArchive, "candidate server bundle");
 };
 
