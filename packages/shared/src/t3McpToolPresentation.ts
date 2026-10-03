@@ -148,6 +148,11 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "browser",
     "Snapshot the preview page",
   ),
+  preview_set_cookie: tool(
+    ["Set", "Setting", "Set", "a cookie in the preview browser"],
+    "browser",
+    "browser",
+  ),
   preview_click: tool(
     ["Click", "Clicking", "Clicked", "in the preview browser"],
     "browser",
