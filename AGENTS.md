@@ -161,3 +161,18 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 
 - Don't verify with browsers or computer use unless the user explicitly agrees or requests it.
 - Security is important, but should not be over-indexed on, especially for dev mode/maintainer-only features.
+
+## Design stack (UI work)
+
+Every UI change follows this order. Load the named skill with the Skill tool (or read its `SKILL.md` under `.agents/skills/`) before the step it belongs to; do not design from memory.
+
+1. **Direction.** `emil-design-eng` for the craft bar and component decisions, `make-interfaces-feel-better` for the details (radius, shadows, hit areas, optical alignment). Add `apple-design` for gesture-driven, sheet or material UI, `pick-ui-library` before adding a UI dependency, `better-icons` for icons, and `prototype` when the shape is undecided (build real variants behind a picker instead of debating).
+2. **Polish, one dimension at a time.** `better-interface` runs the whole set; reach for one directly when the problem is specific: `better-layout`, `better-typography`, `better-colors`, `better-ui`, `better-accessibility`, `better-writing` (all user-facing copy).
+3. **Motion.** `animate` decides whether something should move at all and then how; `animation-vocabulary` names an effect; `motion` is the library reference; `fixing-motion-performance` when it stutters.
+4. **Review before it ships.** Render it and look at it: screenshots of every state, not just a green typecheck. Run `interface-review` on the result, `review-animations` on any motion, and `break-ui` with worst-case data (long names, empty and huge values, non-Latin text). `improve-animations` and `find-animation-opportunities` audit an existing surface.
+
+A first pass is never the final pass: the reviewer sends back specific faults (hierarchy, spacing, contrast, copy, unclear actions) and the designer revises before the change is committed. If nothing can render the UI, say its looks are unreviewed.
+
+Dropped on purpose, do not reintroduce: `impeccable`, `taste-skill`, `fixing-accessibility` and `baseline-ui` (superseded by the set above).
+
+Fork specifics: these skills live under `.agents/skills/` only in the `local/boat` fork (see `PATCH.md`). Upstream components and tokens under `apps/web/src/components/ui` are the visual source of truth; match them before inventing anything. Desktop-only surfaces (the Boat box settings, the update window) get the same review as web UI.

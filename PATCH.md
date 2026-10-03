@@ -32,3 +32,7 @@ The runner tracks names in `t3_fork_migrations`, orders pending entries by id, a
 ## Updating the installed build
 
 After frontend integration and verification, build and stage with `~/t3code-staging/rebuild-boat.sh` and the merged app version in `~/t3code-staging/boat/version`. The `t3-apply-boat` systemd waiter logs to `~/t3code-staging/apply-boat.log` and installs once the user exits T3 Code; it never closes or restarts the app. The installer backs up replaced resources as `*.pre-overlay-<UTC>`, swaps the staged files, and disables the stock updater. `apply-boat.sh --rollback` waits the same way and restores the newest backup.
+
+## Design skills
+
+The fork vendors a curated design skill stack in `.agents/skills/` (Emil Kowalski's set, the `better-*` family, `interface-review`, `break-ui`, `motion`). `AGENTS.md` ends with the "Design stack (UI work)" section that fixes the order to use them in. Both are fork-only; keep them when merging upstream.
