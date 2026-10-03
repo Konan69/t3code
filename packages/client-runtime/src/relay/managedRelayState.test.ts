@@ -67,6 +67,10 @@ function resetRegistry() {
 function createClient(overrides?: Partial<ManagedRelay.ManagedRelayClient["Service"]>) {
   return ManagedRelay.ManagedRelayClient.of({
     relayUrl: "https://relay.example.test",
+    configureEnvironmentHostLifecycle: () => Effect.die("unused"),
+    removeEnvironmentHostLifecycle: () => Effect.die("unused"),
+    getEnvironmentHostStatus: () => Effect.die("unused"),
+    wakeEnvironmentHost: () => Effect.die("unused"),
     listEnvironments: () => Effect.succeed([environment]),
     listDevices: () => Effect.succeed([device]),
     createEnvironmentLinkChallenge: () => Effect.die("unused"),

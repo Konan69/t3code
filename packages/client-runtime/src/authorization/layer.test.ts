@@ -169,6 +169,10 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
   const unexpected = () => Effect.die("Unexpected relay request");
   const relay = ManagedRelay.ManagedRelayClient.of({
     relayUrl: "https://relay.example.test",
+    configureEnvironmentHostLifecycle: () => Effect.die("unused"),
+    removeEnvironmentHostLifecycle: () => Effect.die("unused"),
+    getEnvironmentHostStatus: () => Effect.die("unused"),
+    wakeEnvironmentHost: () => Effect.die("unused"),
     listEnvironments: unexpected,
     listDevices: unexpected,
     createEnvironmentLinkChallenge: unexpected,

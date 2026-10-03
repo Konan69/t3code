@@ -90,6 +90,10 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
 
   const client = ManagedRelay.ManagedRelayClient.of({
     relayUrl: "https://relay.example.test",
+    configureEnvironmentHostLifecycle: () => Effect.die("unused"),
+    removeEnvironmentHostLifecycle: () => Effect.die("unused"),
+    getEnvironmentHostStatus: () => Effect.die("unused"),
+    wakeEnvironmentHost: () => Effect.die("unused"),
     listEnvironments: () =>
       Effect.gen(function* () {
         const count = yield* Ref.updateAndGet(listCalls, (current) => current + 1);
@@ -262,6 +266,10 @@ describe("RelayEnvironmentDiscovery", () => {
       const networkStatus = yield* SubscriptionRef.make<NetworkStatus>("online");
       const client = ManagedRelay.ManagedRelayClient.of({
         relayUrl: "https://relay.example.test",
+        configureEnvironmentHostLifecycle: () => Effect.die("unused"),
+        removeEnvironmentHostLifecycle: () => Effect.die("unused"),
+        getEnvironmentHostStatus: () => Effect.die("unused"),
+        wakeEnvironmentHost: () => Effect.die("unused"),
         listEnvironments: () =>
           Effect.fail(
             new ManagedRelay.ManagedRelayRequestTimeoutError({

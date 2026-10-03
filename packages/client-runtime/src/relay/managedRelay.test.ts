@@ -48,6 +48,57 @@ function clerkToken(subject: string, nonce: string): string {
 }
 
 describe("ManagedRelayClient", () => {
+  it.effect("a pending wake token exchange cannot delay an uncached ordinary request", () => {
+    const wakeStarted = Promise.withResolvers<void>();
+    const releaseWake = Promise.withResolvers<void>();
+    let exchanges = 0;
+    const fetchFn = (async (input) => {
+      if (String(input).endsWith("/v1/client/dpop-token")) {
+        exchanges += 1;
+        if (exchanges === 1) {
+          wakeStarted.resolve();
+          await releaseWake.promise;
+          return Response.json({ error: "invalid_scope" }, { status: 400 });
+        }
+        return Response.json({
+          access_token: "connect-token",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "DPoP",
+          expires_in: 1800,
+          scope: RelayEnvironmentConnectScope,
+        });
+      }
+      return Response.json({
+        environmentId: "env-1",
+        endpoint: {
+          httpBaseUrl: "https://desktop.example.test",
+          wsBaseUrl: "wss://desktop.example.test/ws",
+          providerKind: "cloudflare_tunnel",
+        },
+        status: "online",
+        checkedAt: "2026-09-04T00:00:00.000Z",
+      });
+    }) satisfies typeof globalThis.fetch;
+    return Effect.gen(function* () {
+      const relay = yield* ManagedRelay.ManagedRelayClient;
+      const common = {
+        clerkToken: clerkToken("user-1", "session-1"),
+        environmentId: EnvironmentId.make("env-1"),
+      };
+      const wake = yield* relay
+        .wakeEnvironmentHost({ ...common, scopes: [RelayEnvironmentWakeScope] })
+        .pipe(Effect.ignore, Effect.forkChild);
+      yield* Effect.promise(() => wakeStarted.promise);
+      const connected = yield* relay.getEnvironmentStatus({
+        ...common,
+        scopes: [RelayEnvironmentConnectScope],
+      });
+      expect(connected.status).toBe("online");
+      releaseWake.resolve();
+      yield* Fiber.join(wake);
+    }).pipe(Effect.provide(managedRelayTestLayer(fetchFn)));
+  });
+
   it.effect(
     "configures and wakes a host through DPoP without exposing the secret in wake calls",
     () => {

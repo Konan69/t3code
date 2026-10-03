@@ -8,6 +8,7 @@ import {
   type RelayDeviceRegistrationRequest,
   RelayDpopAccessTokenScope,
   RelayDpopTokenExchangeGrantType,
+  RelayEnvironmentWakeScope,
   type RelayEnvironmentConnectRequest,
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentHostLifecycleConfigRequest,
@@ -604,10 +605,15 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
       });
       const nowMillis = yield* Clock.currentTimeMillis;
       const accountId = relayAccountId(input.clerkToken);
-      if (Option.isNone(accountId)) {
+      // Wake is a one-shot hint. Its exchange must never hold the shared cache
+      // lock while ordinary connection authorization is waiting for a token.
+      const optionalWake = input.scopes.includes(RelayEnvironmentWakeScope);
+      if (optionalWake || Option.isNone(accountId)) {
         yield* Effect.annotateCurrentSpan({
           "relay.token_cache.result": "bypass",
-          "relay.token_cache.bypass_reason": "invalid_subject_token",
+          "relay.token_cache.bypass_reason": optionalWake
+            ? "optional_wake"
+            : "invalid_subject_token",
         });
         const response = yield* exchangeAccessToken(input);
         return {
