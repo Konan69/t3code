@@ -93,7 +93,7 @@ describe("ssh command", () => {
           },
           { batchMode: "no" },
         ),
-        ["-o", "BatchMode=no", "-o", "ConnectTimeout=10", "-p", "2222"],
+        ["-o", "BatchMode=no", "-o", "ConnectTimeout=120", "-p", "2222"],
       );
     }),
   );

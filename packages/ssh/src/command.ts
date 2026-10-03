@@ -98,6 +98,9 @@ export const buildSshHostSpecEffect = (
       }),
   });
 
+/** Seconds allowed for one SSH connect, including waking a sleeping host. */
+export const SSH_CONNECT_TIMEOUT_SECONDS = 120;
+
 export function baseSshArgs(
   target: DesktopSshEnvironmentTarget,
   input?: { readonly batchMode?: "yes" | "no" },
@@ -106,7 +109,12 @@ export function baseSshArgs(
     "-o",
     `BatchMode=${input?.batchMode ?? "no"}`,
     "-o",
-    "ConnectTimeout=10",
+    // Covers the whole connect, including a ProxyCommand. A host that sleeps
+    // (a stopped Boat box, resumed by its proxy) needs well over the old 10s
+    // to come back and present its SSH banner; with 10s every reconnect
+    // attempt was cut off mid-resume and the environment never came back.
+    // A host that refuses the connection still fails immediately.
+    `ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}`,
     ...(target.port !== null ? ["-p", String(target.port)] : []),
   ];
 }
