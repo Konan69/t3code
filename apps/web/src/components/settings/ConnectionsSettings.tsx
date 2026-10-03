@@ -74,6 +74,7 @@ import {
   environmentTransportLabel,
   formatDesktopSshTarget,
 } from "./EnvironmentRow";
+import { BoatBoxSettings } from "./BoatBoxSettings";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
@@ -3709,6 +3710,7 @@ export function ConnectionsSettings() {
   return (
     <SettingsPageContainer width="wide">
       {primarySettings}
+      <BoatBoxSettings />
       <SettingsSection
         {...searchableSetting("remote-environments")}
         title="Environments"
