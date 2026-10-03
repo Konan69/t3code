@@ -1,4 +1,21 @@
-import { ChevronDownIcon, PlayIcon, RefreshCwIcon, ServerIcon, SquareIcon } from "lucide-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import * as Option from "effect/Option";
+import {
+  ChevronDownIcon,
+  LinkIcon,
+  PlayIcon,
+  RefreshCwIcon,
+  ServerIcon,
+  SquareIcon,
+} from "lucide-react";
+import { useState } from "react";
+
+import { connectSshEnvironment as connectSshEnvironmentAtom } from "~/connection/onboarding";
+import { useEnvironments } from "~/state/environments";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { cn } from "../../lib/utils";
@@ -243,6 +260,7 @@ function BoxRows({
       ) : credit !== null ? (
         <SettingsRow title="Credit" description={credit} />
       ) : null}
+      <EnvironmentRow alias={box.name} />
       {error !== null ? (
         <div className="px-3 py-3 sm:px-4">
           <Alert variant="error">
@@ -261,5 +279,81 @@ function BoxRows({
         </div>
       ) : null}
     </>
+  );
+}
+
+/**
+ * Whether this box is a T3 environment, and the one action that makes it one.
+ *
+ * A Boat box that is only startable from this panel is useless: threads can run
+ * on it only once T3 has registered it as an SSH environment (which installs
+ * and starts the T3 server there and adds it to the environment switcher). The
+ * box's Boat name is also its SSH alias, written to the user's SSH config by
+ * `cloudbox boat up`, so registration needs no input. It goes through the same
+ * onboarding command as "Add environment > SSH", so the catalog, credentials
+ * and reconnect behavior have a single owner.
+ */
+function EnvironmentRow({ alias }: { readonly alias: string }) {
+  const { environments } = useEnvironments();
+  const connectSshEnvironment = useAtomCommand(connectSshEnvironmentAtom, { reportFailure: false });
+  const [connecting, setConnecting] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const registered = environments.find((environment) => {
+    const profile = environment.entry.profile;
+    return (
+      environment.entry.target._tag === "SshConnectionTarget" &&
+      Option.isSome(profile) &&
+      profile.value._tag === "SshConnectionProfile" &&
+      profile.value.target.alias === alias
+    );
+  });
+
+  const connect = async () => {
+    const bridge = window.desktopBridge;
+    if (bridge === undefined || connecting) return;
+    setConnecting(true);
+    setFailure(null);
+    try {
+      // Resolve through OpenSSH so user, port and proxy come from the SSH
+      // config entry instead of being guessed here.
+      const target = await bridge.resolveSshHost(alias);
+      const result = await connectSshEnvironment({ target, label: "Boat box" });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const cause = squashAtomCommandFailure(result);
+        setFailure(cause instanceof Error ? cause.message : "Could not connect the box.");
+      }
+    } catch (cause) {
+      setFailure(cause instanceof Error ? cause.message : "Could not connect the box.");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  if (registered !== undefined) {
+    return (
+      <SettingsRow
+        title="T3 environment"
+        description={`Connected as “${registered.entry.target.label}”. Pick it in the environment switcher to run threads on the box.`}
+      />
+    );
+  }
+
+  return (
+    <SettingsRow
+      title="Not a T3 environment yet"
+      description={
+        failure ??
+        (connecting
+          ? "Starting the box if needed, installing the T3 server and connecting. This can take a minute."
+          : "Connect it to run threads on the box. T3 installs its server there over SSH.")
+      }
+      control={
+        <Button size="sm" disabled={connecting} onClick={connect}>
+          {connecting ? <Spinner size="sm" /> : <LinkIcon aria-hidden />}
+          {connecting ? "Connecting…" : "Connect as environment"}
+        </Button>
+      }
+    />
   );
 }
