@@ -35,4 +35,4 @@ After frontend integration and verification, build and stage with `~/t3code-stag
 
 ## Design skills
 
-The fork vendors a curated design skill stack in `.agents/skills/` (Emil Kowalski's set, the `better-*` family, `interface-review`, `break-ui`, `motion`). `AGENTS.md` ends with the "Design stack (UI work)" section that fixes the order to use them in. Both are fork-only; keep them when merging upstream.
+The fork vendors a curated design skill stack in `.agents/skills/` (Emil Kowalski's set, the `better-*` family, `interface-review`, `break-ui`). `AGENTS.md` ends with the "Design stack (UI work)" section that fixes the order to use them in. Both are fork-only; keep them when merging upstream.
