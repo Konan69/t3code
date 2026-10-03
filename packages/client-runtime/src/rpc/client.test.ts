@@ -842,8 +842,14 @@ describe("environment RPC", () => {
   const makeRelayHarness = Effect.fn("TestEnvironmentRpc.makeRelayHarness")(function* () {
     const harness = yield* makeHarness();
     const wakeCount = yield* Ref.make(0);
+    // A switched-on environment: wake only applies to hosts the user wants connected.
+    const desiredState = yield* SubscriptionRef.make<SupervisorConnectionState>({
+      ...AVAILABLE_CONNECTION_STATE,
+      desired: true,
+    });
     const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
       ...harness.supervisor,
+      state: desiredState,
       target: new RelayConnectionTarget({
         environmentId: EnvironmentId.make("environment-cloudbox"),
         label: "Cloudbox",
@@ -897,6 +903,36 @@ describe("environment RPC", () => {
       const error = yield* Fiber.join(fiber);
       expect(error._tag).toBe("EnvironmentRpcUnavailableError");
       expect(yield* Ref.get(wakeCount)).toBe(1);
+    }),
+  );
+
+  it.effect("does not wake a host just because a thread was shown", () =>
+    Effect.gen(function* () {
+      const { supervisor, wakeCount } = yield* makeRelayHarness();
+      const error = yield* request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
+        type: "thread.visit",
+      } as never).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(EnvironmentRpcRequestObserver, noopObserver),
+        Effect.flip,
+      );
+      expect(error._tag).toBe("EnvironmentRpcUnavailableError");
+      expect(yield* Ref.get(wakeCount)).toBe(0);
+    }),
+  );
+
+  it.effect("fails at once for an environment the user switched off", () =>
+    Effect.gen(function* () {
+      const { supervisor: relay, wakeCount } = yield* makeRelayHarness();
+      const off = yield* SubscriptionRef.make<SupervisorConnectionState>(AVAILABLE_CONNECTION_STATE);
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({ ...relay, state: off });
+      const error = yield* request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {} as never).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(EnvironmentRpcRequestObserver, noopObserver),
+        Effect.flip,
+      );
+      expect(error._tag).toBe("EnvironmentRpcUnavailableError");
+      expect(yield* Ref.get(wakeCount)).toBe(0);
     }),
   );
 

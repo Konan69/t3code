@@ -172,43 +172,69 @@ const WAKE_ON_UNAVAILABLE_METHODS: ReadonlySet<string> = new Set([
 const WAKE_SESSION_TIMEOUT = Duration.seconds(180);
 
 /**
- * Resolves the session for a unary request. A connected host answers at once.
- * A disconnected relay or SSH host is woken first for wake-worthy methods; every
- * other case keeps the original fail-fast behavior.
+ * Command types sent through `dispatchCommand` without the user asking for
+ * anything: `thread.visit` is emitted when a thread is merely shown (including
+ * a cached unread thread restored at app start). Bookkeeping like that must
+ * never start a billed machine.
  */
-const sessionForRequest = Effect.fn("EnvironmentRpc.sessionForRequest")(function* (tag: string) {
-  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-  const current = yield* SubscriptionRef.get(supervisor.session);
-  if (Option.isSome(current)) {
-    return current.value;
-  }
-  // Relay hosts (a suspended Cloudbox VM) wake through the armed wake policy.
-  // SSH hosts (a Boat sandbox) resume when the SSH ProxyCommand reconnects, so
-  // an immediate retry is their wake. Primary and bearer hosts have no way to
-  // be brought back by the client and keep failing fast.
-  const canWake =
-    supervisor.target._tag === "RelayConnectionTarget" ||
-    supervisor.target._tag === "SshConnectionTarget";
-  if (!canWake || !WAKE_ON_UNAVAILABLE_METHODS.has(tag)) {
-    return yield* currentSession();
-  }
-  yield* Effect.annotateCurrentSpan({ "environment.wake_requested": true });
-  yield* supervisor.wake;
-  const awaited = yield* SubscriptionRef.changes(supervisor.session).pipe(
-    Stream.filter(Option.isSome),
-    Stream.map((session) => session.value),
-    Stream.runHead,
-    Effect.timeoutOption(WAKE_SESSION_TIMEOUT),
-  );
-  const session = Option.flatten(awaited);
-  if (Option.isSome(session)) {
-    return session.value;
-  }
-  return yield* new EnvironmentRpcUnavailableError({
-    environmentId: supervisor.target.environmentId,
-    message: `${supervisor.target.label} did not come back after a wake request.`,
-  });
-});
+const PASSIVE_COMMAND_TYPES: ReadonlySet<string> = new Set(["thread.visit"]);
+
+/** Whether this request expresses user intent to drive work on the host. */
+const isWakeWorthy = (tag: string, input: unknown): boolean => {
+  if (!WAKE_ON_UNAVAILABLE_METHODS.has(tag)) return false;
+  if (tag !== ORCHESTRATION_V2_WS_METHODS.dispatchCommand) return true;
+  const type =
+    typeof input === "object" && input !== null && "type" in input ? input.type : undefined;
+  return typeof type !== "string" || !PASSIVE_COMMAND_TYPES.has(type);
+};
+
+/**
+ * Returns the live session, waking the host first when it is asleep.
+ *
+ * Call this at the start of a user operation that needs the host (sending a
+ * message, uploading an attachment) so the operation's own prerequisite reads
+ * do not fail fast before the command that would have woken it. `request`
+ * calls it for wake-worthy commands as well.
+ *
+ * Only relay hosts (a suspended Cloudbox VM, woken through its wake policy)
+ * and SSH hosts (a Boat box, resumed when the SSH proxy reconnects) can be
+ * brought back by the client. An environment the user switched off is left
+ * alone and fails at once, as do primary and bearer hosts.
+ */
+export const ensureSessionForUserAction = Effect.fn("EnvironmentRpc.ensureSessionForUserAction")(
+  function* () {
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const current = yield* SubscriptionRef.get(supervisor.session);
+    if (Option.isSome(current)) {
+      return current.value;
+    }
+    const canWake =
+      supervisor.target._tag === "RelayConnectionTarget" ||
+      supervisor.target._tag === "SshConnectionTarget";
+    const state = yield* SubscriptionRef.get(supervisor.state);
+    if (!canWake || !state.desired) {
+      return yield* currentSession();
+    }
+    yield* Effect.annotateCurrentSpan({ "environment.wake_requested": true });
+    yield* supervisor.wake;
+    // `changes` replays the current value first, so a session established
+    // between the read above and this subscription is still observed.
+    const awaited = yield* SubscriptionRef.changes(supervisor.session).pipe(
+      Stream.filter(Option.isSome),
+      Stream.map((session) => session.value),
+      Stream.runHead,
+      Effect.timeoutOption(WAKE_SESSION_TIMEOUT),
+    );
+    const session = Option.flatten(awaited);
+    if (Option.isSome(session)) {
+      return session.value;
+    }
+    return yield* new EnvironmentRpcUnavailableError({
+      environmentId: supervisor.target.environmentId,
+      message: `${supervisor.target.label} did not come back after a wake request.`,
+    });
+  },
+);
 
 export const request = Effect.fn("EnvironmentRpc.request")(function* <
   TTag extends EnvironmentUnaryRpcTag,
@@ -218,7 +244,9 @@ export const request = Effect.fn("EnvironmentRpc.request")(function* <
     "environment.id": supervisor.target.environmentId,
     "rpc.method": tag,
   });
-  const session = yield* sessionForRequest(tag);
+  const session = isWakeWorthy(tag, input)
+    ? yield* ensureSessionForUserAction()
+    : yield* currentSession();
   const observer = yield* EnvironmentRpcRequestObserver;
   const method = session.client[tag] as (
     input: EnvironmentRpcInput<TTag>,

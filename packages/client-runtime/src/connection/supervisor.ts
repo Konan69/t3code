@@ -847,10 +847,20 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   // Arm before retrying: the retry consumes the intent while preparing the
   // connection, so the reverse order could start an attempt that skips the wake.
-  const wake = (options?.armWake ?? Effect.void).pipe(
-    Effect.andThen(retryNow),
-    Effect.withSpan("EnvironmentSupervisor.wake"),
-  );
+  // Several commands can ask for a wake at once (a send plus its uploads), and
+  // every `retryNow` interrupts the attempt in flight. Joining a recent wake
+  // instead of issuing another keeps one attempt alive long enough to connect.
+  const WAKE_JOIN_WINDOW_MS = 20_000;
+  const lastWakeAtMs = yield* Ref.make(Number.NEGATIVE_INFINITY);
+  const wake = Effect.gen(function* () {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const joined = yield* Ref.modify(lastWakeAtMs, (last) =>
+      nowMs - last < WAKE_JOIN_WINDOW_MS ? [true, last] : [false, nowMs],
+    );
+    if (joined) return;
+    yield* options?.armWake ?? Effect.void;
+    yield* retryNow;
+  }).pipe(Effect.withSpan("EnvironmentSupervisor.wake"));
 
   yield* Effect.addFinalizer(() => Queue.shutdown(signals).pipe(Effect.andThen(clearLease)));
 
