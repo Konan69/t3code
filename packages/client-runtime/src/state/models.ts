@@ -96,6 +96,11 @@ export interface EnvironmentThreadShell {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
+  /**
+   * Thread machine this thread runs in, when the project uses thread machines.
+   * The workspace of such a thread is fixed, which the branch toolbar reflects.
+   */
+  readonly machine: NonNullable<OrchestrationV2ThreadShell["machine"]> | null;
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
   readonly latestRun: ThreadRunSummary | null;
@@ -231,6 +236,7 @@ export function presentThreadShell(
     linkedPullRequest: thread.linkedPullRequest ?? null,
     branchPullRequest: thread.branchPullRequest ?? null,
     lineage: thread.lineage,
+    machine: thread.machine ?? null,
     forkedFrom: thread.forkedFrom,
     activeProviderThreadId: thread.activeProviderThreadId,
     latestRun,

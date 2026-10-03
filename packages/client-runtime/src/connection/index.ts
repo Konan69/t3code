@@ -11,7 +11,12 @@ export * from "./presentation.ts";
 export * as ProfileStore from "./profileStore.ts";
 export * as EnvironmentRegistry from "./registry.ts";
 // Flat so consumers' inferred types can name them.
-export { EnvironmentNotRegisteredError, PlatformEnvironmentRemovalError } from "./registry.ts";
+export {
+  EnvironmentNotRegisteredError,
+  PlatformEnvironmentRemovalError,
+  WakePolicyUnsupportedTargetError,
+  type EnvironmentWakeStatusResult,
+} from "./registry.ts";
 export * as EnvironmentSupervisor from "./supervisor.ts";
 export * as Wakeups from "./wakeups.ts";
 

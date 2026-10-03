@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   ProjectMutation,
   ProjectId,
+  ProjectMachineMode,
   SourceControlDiscoveryResult,
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
@@ -34,6 +35,12 @@ export function canCreateProjectInEnvironment(
   connectionPhase: EnvironmentConnectionPhase | null | undefined,
 ): boolean {
   return connectionPhase === "connected";
+}
+
+export function resolveNewProjectMachineMode(
+  threadMachines: boolean | undefined,
+): ProjectMachineMode {
+  return threadMachines === true ? "thread" : "off";
 }
 
 export type AddProjectRemoteSourceReadiness = Record<
@@ -340,6 +347,8 @@ export function buildProjectCreateCommand(input: {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
+  /** Thread-machine mode for the new project; omitted keeps the server default. */
+  readonly machineMode?: ProjectMachineMode;
 }): Extract<ProjectMutation, { type: "project.create" }> {
   return {
     type: "project.create",
@@ -349,5 +358,6 @@ export function buildProjectCreateCommand(input: {
     workspaceRoot: input.workspaceRoot,
     createWorkspaceRootIfMissing: true,
     defaultModelSelection: null,
+    ...(input.machineMode === undefined ? {} : { machineMode: input.machineMode }),
   };
 }
