@@ -129,6 +129,7 @@ describe("createAssetEnvironmentAtoms", () => {
             connect: Effect.void,
             disconnect: Effect.void,
             retryNow: Effect.void,
+            wake: Effect.void,
           }),
         );
       }

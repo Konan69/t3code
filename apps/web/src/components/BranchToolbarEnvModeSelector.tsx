@@ -38,6 +38,8 @@ interface BranchToolbarEnvModeSelectorProps {
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
   workspaceRoot?: string | null;
+  /** The thread runs (or will run) inside its own thread machine; the workspace is fixed. */
+  inThreadMachine?: boolean;
   onEnvModeChange: (mode: EnvMode) => void;
   displayMode?: "toolbar" | "panel";
   previousWorktreeLabel?: string | null;
@@ -51,6 +53,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   effectiveEnvMode,
   activeWorktreePath,
   workspaceRoot = null,
+  inThreadMachine = false,
   onEnvModeChange,
   displayMode = "toolbar",
   previousWorktreeLabel,

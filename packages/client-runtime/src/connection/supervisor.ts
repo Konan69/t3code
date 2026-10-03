@@ -104,6 +104,12 @@ function exitUnlessInterrupted<A, E, R>(
 
 export interface EnvironmentSupervisorOptions {
   readonly initiallyDesired?: boolean;
+  /**
+   * Records that the next connection attempt should first ask the host to
+   * resume (a suspended Cloudbox). The registry owns the intent store, so the
+   * supervisor only receives the effect that arms it for this environment.
+   */
+  readonly armWake?: Effect.Effect<void>;
 }
 
 /**
@@ -221,6 +227,12 @@ export class EnvironmentSupervisor extends Context.Service<
     readonly connect: Effect.Effect<void>;
     readonly disconnect: Effect.Effect<void>;
     readonly retryNow: Effect.Effect<void>;
+    /**
+     * Arms a host wake and retries immediately. Used when the user acts on a
+     * thread whose host is suspended: the next attempt wakes the machine
+     * before authorizing. Without a wake arming effect this is `retryNow`.
+     */
+    readonly wake: Effect.Effect<void>;
   }
 >()("@t3tools/client-runtime/connection/supervisor/EnvironmentSupervisor") {}
 
@@ -833,6 +845,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.withSpan("EnvironmentSupervisor.retryNow"),
   );
 
+  // Arm before retrying: the retry consumes the intent while preparing the
+  // connection, so the reverse order could start an attempt that skips the wake.
+  const wake = (options?.armWake ?? Effect.void).pipe(
+    Effect.andThen(retryNow),
+    Effect.withSpan("EnvironmentSupervisor.wake"),
+  );
+
   yield* Effect.addFinalizer(() => Queue.shutdown(signals).pipe(Effect.andThen(clearLease)));
 
   return EnvironmentSupervisor.of({
@@ -843,5 +862,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     connect,
     disconnect,
     retryNow,
+    wake,
   });
 });

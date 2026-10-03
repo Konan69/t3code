@@ -2,6 +2,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  ORCHESTRATION_V2_WS_METHODS,
   PreviewTabId,
   ThreadId,
   type PreviewAutomationStreamEvent,
@@ -27,6 +28,7 @@ import { RpcClientError } from "effect/unstable/rpc";
 import {
   AVAILABLE_CONNECTION_STATE,
   PrimaryConnectionTarget,
+  RelayConnectionTarget,
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "../connection/model.ts";
@@ -83,6 +85,7 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Ref.update(retryCount, (count) => count + 1),
+    wake: Effect.void,
   } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
   return {
     activeSession,
@@ -833,6 +836,80 @@ describe("environment RPC", () => {
       }
       expect(observations).toEqual(["input 1", "stream", "expected failure", "input 2", "defect"]);
       expect(observedDefects).toEqual([defect]);
+    }),
+  );
+
+  const makeRelayHarness = Effect.fn("TestEnvironmentRpc.makeRelayHarness")(function* () {
+    const harness = yield* makeHarness();
+    const wakeCount = yield* Ref.make(0);
+    const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+      ...harness.supervisor,
+      target: new RelayConnectionTarget({
+        environmentId: EnvironmentId.make("environment-cloudbox"),
+        label: "Cloudbox",
+      }),
+      wake: Ref.update(wakeCount, (count) => count + 1),
+    });
+    return { activeSession: harness.activeSession, supervisor, wakeCount };
+  });
+
+  const noopObserver = EnvironmentRpcRequestObserver.of({
+    observe: () => Effect.succeed(Effect.void),
+  });
+
+  it.effect("wakes a suspended relay host for a thread command and sends once it is back", () =>
+    Effect.gen(function* () {
+      const dispatched: unknown[] = [];
+      const client = {
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (input: unknown) =>
+          Effect.sync(() => {
+            dispatched.push(input);
+            return { sequence: 1 };
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor, wakeCount } = yield* makeRelayHarness();
+
+      const fiber = yield* request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {} as never).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(EnvironmentRpcRequestObserver, noopObserver),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("30 seconds");
+      expect(yield* Ref.get(wakeCount)).toBe(1);
+      expect(dispatched).toEqual([]);
+
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      yield* Fiber.join(fiber);
+      expect(dispatched).toHaveLength(1);
+    }),
+  );
+
+  it.effect("fails a thread command when the woken host never returns", () =>
+    Effect.gen(function* () {
+      const { supervisor, wakeCount } = yield* makeRelayHarness();
+      const fiber = yield* request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {} as never).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(EnvironmentRpcRequestObserver, noopObserver),
+        Effect.flip,
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("121 seconds");
+      const error = yield* Fiber.join(fiber);
+      expect(error._tag).toBe("EnvironmentRpcUnavailableError");
+      expect(yield* Ref.get(wakeCount)).toBe(1);
+    }),
+  );
+
+  it.effect("does not wake a suspended relay host for passive requests", () =>
+    Effect.gen(function* () {
+      const { supervisor, wakeCount } = yield* makeRelayHarness();
+      const error = yield* request(WS_METHODS.serverReportClientActivity, {} as never).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(EnvironmentRpcRequestObserver, noopObserver),
+        Effect.flip,
+      );
+      expect(error._tag).toBe("EnvironmentRpcUnavailableError");
+      expect(yield* Ref.get(wakeCount)).toBe(0);
     }),
   );
 });

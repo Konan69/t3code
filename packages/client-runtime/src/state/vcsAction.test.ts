@@ -631,6 +631,7 @@ describe("vcsActionState", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          wake: Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
         const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
           _environmentId,

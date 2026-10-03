@@ -148,6 +148,60 @@ export const getInitialServerConfig = Effect.fn("EnvironmentRpc.getInitialServer
   },
 );
 
+/**
+ * Requests that express the user's intent to drive work on a host. When the
+ * host is unreachable these wake it and wait instead of failing, so sending a
+ * message, answering an approval, resuming a queued run or opening a terminal
+ * on a suspended Cloudbox brings the machine back. Passive calls (activity
+ * reports, probes, reads) are deliberately absent: an idle open window must
+ * never keep a billed machine awake.
+ */
+const WAKE_ON_UNAVAILABLE_METHODS: ReadonlySet<string> = new Set([
+  ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+  ORCHESTRATION_V2_WS_METHODS.launchThread,
+  WS_METHODS.terminalOpen,
+]);
+
+/**
+ * How long a wake-worthy request waits for the host to come back. A suspended
+ * GCE instance resumes in well under a minute; the rest covers relay
+ * authorization and the websocket handshake. Past this the request fails with
+ * the usual unavailable error and the user can retry.
+ */
+const WAKE_SESSION_TIMEOUT = Duration.seconds(120);
+
+/**
+ * Resolves the session for a unary request. A connected host answers at once.
+ * A disconnected relay host is woken first for wake-worthy methods; every
+ * other case keeps the original fail-fast behavior.
+ */
+const sessionForRequest = Effect.fn("EnvironmentRpc.sessionForRequest")(function* (tag: string) {
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const current = yield* SubscriptionRef.get(supervisor.session);
+  if (Option.isSome(current)) {
+    return current.value;
+  }
+  if (supervisor.target._tag !== "RelayConnectionTarget" || !WAKE_ON_UNAVAILABLE_METHODS.has(tag)) {
+    return yield* currentSession();
+  }
+  yield* Effect.annotateCurrentSpan({ "environment.wake_requested": true });
+  yield* supervisor.wake;
+  const awaited = yield* SubscriptionRef.changes(supervisor.session).pipe(
+    Stream.filter(Option.isSome),
+    Stream.map((session) => session.value),
+    Stream.runHead,
+    Effect.timeoutOption(WAKE_SESSION_TIMEOUT),
+  );
+  const session = Option.flatten(awaited);
+  if (Option.isSome(session)) {
+    return session.value;
+  }
+  return yield* new EnvironmentRpcUnavailableError({
+    environmentId: supervisor.target.environmentId,
+    message: `${supervisor.target.label} did not come back after a wake request.`,
+  });
+});
+
 export const request = Effect.fn("EnvironmentRpc.request")(function* <
   TTag extends EnvironmentUnaryRpcTag,
 >(tag: TTag, input: EnvironmentRpcInput<TTag>) {
@@ -156,7 +210,7 @@ export const request = Effect.fn("EnvironmentRpc.request")(function* <
     "environment.id": supervisor.target.environmentId,
     "rpc.method": tag,
   });
-  const session = yield* currentSession();
+  const session = yield* sessionForRequest(tag);
   const observer = yield* EnvironmentRpcRequestObserver;
   const method = session.client[tag] as (
     input: EnvironmentRpcInput<TTag>,

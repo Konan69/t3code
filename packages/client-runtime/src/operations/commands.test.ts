@@ -144,6 +144,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
+    wake: Effect.void,
   } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
 });
 
