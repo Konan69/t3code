@@ -15,10 +15,17 @@ import * as SshTunnel from "./tunnel.ts";
 // server and its records rather than about the text it contains.
 
 const STATE_KEY = "attach-test";
-// Stands in for the T3 server: answers 200 on the port the runner passes.
-const FAKE_SERVER = `const http = require("node:http");
-const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
-http.createServer((_request, response) => response.end("ok")).listen(port, "127.0.0.1");
+// Stands in for the T3 server and its CLI: `serve` answers 200 on the port
+// it is given, and `auth pairing create` mints a credential naming the file
+// that ran, so a test can tell whose executable did the pairing.
+const FAKE_SERVER = `#!/usr/bin/env node
+const http = require("node:http");
+if (process.argv[2] === "auth") {
+  process.stdout.write(JSON.stringify({ credential: "minted-by:" + __filename }) + "\\n");
+} else {
+  const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+  http.createServer((_request, response) => response.end("ok")).listen(port, "127.0.0.1");
+}
 `;
 
 const spawned: number[] = [];
@@ -124,9 +131,13 @@ describe("attach-only remote launch", () => {
   it("reuses a live server started by another runner and leaves its records alone", async () => {
     const { home, stateDir, serverScript } = makeHome();
     const port = await freePort();
-    const server = NodeChildProcess.spawn(process.execPath, [serverScript, "--port", `${port}`], {
-      stdio: "ignore",
-    });
+    const server = NodeChildProcess.spawn(
+      process.execPath,
+      [serverScript, "serve", "--port", `${port}`],
+      {
+        stdio: "ignore",
+      },
+    );
     spawned.push(server.pid!);
     await waitUntilAnswering(port);
     recordServer(stateDir, { pid: server.pid!, port, runner: "#!/bin/sh\n# another version\n" });
@@ -146,9 +157,13 @@ describe("attach-only remote launch", () => {
   it("the default mode restarts that same server, which is why attach exists", async () => {
     const { home, stateDir, serverScript } = makeHome();
     const port = await freePort();
-    const server = NodeChildProcess.spawn(process.execPath, [serverScript, "--port", `${port}`], {
-      stdio: "ignore",
-    });
+    const server = NodeChildProcess.spawn(
+      process.execPath,
+      [serverScript, "serve", "--port", `${port}`],
+      {
+        stdio: "ignore",
+      },
+    );
     spawned.push(server.pid!);
     await waitUntilAnswering(port);
     recordServer(stateDir, { pid: server.pid!, port, runner: "#!/bin/sh\n# another version\n" });
@@ -199,25 +214,118 @@ describe("attach-only remote launch", () => {
     assert.equal(launched.serverKind, "managed");
     assert.isTrue(isAlive(pid));
     assert.isTrue(await answers(launched.remotePort));
-    // The server it started is recorded under the shared runner file, so a
-    // later client sending the same runner reuses it.
-    assert.equal(
-      NodeFS.readFileSync(NodePath.join(stateDir, "run-t3.sh"), "utf8"),
-      NodeFS.readFileSync(NodePath.join(stateDir, "run-t3.attach.sh"), "utf8"),
-    );
+    // It now owns that server: its runner is the record, and the lock that
+    // serialized the launch is released.
+    assert.include(NodeFS.readFileSync(NodePath.join(stateDir, "run-t3.sh"), "utf8"), serverScript);
+    assert.isFalse(NodeFS.existsSync(NodePath.join(stateDir, "attach.lock")));
   }, 90_000);
 
-  it("pairing in attach mode leaves the owner's runner record alone", () => {
+  it("leaves a live server's install untouched and pairs through its executable", async () => {
+    const { home, stateDir } = makeHome();
+    // The live server runs from the very version directory this caller would
+    // install into, and that directory has no install-complete marker: the
+    // runner's installer would delete and replace it.
+    const runtimeDir = NodePath.join(home, ".t3", "runtime", "versions", "1.2.3");
+    NodeFS.mkdirSync(NodePath.join(runtimeDir, "client"), { recursive: true });
+    const executable = NodePath.join(runtimeDir, "t3");
+    NodeFS.writeFileSync(executable, FAKE_SERVER, { mode: 0o755 });
+    NodeFS.writeFileSync(NodePath.join(runtimeDir, "client", "index.html"), "<html></html>");
+    const installed = [runtimeDir, executable, NodePath.join(runtimeDir, "client", "index.html")];
+    const identity = () =>
+      installed.map((path) => {
+        const stat = NodeFS.statSync(path);
+        return [path, stat.ino, stat.mtimeMs];
+      });
+
+    const port = await freePort();
+    const server = NodeChildProcess.spawn(executable, ["serve", "--port", `${port}`], {
+      stdio: "ignore",
+    });
+    spawned.push(server.pid!);
+    await waitUntilAnswering(port);
+    recordServer(stateDir, { pid: server.pid!, port, runner: "#!/bin/sh\n# another client\n" });
+    const before = {
+      records: records(stateDir),
+      files: NodeFS.readdirSync(stateDir),
+      identity: identity(),
+    };
+
+    // An unreachable release URL: any attempt to install would fail the script.
+    const guest = {
+      archiveVersion: "1.2.3",
+      releaseBaseUrl: "http://127.0.0.1:1/releases",
+      preserveRunningServer: true,
+    };
+    const run = (script: string, args: ReadonlyArray<string>) =>
+      NodeChildProcess.spawnSync("sh", ["-s", ...args], {
+        input: script,
+        env: { ...process.env, HOME: home },
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+    const attached = run(SshTunnel.buildRemoteLaunchScript(guest), ["--", STATE_KEY]);
     const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
-    const runner = { nodeScriptPath: "/srv/t3/bin.mjs" };
-    const attach = SshTunnel.buildRemotePairingScript(target, {
-      ...runner,
+    // The pairing script keys its state directory off the target, so point
+    // that directory at the one the launch used.
+    const pairingScript = SshTunnel.buildRemotePairingScript(target, guest).replace(
+      /ssh-launch\/[0-9a-f]+"/u,
+      `ssh-launch/${STATE_KEY}"`,
+    );
+    const paired = run(pairingScript, []);
+
+    assert.equal(attached.status, 0, attached.stderr);
+    assert.equal(JSON.parse(attached.stdout.trim()).remotePort, port);
+    assert.equal(paired.status, 0, paired.stderr);
+    assert.deepEqual(JSON.parse(paired.stdout.trim()), { credential: `minted-by:${executable}` });
+    assert.isTrue(isAlive(server.pid!));
+    assert.deepEqual(identity(), before.identity);
+    assert.deepEqual(records(stateDir), before.records);
+    assert.deepEqual(NodeFS.readdirSync(stateDir), before.files);
+    assert.deepEqual(NodeFS.readdirSync(NodePath.dirname(runtimeDir)), ["1.2.3"]);
+  }, 60_000);
+
+  it("looks again under the lock, so a server started meanwhile is reused, not replaced", async () => {
+    const { home, stateDir, serverScript } = makeHome();
+    // Another attach-only caller holds the lock and is about to finish.
+    const holder = NodeChildProcess.spawn("sleep", ["30"], { stdio: "ignore" });
+    spawned.push(holder.pid!);
+    const lock = NodePath.join(stateDir, "attach.lock");
+    NodeFS.mkdirSync(lock);
+    NodeFS.writeFileSync(NodePath.join(lock, "pid"), `${holder.pid}\n`);
+
+    const port = await freePort();
+    const script = SshTunnel.buildRemoteLaunchScript({
+      nodeScriptPath: serverScript,
       preserveRunningServer: true,
     });
-    assert.include(attach, 'RUNNER_FILE="$STATE_DIR/run-t3.attach.sh"');
-    assert.include(
-      SshTunnel.buildRemotePairingScript(target, runner),
-      'RUNNER_FILE="$STATE_DIR/run-t3.sh"',
+    const waiting = NodeChildProcess.spawn("sh", ["-s", "--", STATE_KEY], {
+      env: { ...process.env, HOME: home },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    spawned.push(waiting.pid!);
+    let stdout = "";
+    waiting.stdout.on("data", (chunk) => (stdout += String(chunk)));
+    waiting.stdin.end(script);
+    const exited = new Promise<number | null>((resolve) => waiting.once("exit", resolve));
+
+    // While it waits, the holder's server comes up and the lock is released.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const server = NodeChildProcess.spawn(
+      process.execPath,
+      [serverScript, "serve", "--port", `${port}`],
+      {
+        stdio: "ignore",
+      },
     );
-  });
+    spawned.push(server.pid!);
+    await waitUntilAnswering(port);
+    recordServer(stateDir, { pid: server.pid!, port, runner: "#!/bin/sh\n# the holder\n" });
+    const before = records(stateDir);
+    NodeFS.rmSync(lock, { recursive: true });
+
+    assert.equal(await exited, 0);
+    assert.equal(JSON.parse(stdout.trim()).remotePort, port);
+    assert.isTrue(isAlive(server.pid!));
+    assert.deepEqual(records(stateDir), before);
+  }, 60_000);
 });
