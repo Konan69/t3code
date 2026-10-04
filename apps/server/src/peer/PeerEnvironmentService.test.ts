@@ -30,9 +30,12 @@ import * as PeerTransport from "./PeerTransport.ts";
 
 const BOAT = PeerEnvironmentId.make("boat");
 const boat = { id: BOAT, label: "Boat box", target: "boat" };
-const sender = {
+type Sender = PeerEnvironmentService.PeerSendInput["sender"];
+const sender: Sender = {
   environmentId: EnvironmentId.make("environment-local"),
   threadId: ThreadId.make("thread-local"),
+  runtimeMode: "full-access",
+  interactionMode: "default",
 };
 const NOW = DateTime.makeUnsafe("2026-10-04T00:00:00.000Z");
 
@@ -157,6 +160,7 @@ type Transport = PeerTransport.PeerTransport["Service"];
 const makeWire = (script: Partial<Pick<Transport, "open" | "shell" | "thread">> = {}) => {
   const seen = {
     opened: 0,
+    targets: [] as string[],
     closed: 0,
     paired: 0,
     bearers: [] as string[],
@@ -166,6 +170,7 @@ const makeWire = (script: Partial<Pick<Transport, "open" | "shell" | "thread">> 
     open: (peer) =>
       Effect.gen(function* () {
         seen.opened += 1;
+        seen.targets.push(peer.target);
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             seen.closed += 1;
@@ -187,7 +192,7 @@ const makeWire = (script: Partial<Pick<Transport, "open" | "shell" | "thread">> 
       }),
     thread: (session, threadId) =>
       script.thread === undefined
-        ? Effect.fail(new PeerThreadNotFound({ peerId: session.peer.id, threadId }))
+        ? Effect.succeed({ projection: projection([]), hasMoreHistory: false })
         : script.thread(session, threadId),
     dispatch: (_session, command) =>
       Effect.sync(() => {
@@ -198,7 +203,7 @@ const makeWire = (script: Partial<Pick<Transport, "open" | "shell" | "thread">> 
     seen,
     layer: PeerEnvironmentService.layer.pipe(
       Layer.provide(Layer.succeed(PeerTransport.PeerTransport, transport)),
-      Layer.provide(Settings.layerTest({ peerEnvironments: [boat] })),
+      Layer.provideMerge(Settings.layerTest({ peerEnvironments: [boat] })),
     ),
   };
 };
@@ -334,6 +339,105 @@ describe("PeerEnvironmentService connection lifetime", () => {
   });
 });
 
+describe("PeerEnvironmentService deadlines", () => {
+  it.effect("answers a caller while the peer wakes, and the retry joins the same connect", () => {
+    const gate = Deferred.makeUnsafe<void>();
+    const wire = makeWire({
+      open: () =>
+        Deferred.await(gate).pipe(
+          Effect.as({ httpBaseUrl: "http://127.0.0.1:1/", wsBaseUrl: "ws://127.0.0.1:1/" }),
+        ),
+    });
+    return Effect.gen(function* () {
+      const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
+      const first = yield* peers.listThreads("boat").pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("45 seconds");
+      assert.strictEqual((yield* Fiber.join(first))._tag, "PeerEnvironmentWaking");
+      // Giving up on the call did not give up on the connect.
+      assert.strictEqual(wire.seen.closed, 0);
+
+      const retry = yield* peers.listThreads("boat").pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(retry);
+      assert.strictEqual(wire.seen.opened, 1);
+      assert.strictEqual(wire.seen.paired, 1);
+    }).pipe(Effect.provide(wire.layer));
+  });
+
+  it.effect("gives up on a connect that never finishes and starts over on the next call", () => {
+    const wire = makeWire({ open: () => Effect.never });
+    return Effect.gen(function* () {
+      const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
+      const first = yield* peers.listThreads("boat").pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("45 seconds");
+      yield* Fiber.join(first);
+      yield* TestClock.adjust("3 minutes");
+      assert.strictEqual(wire.seen.closed, 0);
+
+      // A caller waiting when the cap is reached learns the peer is unreachable.
+      const waiting = yield* peers.listThreads("boat").pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("15 seconds");
+      assert.strictEqual((yield* Fiber.join(waiting))._tag, "PeerEnvironmentUnreachable");
+      assert.strictEqual(wire.seen.closed, 1);
+      assert.strictEqual(wire.seen.opened, 1);
+
+      const next = yield* peers.listThreads("boat").pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("45 seconds");
+      yield* Fiber.join(next);
+      assert.strictEqual(wire.seen.opened, 2);
+    }).pipe(Effect.provide(wire.layer));
+  });
+});
+
+describe("PeerEnvironmentService settings changes", () => {
+  // The transport fails as a dead tunnel would, after the settings changed
+  // under the request: the retry must act on the settings as they are now.
+  type Patch = Parameters<Settings.ServerSettingsService["Service"]["updateSettings"]>[0];
+  const failingAfter = (patch: Patch) => {
+    let change: Effect.Effect<void> | null = null;
+    const wire = makeWire({
+      shell: () =>
+        Effect.suspend(() => {
+          if (change === null) return Effect.succeed(emptyShell);
+          const applied = change;
+          change = null;
+          return applied.pipe(Effect.andThen(Effect.fail(unreachable)));
+        }),
+    });
+    /** Arms the next request to change the settings and then lose its tunnel. */
+    const arm = Settings.ServerSettingsService.pipe(
+      Effect.map((settings) => {
+        change = settings.updateSettings(patch).pipe(Effect.orDie, Effect.asVoid);
+      }),
+    );
+    return { wire, arm };
+  };
+
+  it.effect("does not reopen a tunnel to a peer removed during the request", () => {
+    const { wire, arm } = failingAfter({ peerEnvironments: [] });
+    return Effect.gen(function* () {
+      const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
+      yield* arm;
+      const error = yield* peers.listThreads("boat").pipe(Effect.flip);
+      assert.strictEqual(error._tag, "PeerEnvironmentNotConfigured");
+      assert.strictEqual(wire.seen.opened, 1);
+      assert.strictEqual(wire.seen.closed, 1);
+    }).pipe(Effect.provide(wire.layer));
+  });
+
+  it.effect("retries against the new target when the peer is re-pointed during the request", () => {
+    const { wire, arm } = failingAfter({ peerEnvironments: [{ ...boat, target: "boat-2" }] });
+    return Effect.gen(function* () {
+      const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
+      yield* arm;
+      yield* peers.listThreads("boat");
+      assert.deepStrictEqual(wire.seen.targets, ["boat", "boat-2"]);
+      assert.strictEqual(wire.seen.closed, 1);
+    }).pipe(Effect.provide(wire.layer));
+  });
+});
+
 describe("PeerEnvironmentService.sendMessage", () => {
   it.effect("a retried request reuses the command and message ids", () => {
     const wire = makeWire();
@@ -379,7 +483,10 @@ describe("PeerEnvironmentService.sendMessage", () => {
     }).pipe(Effect.provide(wire.layer));
   });
 
-  it.effect("sends as an agent over MCP, never as the peer's user", () => {
+  // What this server puts on the wire. The peer's WebSocket handler stamps
+  // every client command as created by its user, so `createdBy` does not
+  // survive there; `creationSource` does.
+  it.effect("labels the command it sends as an agent's MCP call", () => {
     const wire = makeWire();
     return Effect.gen(function* () {
       const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
@@ -393,6 +500,48 @@ describe("PeerEnvironmentService.sendMessage", () => {
       assert.strictEqual(command?.createdBy, "agent");
       assert.strictEqual(command?.creationSource, "mcp");
       assert.deepStrictEqual(command?.attachments, []);
+    }).pipe(Effect.provide(wire.layer));
+  });
+
+  it.effect("refuses to prompt a peer thread that runs with broader modes", () => {
+    const wire = makeWire();
+    return Effect.gen(function* () {
+      const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
+      const send = (modes: Partial<Sender>) =>
+        peers
+          .sendMessage("boat", {
+            threadId: ThreadId.make("thread-remote"),
+            text: "delete the branch",
+            clientRequestId: "request-1",
+            sender: { ...sender, ...modes },
+          })
+          .pipe(Effect.flip);
+      // The fixture's remote thread is full-access and in default mode.
+      const sandboxed = yield* send({ runtimeMode: "approval-required" });
+      const planning = yield* send({ interactionMode: "plan" });
+      assert.strictEqual(sandboxed._tag, "PeerModeEscalationDenied");
+      assert.strictEqual(planning._tag, "PeerModeEscalationDenied");
+      assert.strictEqual(wire.seen.dispatched.length, 0);
+    }).pipe(Effect.provide(wire.layer));
+  });
+
+  it.effect("reports a missing peer thread before sending anything", () => {
+    const wire = makeWire({
+      thread: (session, threadId) =>
+        Effect.fail(new PeerThreadNotFound({ peerId: session.peer.id, threadId })),
+    });
+    return Effect.gen(function* () {
+      const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
+      const error = yield* peers
+        .sendMessage("boat", {
+          threadId: ThreadId.make("thread-gone"),
+          text: "status?",
+          clientRequestId: "request-1",
+          sender,
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(error._tag, "PeerThreadNotFound");
+      assert.strictEqual(wire.seen.dispatched.length, 0);
     }).pipe(Effect.provide(wire.layer));
   });
 

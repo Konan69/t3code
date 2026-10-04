@@ -17,6 +17,8 @@ import {
   AuthTokenExchangeGrantType,
   EnvironmentHttpApi,
   ORCHESTRATION_PROTOCOL_HEADER,
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Command,
@@ -127,7 +129,7 @@ export class PeerTransport extends Context.Service<
 >()("t3/peer/PeerTransport") {}
 
 const REQUEST_TIMEOUT = "30 seconds";
-const DISPATCH_TIMEOUT = "60 seconds";
+const DISPATCH_TIMEOUT = "30 seconds";
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
 const DETAIL_LIMIT = 300;
 
@@ -139,13 +141,14 @@ const sshAuth = (peer: PeerEnvironmentConfig) => ({
   ...(peer.identityFile === undefined ? {} : { identityFile: peer.identityFile }),
 });
 
-// The same runner the desktop app sends for this version. The remote launch
-// script restarts a server it manages whenever the runner text changes, so a
-// runner that differs from the desktop's would restart the peer's server under
-// its running threads. A peer run as a service is reused and never restarted.
+// The runner the desktop app sends for this version, so a server this side
+// has to start is one the desktop app later reuses.
 const runner: RemoteT3RunnerOptions = {
   archiveVersion: packageJson.version,
   releaseBaseUrl: FORK_CLI_RELEASE_BASE_URL,
+  // This server is a guest on the peer. It reuses whatever T3 server is alive
+  // there, never stops or restarts one, and starts one only when none runs.
+  preserveRunningServer: true,
 };
 
 /** The last line a person would read, bounded so tool output stays small. */
@@ -222,6 +225,35 @@ function classifyRequestFailure(peer: PeerEnvironmentConfig, cause: unknown): Pe
     peerId,
     detail: "the tunnel to the peer stopped answering",
   });
+}
+
+/**
+ * Where the command socket connects. The peer refuses the upgrade with HTTP
+ * 426 unless the URL names the orchestration protocol this build speaks.
+ */
+export function peerSocketUrl(link: PeerLink, ticket: string): string {
+  const url = new URL(link.wsBaseUrl);
+  url.pathname = "/ws";
+  url.searchParams.set("wsTicket", ticket);
+  url.searchParams.set(ORCHESTRATION_PROTOCOL_QUERY_PARAM, String(ORCHESTRATION_PROTOCOL_VERSION));
+  return url.toString();
+}
+
+/**
+ * Whether a failed socket open was the peer's 426. The WebSocket client only
+ * reports the status inside its error text, so this reads the messages along
+ * the cause chain. `authorize` already compares protocol versions through the
+ * descriptor; this covers a peer that changed version under an open tunnel.
+ */
+function isUpgradeRequired(cause: unknown, depth = 0): boolean {
+  if (depth > 6 || typeof cause !== "object" || cause === null) return false;
+  if ("message" in cause && typeof cause.message === "string" && /\b426\b/.test(cause.message)) {
+    return true;
+  }
+  return (
+    ("cause" in cause && isUpgradeRequired(cause.cause, depth + 1)) ||
+    ("reason" in cause && isUpgradeRequired(cause.reason, depth + 1))
+  );
 }
 
 /** A route this build expects that the peer answered with a bare 404. */
@@ -314,6 +346,17 @@ const make = Effect.gen(function* () {
     peer: PeerEnvironmentConfig,
     link: PeerLink,
   ) {
+    // Checked before pairing: a peer on another orchestration protocol would
+    // refuse the command socket, and no credential changes that.
+    const metadata = yield* apiGroup(link, "metadata");
+    const descriptor = yield* request(peer, REQUEST_TIMEOUT, metadata.descriptor());
+    const protocol = descriptor.orchestrationProtocolVersion;
+    if (protocol !== undefined && protocol !== ORCHESTRATION_PROTOCOL_VERSION) {
+      return yield* new PeerProtocolMismatch({
+        peerId: peer.id,
+        detail: `it speaks orchestration protocol ${protocol} (T3 ${descriptor.serverVersion}), this server speaks ${ORCHESTRATION_PROTOCOL_VERSION}`,
+      });
+    }
     const target = yield* resolveTarget(peer).pipe(Effect.mapError(unreachable(peer)));
     const pairing = yield* issueRemotePairingToken(target, sshAuth(peer), runner).pipe(
       Effect.mapError(unreachable(peer)),
@@ -378,19 +421,28 @@ const make = Effect.gen(function* () {
     session: PeerSession,
     command: PeerDispatchCommand,
   ) {
-    const rejected = (cause: unknown) =>
-      Predicate.isTagged(cause, "OrchestrationV2DispatchCommandError")
+    const rejected = (
+      cause: unknown,
+    ): Option.Option<PeerCommandRejected | PeerProtocolMismatch> => {
+      if (Predicate.isTagged(cause, "OrchestrationV2DispatchCommandError")) {
+        const { detail, message } = cause as unknown as { detail?: string; message: string };
+        return Option.some(
+          new PeerCommandRejected({
+            peerId: session.peer.id,
+            threadId: command.threadId,
+            detail: summarize(detail ?? message),
+          }),
+        );
+      }
+      return isUpgradeRequired(cause)
         ? Option.some(
-            new PeerCommandRejected({
+            new PeerProtocolMismatch({
               peerId: session.peer.id,
-              threadId: command.threadId,
-              detail: summarize(
-                (cause as unknown as { detail?: string; message: string }).detail ??
-                  (cause as unknown as { message: string }).message,
-              ),
+              detail: "it refused the command socket for this server's orchestration protocol",
             }),
           )
         : Option.none();
+    };
     // The environment API has no HTTP route for commands, so the prompt goes
     // over the same typed WebSocket RPC the clients use. One socket per send:
     // a ticket is single use, and holding a socket open would keep a
@@ -400,9 +452,6 @@ const make = Effect.gen(function* () {
       const issued = yield* auth.webSocketTicket({
         headers: { authorization: `Bearer ${Redacted.value(session.bearer)}` },
       });
-      const url = new URL(session.link.wsBaseUrl);
-      url.pathname = "/ws";
-      url.searchParams.set("wsTicket", issued.ticket);
       const protocol = yield* Layer.build(
         Layer.effect(
           RpcClient.Protocol,
@@ -413,9 +462,9 @@ const make = Effect.gen(function* () {
         ).pipe(
           Layer.provide(
             Layer.mergeAll(
-              Socket.layerWebSocket(url.toString(), { openTimeout: SOCKET_OPEN_TIMEOUT }).pipe(
-                Layer.provide(NodeSocket.layerWebSocketConstructor),
-              ),
+              Socket.layerWebSocket(peerSocketUrl(session.link, issued.ticket), {
+                openTimeout: SOCKET_OPEN_TIMEOUT,
+              }).pipe(Layer.provide(NodeSocket.layerWebSocketConstructor)),
               RpcSerialization.layerJson,
             ),
           ),

@@ -43,7 +43,7 @@ const PeerEnvironmentListTool = Tool.make("t3_peer_environment_list", {
 
 const PeerThreadListTool = Tool.make("t3_peer_thread_list", {
   ...shared,
-  description: `List threads on a peer T3 environment: id, title, project, status, and last activity, most recently active first (at most ${PeerEnvironmentService.PEER_THREAD_LIST_LIMIT}). Connects over SSH, which wakes the peer machine if it is asleep and can take a minute or two on a cold start.`,
+  description: `List threads on a peer T3 environment: id, title, project, status, and last activity, most recently active first (at most ${PeerEnvironmentService.PEER_THREAD_LIST_LIMIT}). Connects over SSH, which wakes the peer machine if it is asleep. A cold start can take a few minutes: if the call returns PeerEnvironmentWaking, the connection is still being opened in the background, so call again in about 30 seconds.`,
   parameters: Schema.Struct({ peerId }),
   success: PeerEnvironmentService.PeerThreadList,
 })
@@ -54,7 +54,7 @@ const PeerThreadListTool = Tool.make("t3_peer_thread_list", {
 
 const PeerThreadReadTool = Tool.make("t3_peer_thread_read", {
   ...shared,
-  description: `Read a thread on a peer T3 environment: its status and its most recent messages, oldest first. Each message is cut at ${PeerEnvironmentService.PEER_MESSAGE_TEXT_LIMIT} characters with a marker. Use this to follow a prompt sent with t3_peer_thread_send; leave at least 30 seconds between reads, because every call keeps the peer machine awake.`,
+  description: `Read a thread on a peer T3 environment: its status and its most recent messages, oldest first. Each message is cut at ${PeerEnvironmentService.PEER_MESSAGE_TEXT_LIMIT} characters with a marker. Use this to follow a prompt sent with t3_peer_thread_send; leave at least 30 seconds between reads, because every call keeps the peer machine awake. On PeerEnvironmentWaking, repeat the call after about 30 seconds.`,
   parameters: Schema.Struct({
     peerId,
     threadId: ThreadId,
@@ -76,7 +76,7 @@ const PeerThreadReadTool = Tool.make("t3_peer_thread_read", {
 const PeerThreadSendTool = Tool.make("t3_peer_thread_send", {
   ...shared,
   description:
-    "Send a text prompt into an existing thread on a peer T3 environment, where that thread's agent acts on it. Returns as soon as the peer accepts the prompt and does not wait for the reply: follow up with t3_peer_thread_read. Repeating a call with the same clientRequestId never posts the prompt twice. Attachments are not supported.",
+    "Send a text prompt into an existing thread on a peer T3 environment, where that thread's agent acts on it. Returns as soon as the peer accepts the prompt and does not wait for the reply: follow up with t3_peer_thread_read. Repeating a call with the same clientRequestId never posts the prompt twice, so on PeerEnvironmentWaking (the peer machine is still starting) or any other failure where the outcome is unclear, repeat the call with the same clientRequestId after about 30 seconds. The peer thread may not run with a broader runtime or interaction mode than the calling thread. Attachments are not supported.",
   parameters: Schema.Struct({
     peerId,
     threadId: ThreadId,

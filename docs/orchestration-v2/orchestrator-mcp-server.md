@@ -420,7 +420,17 @@ keeps one connection per peer: an SSH tunnel to the peer's server plus a bearer
 obtained through the pairing flow, held in memory only. The first call that
 needs a peer opens it, concurrent callers share it, and it is closed after ten
 minutes without use so a machine billed while awake can sleep again. Closing
-ends the tunnel and never stops the peer's server. Agents are told that any
+ends the tunnel and never stops the peer's server, and connecting uses the SSH
+launch script's attach-only mode: a live server is reused whatever started it,
+never stopped or restarted, and one is started only when none is running.
+
+Every call is bounded to 45 seconds, under the shortest provider tool timeout.
+A call that is still waiting for the machine to wake returns
+`PeerEnvironmentWaking`; the connect carries on in the service (capped at four
+minutes) and the repeated call joins it. A send first reads the target thread
+and applies the same mode rule as `t3_thread_send`: the target may not run
+with a broader runtime or interaction mode than the caller
+(`PeerModeEscalationDenied`). Agents are told that any
 call other than the environment list may wake the machine and that polling
 must be spaced out.
 

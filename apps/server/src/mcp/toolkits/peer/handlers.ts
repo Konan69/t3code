@@ -40,13 +40,18 @@ export const PeerHandlersLive = PeerToolkit.toLayer({
     Effect.gen(function* () {
       // Prompting another machine's agent is a mutation: only a provider that
       // still owns an active run of the calling thread may do it.
-      const { scope } = yield* readMutationCaller();
+      const { scope, caller } = yield* readMutationCaller();
       const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
       return yield* peers.sendMessage(input.peerId, {
         threadId: input.threadId,
         text: input.text,
         clientRequestId: input.clientRequestId,
-        sender: { environmentId: scope.environmentId, threadId: scope.threadId },
+        sender: {
+          environmentId: scope.environmentId,
+          threadId: scope.threadId,
+          runtimeMode: caller.runtimeMode,
+          interactionMode: caller.interactionMode,
+        },
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
       });
     }).pipe(settingsUnavailable),
