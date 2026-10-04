@@ -395,6 +395,39 @@ Without `runId`, it selects the newest interruptible run. A terminal run is
 returned unchanged, and a thread with no active provider turn returns
 `no_active_run`.
 
+### `t3_peer_*`
+
+The thread tools above address the calling environment. The peer tools address
+threads on another T3 environment, reached over SSH. A peer is reachable only
+when it is listed in the `peerEnvironments` server setting
+(`{ id, label, target, identityFile?, port? }`); that list is the allowlist.
+
+- `t3_peer_environment_list` returns the configured peers and whether a
+  connection to each is open. It reads settings only and never connects.
+- `t3_peer_thread_list` returns the peer's 50 most recently active threads.
+- `t3_peer_thread_read` returns a thread's status and its latest messages
+  (20 by default, 100 at most), each cut at 4,000 characters with a marker.
+- `t3_peer_thread_send` posts a text prompt into a peer thread. It returns once
+  the peer accepts the command and does not wait for the turn: callers follow
+  up with `t3_peer_thread_read`. Command and message IDs are derived from the
+  calling environment, the calling thread, and `clientRequestId`, so a retried
+  call replays the peer's command receipt instead of posting twice.
+  Attachments are rejected, because they would name files on the calling
+  machine.
+
+[`PeerEnvironmentService`](../../apps/server/src/peer/PeerEnvironmentService.ts)
+keeps one connection per peer: an SSH tunnel to the peer's server plus a bearer
+obtained through the pairing flow, held in memory only. The first call that
+needs a peer opens it, concurrent callers share it, and it is closed after ten
+minutes without use so a machine billed while awake can sleep again. Closing
+ends the tunnel and never stops the peer's server. Agents are told that any
+call other than the environment list may wake the machine and that polling
+must be spaced out.
+
+The peer's WebSocket command path records every client command as created by
+its user, so a prompt sent this way keeps `creationSource: "mcp"` on the peer
+but not `createdBy: "agent"`.
+
 ## Delegated Task Lifecycle
 
 The MCP server is a command ingress into V2. It does not call provider adapters

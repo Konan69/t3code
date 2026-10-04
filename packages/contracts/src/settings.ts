@@ -1,4 +1,5 @@
 import { SshDeviceHostConfigs } from "./device.ts";
+import { PeerEnvironmentConfigs } from "./peer.ts";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
@@ -1300,6 +1301,13 @@ export const ServerSettings = Schema.Struct({
   /** Whether the server-local Device panel setup flow has been completed. */
   deviceOnboardingCompleted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   deviceHosts: SshDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /**
+   * Other T3 environments agents on this server may list, read, and prompt
+   * through the `t3_peer_*` MCP tools. This list is the allowlist; it is kept
+   * apart from `deviceHosts` because reaching a simulator host grants nothing
+   * here.
+   */
+  peerEnvironments: PeerEnvironmentConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -1665,6 +1673,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
   deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
+  peerEnvironments: Schema.optionalKey(PeerEnvironmentConfigs),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),

@@ -1,6 +1,7 @@
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
+import * as PeerEnvironmentService from "../../../peer/PeerEnvironmentService.ts";
 import * as ServerConfig from "../../../config.ts";
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
@@ -30,6 +31,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
   Layer.mock(DeviceService.DeviceService)({}),
+  Layer.mock(PeerEnvironmentService.PeerEnvironmentService)({}),
   Layer.mock(ThreadManagementService.ThreadManagementService)({}),
   Layer.mock(ProviderRegistry.ProviderRegistry)({}),
   Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
@@ -125,6 +127,16 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       // than replacing them.
       expect(toolNames).toContain("preview_status");
       expect(toolNames).toContain("delegate_task");
+
+      // Reading a peer is read-only; prompting one of its threads is not.
+      const peerList = tools.find((tool) => tool.name === "t3_peer_environment_list");
+      expect(peerList?.annotations?.readOnlyHint).toBe(true);
+      expect(peerList?.annotations?.openWorldHint).toBe(false);
+      expect(toolNames).toContain("t3_peer_thread_list");
+      expect(toolNames).toContain("t3_peer_thread_read");
+      const peerSend = tools.find((tool) => tool.name === "t3_peer_thread_send");
+      expect(peerSend?.annotations?.readOnlyHint).toBe(false);
+      expect(peerSend?.annotations?.openWorldHint).toBe(true);
 
       // The handoff tool mutates thread state, reaches the network (origin
       // fetch), and runs project setup scripts, so its MCP hints must not

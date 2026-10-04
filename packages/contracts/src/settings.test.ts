@@ -1084,6 +1084,19 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
 });
 
+it("accepts peer environments and rejects ssh option injection and duplicate ids", () => {
+  const peer = { id: "boat", label: "Boat box", target: "boat", port: 2222 };
+  expect(decodeDeviceHostSettings({}).peerEnvironments).toEqual([]);
+  expect(decodeDeviceHostSettings({ peerEnvironments: [peer] }).peerEnvironments).toEqual([peer]);
+  expect(() => decodeDeviceHostSettings({ peerEnvironments: [peer, peer] })).toThrow();
+  expect(() =>
+    decodeDeviceHostSettings({ peerEnvironments: [{ ...peer, target: "-oProxyCommand=bad" }] }),
+  ).toThrow();
+  expect(() =>
+    decodeDeviceHostSettings({ peerEnvironments: [{ ...peer, id: "../boat" }] }),
+  ).toThrow();
+});
+
 describe("branch naming settings", () => {
   it("defaults existing settings to the t3 static prefix", () => {
     expect(decodeServerSettings({})).toMatchObject({

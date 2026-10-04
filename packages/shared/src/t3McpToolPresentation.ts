@@ -277,6 +277,13 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",
   ),
+  t3_peer_environment_list: tool(
+    ["List", "Listing", "Listed", "peer environments"],
+    "environment-read",
+  ),
+  t3_peer_thread_list: tool(["List", "Listing", "Listed", "peer threads"], "thread-list"),
+  t3_peer_thread_read: tool(["Read", "Reading", "Read", "a peer thread"], "thread-read"),
+  t3_peer_thread_send: tool(["Send", "Sending", "Sent", "to a peer thread"], "thread-send"),
   t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
   t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
