@@ -139,6 +139,29 @@ describe("ssh command", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
+  it.effect("passes an identity file ahead of the host", () => {
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(makeFailedProcess({ stdout: "", stderr: "Permission denied (publickey).\n" })),
+    );
+    const processLayer = Layer.mergeAll(
+      NodeServices.layer,
+      Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+
+    return Effect.gen(function* () {
+      const error = yield* runSshCommand(
+        { alias: "devbox", hostname: "devbox.example.com", username: null, port: null },
+        { identityFile: "/keys/devbox", remoteCommandArgs: ["true"] },
+      ).pipe(Effect.flip);
+
+      assert.instanceOf(error, SshCommandError);
+      const identity = error.command.indexOf("-i");
+      assert.equal(error.command[identity + 1], "/keys/devbox");
+      assert.isBelow(identity, error.command.indexOf("devbox"));
+      assert.isAbove(identity, -1);
+    }).pipe(Effect.provide(processLayer));
+  });
+
   it.effect("redacts credentials from stdout in non-zero command failures", () => {
     const spawner = ChildProcessSpawner.make(() =>
       Effect.succeed(makeFailedProcess({ stdout: '{"credential":"pairing-secret"}\n' })),

@@ -11,7 +11,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
+import { buildSshChildEnvironment, sshIdentityArgs, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
@@ -206,6 +206,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     ...baseSshArgs(target, {
       batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
     }),
+    ...sshIdentityArgs(input),
     ...(input.preHostArgs ?? []),
     hostSpec,
     ...(input.remoteCommandArgs ?? []),

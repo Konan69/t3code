@@ -32,6 +32,12 @@ export interface SshAuthOptions {
   readonly authSecret?: string | null;
   readonly batchMode?: "yes" | "no";
   readonly interactiveAuth?: boolean;
+  /** Private key passed as `-i`, for hosts whose key is not in the SSH config. */
+  readonly identityFile?: string;
+}
+
+export function sshIdentityArgs(input?: SshAuthOptions): string[] {
+  return input?.identityFile === undefined ? [] : ["-i", input.identityFile];
 }
 
 export interface SshPasswordPromptShape {

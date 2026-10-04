@@ -56,6 +56,13 @@ export function cliArchiveFileName(version: string, platformKey: CliArchivePlatf
 
 const CLI_RELEASE_DEFAULT_BASE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases/download`;
 
+/**
+ * Where this fork publishes the archives a remote host installs over SSH.
+ * Every SSH client of one remote must send the same value: the launch script
+ * restarts a server it manages when the runner it is handed changes.
+ */
+export const FORK_CLI_RELEASE_BASE_URL = "https://github.com/Konan69/t3code/releases/download";
+
 /** Directory that `releases/download/<tag>/<asset>` lives under. */
 export function cliReleaseDownloadBaseUrl(
   version: string,

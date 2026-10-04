@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
+import { FORK_CLI_RELEASE_BASE_URL } from "@t3tools/shared/cliRelease";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
@@ -115,7 +116,7 @@ const resolveDesktopSshCliRunner = (
   }
   return {
     archiveVersion: environment.appVersion,
-    releaseBaseUrl: "https://github.com/Konan69/t3code/releases/download",
+    releaseBaseUrl: FORK_CLI_RELEASE_BASE_URL,
   };
 };
 
