@@ -51,6 +51,8 @@ const SSH_READY_TIMEOUT_MS = 20_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
+// The runner an attach-only caller writes, beside the owner's `run-t3.sh`.
+const ATTACH_RUNNER_FILE = "run-t3.attach.sh";
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
 // A cold archive launch also downloads and unpacks a ~70 MB release archive
 // and may wait on another installer's lock. The budgets nest: the checksum
@@ -78,6 +80,16 @@ export interface RemoteT3RunnerOptions {
    */
   readonly archiveVersion?: string | null;
   readonly releaseBaseUrl?: string | null;
+  /**
+   * Attach without ever disturbing a server that is already running: a live
+   * server is reused whatever runner started it, a live server that does not
+   * answer fails the launch, and nothing is killed. Only when no server
+   * process is alive is one started. The runner is kept in its own file so a
+   * live server's runner record is never rewritten. Off by default, which is
+   * the desktop app's behaviour: it owns the server it manages and restarts
+   * it when the runner changes.
+   */
+  readonly preserveRunningServer?: boolean;
 }
 
 export interface SshEnvironmentManagerOptions {
@@ -548,7 +560,14 @@ PID_FILE="$STATE_DIR/pid"
 MANAGED_FILE="$STATE_DIR/managed"
 LOG_FILE="$STATE_DIR/server.log"
 RUNNER_FILE="$STATE_DIR/run-t3.sh"
-RUNNER_NEXT="$STATE_DIR/run-t3.next.$$"
+OWNED_RUNNER_FILE="$RUNNER_FILE"
+T3_PRESERVE_RUNNING=@@T3_PRESERVE_RUNNING@@
+if [ "$T3_PRESERVE_RUNNING" = "1" ]; then
+  # A live server's runner record belongs to whoever started it. This caller
+  # keeps its runner in a file of its own so that record is never rewritten.
+  RUNNER_FILE="$STATE_DIR/@@T3_ATTACH_RUNNER_FILE@@"
+fi
+RUNNER_NEXT="$RUNNER_FILE.next.$$"
 mkdir -p "$STATE_DIR"
 cleanup_runner_next() {
   rm -f "$RUNNER_NEXT"
@@ -635,7 +654,44 @@ if [ -n "$DEFAULT_RUNTIME_INFO" ]; then
   DEFAULT_RUNTIME_PID="\${DEFAULT_RUNTIME_INFO%% *}"
   DEFAULT_REMOTE_PORT="\${DEFAULT_RUNTIME_INFO#* }"
 fi
-if [ -n "$DEFAULT_REMOTE_PORT" ]; then
+if [ "$T3_PRESERVE_RUNNING" = "1" ]; then
+  # Attach only. Every branch below either reuses a live server untouched,
+  # refuses, or falls through to a launch once no server process is alive.
+  # Nothing here kills a process or rewrites the pid, port or managed files
+  # of a live server.
+  refuse_unready() {
+    printf 'A T3 server is running on the remote host (PID %s) but did not answer on 127.0.0.1:%s. It was left running.\\n' "$1" "$2" >&2
+    exit 75
+  }
+  if [ -n "$DEFAULT_REMOTE_PORT" ]; then
+    REMOTE_PORT="$DEFAULT_REMOTE_PORT"
+    if wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
+      printf '{"remotePort":%s,"serverKind":"external"}\\n' "$REMOTE_PORT"
+      exit 0
+    fi
+    refuse_unready "$DEFAULT_RUNTIME_PID" "$DEFAULT_REMOTE_PORT"
+  fi
+  REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
+  if [ -n "$REMOTE_PID" ] && kill -0 "$REMOTE_PID" 2>/dev/null; then
+    if [ -n "$REMOTE_PORT" ] && wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
+      printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$REMOTE_PORT" "\${REMOTE_MANAGED:-managed}"
+      exit 0
+    fi
+    refuse_unready "$REMOTE_PID" "\${REMOTE_PORT:-unknown}"
+  fi
+  if [ "$REMOTE_MANAGED" = "external" ] && [ -n "$REMOTE_PORT" ] && wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
+    printf '{"remotePort":%s,"serverKind":"external"}\\n' "$REMOTE_PORT"
+    exit 0
+  fi
+  # No server process is alive, so starting one disturbs nothing. It is
+  # started from the shared runner file, the record a later client compares.
+  cp "$RUNNER_FILE" "$OWNED_RUNNER_FILE"
+  chmod 700 "$OWNED_RUNNER_FILE"
+  RUNNER_FILE="$OWNED_RUNNER_FILE"
+  REMOTE_PID=""
+  REMOTE_PORT=""
+  REMOTE_MANAGED=""
+elif [ -n "$DEFAULT_REMOTE_PORT" ]; then
   REMOTE_PORT="$DEFAULT_REMOTE_PORT"
   if wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
     if [ "$REMOTE_MANAGED" = "managed" ]; then
@@ -721,7 +777,7 @@ printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$REMOTE_PORT" "\${REMOTE_MANAGE
 const REMOTE_PAIRING_SCRIPT = `set -eu
 STATE_DIR="$HOME/.t3/ssh-launch/@@T3_STATE_KEY@@"
 DEFAULT_SERVER_HOME="$HOME/.t3"
-RUNNER_FILE="$STATE_DIR/run-t3.sh"
+RUNNER_FILE="$STATE_DIR/@@T3_RUNNER_FILE@@"
 mkdir -p "$STATE_DIR"
 cat >"$RUNNER_FILE" <<'SH'
 @@T3_RUNNER_SCRIPT@@
@@ -825,6 +881,8 @@ export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string 
 export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
     T3_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
+    T3_PRESERVE_RUNNING: input?.preserveRunningServer === true ? "1" : "0",
+    T3_ATTACH_RUNNER_FILE: ATTACH_RUNNER_FILE,
     T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
     T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),
@@ -843,6 +901,7 @@ export function buildRemotePairingScript(
 ): string {
   return applyScriptPlaceholders(REMOTE_PAIRING_SCRIPT, {
     T3_STATE_KEY: remoteStateKey(target),
+    T3_RUNNER_FILE: input?.preserveRunningServer === true ? ATTACH_RUNNER_FILE : "run-t3.sh",
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
   });
 }
