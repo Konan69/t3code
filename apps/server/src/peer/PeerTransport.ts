@@ -20,6 +20,8 @@ import {
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+  environmentOrchestrationProtocolVersion,
+  type ExecutionEnvironmentDescriptor,
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Command,
   type OrchestrationV2ShellSnapshot,
@@ -240,21 +242,40 @@ export function peerSocketUrl(link: PeerLink, ticket: string): string {
 }
 
 /**
- * Whether a failed socket open was the peer's 426. The WebSocket client only
- * reports the status inside its error text, so this reads the messages along
- * the cause chain. `authorize` already compares protocol versions through the
- * descriptor; this covers a peer that changed version under an open tunnel.
+ * The peer speaks another orchestration protocol than this build: pairing
+ * with it would write a credential its server reads differently, and it would
+ * refuse the command socket. A descriptor that names no protocol is a server
+ * from before negotiation, counted the way the clients count it.
  */
-function isUpgradeRequired(cause: unknown, depth = 0): boolean {
-  if (depth > 6 || typeof cause !== "object" || cause === null) return false;
-  if ("message" in cause && typeof cause.message === "string" && /\b426\b/.test(cause.message)) {
-    return true;
-  }
-  return (
-    ("cause" in cause && isUpgradeRequired(cause.cause, depth + 1)) ||
-    ("reason" in cause && isUpgradeRequired(cause.reason, depth + 1))
-  );
+export function peerProtocolMismatch(
+  peer: PeerEnvironmentConfig,
+  descriptor: Pick<
+    ExecutionEnvironmentDescriptor,
+    "orchestrationProtocolVersion" | "serverVersion"
+  >,
+): PeerProtocolMismatch | null {
+  const protocol = environmentOrchestrationProtocolVersion(descriptor);
+  return protocol === ORCHESTRATION_PROTOCOL_VERSION
+    ? null
+    : new PeerProtocolMismatch({
+        peerId: peer.id,
+        detail: `it speaks orchestration protocol ${protocol} (T3 ${descriptor.serverVersion}), this server speaks ${ORCHESTRATION_PROTOCOL_VERSION}`,
+      });
 }
+
+/**
+ * Whether the peer refuses the command socket for its protocol. The WebSocket
+ * client does not expose the status of a refused upgrade, so after a failed
+ * open the same URL, without a ticket, is asked over plain HTTP: the peer
+ * checks the protocol before anything else and answers 426.
+ */
+export const refusesSocketProtocol = (httpClient: HttpClient.HttpClient, link: PeerLink) =>
+  httpClient.get(peerSocketUrl(link, "").replace(/^ws/u, "http")).pipe(
+    Effect.map((response) => response.status === 426),
+    Effect.timeoutOption("5 seconds"),
+    Effect.map(Option.getOrElse(() => false)),
+    Effect.orElseSucceed(() => false),
+  );
 
 /** A route this build expects that the peer answered with a bare 404. */
 const isUndeclaredNotFound = (cause: unknown) =>
@@ -350,13 +371,8 @@ const make = Effect.gen(function* () {
     // refuse the command socket, and no credential changes that.
     const metadata = yield* apiGroup(link, "metadata");
     const descriptor = yield* request(peer, REQUEST_TIMEOUT, metadata.descriptor());
-    const protocol = descriptor.orchestrationProtocolVersion;
-    if (protocol !== undefined && protocol !== ORCHESTRATION_PROTOCOL_VERSION) {
-      return yield* new PeerProtocolMismatch({
-        peerId: peer.id,
-        detail: `it speaks orchestration protocol ${protocol} (T3 ${descriptor.serverVersion}), this server speaks ${ORCHESTRATION_PROTOCOL_VERSION}`,
-      });
-    }
+    const mismatch = peerProtocolMismatch(peer, descriptor);
+    if (mismatch !== null) return yield* mismatch;
     const target = yield* resolveTarget(peer).pipe(Effect.mapError(unreachable(peer)));
     const pairing = yield* issueRemotePairingToken(target, sshAuth(peer), runner).pipe(
       Effect.mapError(unreachable(peer)),
@@ -421,27 +437,16 @@ const make = Effect.gen(function* () {
     session: PeerSession,
     command: PeerDispatchCommand,
   ) {
-    const rejected = (
-      cause: unknown,
-    ): Option.Option<PeerCommandRejected | PeerProtocolMismatch> => {
-      if (Predicate.isTagged(cause, "OrchestrationV2DispatchCommandError")) {
-        const { detail, message } = cause as unknown as { detail?: string; message: string };
-        return Option.some(
-          new PeerCommandRejected({
-            peerId: session.peer.id,
-            threadId: command.threadId,
-            detail: summarize(detail ?? message),
-          }),
-        );
-      }
-      return isUpgradeRequired(cause)
-        ? Option.some(
-            new PeerProtocolMismatch({
-              peerId: session.peer.id,
-              detail: "it refused the command socket for this server's orchestration protocol",
-            }),
-          )
-        : Option.none();
+    const rejected = (cause: unknown) => {
+      if (!Predicate.isTagged(cause, "OrchestrationV2DispatchCommandError")) return Option.none();
+      const { detail, message } = cause as unknown as { detail?: string; message: string };
+      return Option.some(
+        new PeerCommandRejected({
+          peerId: session.peer.id,
+          threadId: command.threadId,
+          detail: summarize(detail ?? message),
+        }),
+      );
     };
     // The environment API has no HTTP route for commands, so the prompt goes
     // over the same typed WebSocket RPC the clients use. One socket per send:
@@ -473,7 +478,25 @@ const make = Effect.gen(function* () {
       const client = yield* RpcClient.make(WsRpcGroup).pipe(Effect.provide(protocol));
       yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command);
     });
-    return yield* request(session.peer, DISPATCH_TIMEOUT, Effect.scoped(send), rejected);
+    return yield* request(session.peer, DISPATCH_TIMEOUT, Effect.scoped(send), rejected).pipe(
+      // A refused upgrade looks like a dead tunnel. Reconnecting cannot cure a
+      // protocol refusal, so it is told apart here, by status.
+      Effect.catchTag("PeerEnvironmentUnreachable", (error) =>
+        refusesSocketProtocol(httpClient, session.link).pipe(
+          Effect.flatMap((refused) =>
+            Effect.fail(
+              refused
+                ? new PeerProtocolMismatch({
+                    peerId: session.peer.id,
+                    detail:
+                      "it refused the command socket for this server's orchestration protocol",
+                  })
+                : error,
+            ),
+          ),
+        ),
+      ),
+    );
   });
 
   return PeerTransport.of({

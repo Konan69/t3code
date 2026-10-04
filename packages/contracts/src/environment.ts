@@ -222,6 +222,16 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;
 
+/**
+ * The orchestration protocol a host speaks. Servers shipped before
+ * negotiation do not advertise one and use the original wire protocol.
+ */
+export function environmentOrchestrationProtocolVersion(
+  descriptor: Pick<ExecutionEnvironmentDescriptor, "orchestrationProtocolVersion">,
+): number {
+  return descriptor.orchestrationProtocolVersion ?? 1;
+}
+
 export const RepositoryIdentityLocator = Schema.Struct({
   source: Schema.Literal("git-remote"),
   remoteName: TrimmedNonEmptyString,
