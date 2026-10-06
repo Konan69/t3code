@@ -28,10 +28,19 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import {
+  LOCAL_STAGED_UPDATE_DIRECTORY,
+  LOCAL_STAGED_UPDATE_FILE,
+  isSameLocalStagedUpdateState,
+  parseLocalStagedUpdateStatus,
+  parseRunningCommit,
+  reduceDesktopUpdateStateOnLocalStagedStatus,
+} from "./LocalStagedUpdate.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
@@ -49,6 +58,7 @@ import {
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
+const LOCAL_STAGED_UPDATE_POLL_INTERVAL = "10 seconds";
 const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
@@ -349,7 +359,44 @@ export const make = Effect.gen(function* () {
     Effect.map((appUpdateYmlConfig) => Option.isSome(appUpdateYmlConfig) || config.mockUpdates),
   );
 
+  // Fork: with no update feed, builds staged on this machine are the updates.
+  // The mode is on once the staging pipeline's status directory is found.
+  const electronApp = yield* Effect.serviceOption(ElectronApp.ElectronApp);
+  const localStagedUpdatesRef = yield* Ref.make(false);
+  const localStagedStatusPath = Option.orElse(config.localUpdateStatusPath, () =>
+    Option.map(config.localAppData, (directory) =>
+      environment.path.join(directory, LOCAL_STAGED_UPDATE_DIRECTORY, LOCAL_STAGED_UPDATE_FILE),
+    ),
+  );
+  const runningCommit = yield* fileSystem
+    .readFileString(environment.path.join(environment.appRoot, "package.json"))
+    .pipe(
+      Effect.flatMap(parseRunningCommit),
+      Effect.orElseSucceed(() => null),
+    );
+
+  const refreshLocalStagedUpdate = Effect.gen(function* () {
+    if (Option.isNone(localStagedStatusPath)) return;
+    const status = yield* fileSystem.readFileString(localStagedStatusPath.value, "utf-8").pipe(
+      Effect.flatMap(parseLocalStagedUpdateStatus),
+      Effect.orElseSucceed(() => Option.none()),
+    );
+    const checkedAt = yield* currentIsoTimestamp;
+    const current = yield* Ref.get(updateStateRef);
+    const next = reduceDesktopUpdateStateOnLocalStagedStatus(
+      current,
+      status,
+      checkedAt,
+      runningCommit,
+    );
+    // The poll runs often; only a real change is worth a broadcast.
+    yield* isSameLocalStagedUpdateState(current, next)
+      ? Ref.set(updateStateRef, next)
+      : setState(next);
+  }).pipe(Effect.withSpan("desktop.updates.refreshLocalStagedUpdate"));
+
   const resolveDisabledReason = Effect.gen(function* () {
+    if (yield* Ref.get(localStagedUpdatesRef)) return Option.none<string>();
     const hasFeedConfig = yield* hasUpdateFeedConfig;
     return Option.fromNullishOr(
       getAutoUpdateDisabledReason({
@@ -682,6 +729,34 @@ export const make = Effect.gen(function* () {
       }),
     ).pipe(Effect.withSpan("desktop.updates.installDownloadedUpdate"));
 
+  // Fork: the staged build is swapped in by apply-boat.sh, which waits for the
+  // app to exit. Installing is therefore a clean quit; that script's own
+  // window says when it is safe to open the app again.
+  const installLocalStagedUpdate = Effect.fn("desktop.updates.installLocalStagedUpdate")(function* (
+    expectedVersion?: string,
+  ) {
+    yield* refreshLocalStagedUpdate;
+    const state = yield* Ref.get(updateStateRef);
+    const ready =
+      state.status === "downloaded" &&
+      state.downloadedVersion !== null &&
+      (expectedVersion === undefined || state.downloadedVersion === expectedVersion);
+    if (!ready || Option.isNone(electronApp)) {
+      return { accepted: false, completed: false, failed: false, state };
+    }
+    yield* Ref.set(desktopState.quitting, true);
+    const instances = yield* pool.list;
+    yield* Effect.forEach(
+      instances,
+      (instance) => instance.stop({ timeout: Duration.seconds(5) }),
+      {
+        concurrency: "unbounded",
+      },
+    );
+    yield* electronApp.value.quit;
+    return { accepted: true, completed: false, failed: false, state };
+  });
+
   const installWithExpectedVersion = Effect.fn("desktop.updates.install")(function* (
     expectedVersion?: string,
   ) {
@@ -692,6 +767,9 @@ export const make = Effect.gen(function* () {
         failed: false,
         state: yield* Ref.get(updateStateRef),
       };
+    }
+    if (yield* Ref.get(localStagedUpdatesRef)) {
+      return yield* installLocalStagedUpdate(expectedVersion);
     }
     const result = yield* installDownloadedUpdate(expectedVersion);
     return {
@@ -926,6 +1004,25 @@ export const make = Effect.gen(function* () {
       const enabled = yield* shouldEnableAutoUpdates;
       yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
       if (!enabled) {
+        const stagingDirectoryExists =
+          Option.isNone(appUpdateYmlConfig) && Option.isSome(localStagedStatusPath)
+            ? yield* fileSystem
+                .exists(environment.path.dirname(localStagedStatusPath.value))
+                .pipe(Effect.orElseSucceed(() => false))
+            : false;
+        if (!stagingDirectoryExists) return;
+        yield* Ref.set(localStagedUpdatesRef, true);
+        yield* logUpdaterInfo("showing locally staged builds as updates", {
+          statusPath: Option.getOrUndefined(localStagedStatusPath),
+          runningCommit,
+        });
+        yield* refreshLocalStagedUpdate;
+        yield* Effect.sleep(LOCAL_STAGED_UPDATE_POLL_INTERVAL).pipe(
+          Effect.andThen(refreshLocalStagedUpdate),
+          Effect.forever,
+          Effect.ignoreCause,
+          Effect.forkScoped,
+        );
         return;
       }
       yield* Ref.set(updaterConfiguredRef, true);
@@ -997,6 +1094,9 @@ export const make = Effect.gen(function* () {
         const enabled = yield* shouldEnableAutoUpdates;
         yield* setState(createBaseUpdateState(nextChannel, enabled, environment));
 
+        if (yield* Ref.get(localStagedUpdatesRef)) {
+          yield* refreshLocalStagedUpdate;
+        }
         if (!enabled || !(yield* Ref.get(updaterConfiguredRef))) {
           return yield* Ref.get(updateStateRef);
         }
@@ -1012,6 +1112,10 @@ export const make = Effect.gen(function* () {
     }),
     check: Effect.fn("desktop.updates.check")(function* (reason: string) {
       yield* Effect.annotateCurrentSpan({ reason });
+      if (yield* Ref.get(localStagedUpdatesRef)) {
+        yield* refreshLocalStagedUpdate;
+        return { checked: true, state: yield* Ref.get(updateStateRef) };
+      }
       if (!(yield* Ref.get(updaterConfiguredRef))) {
         return {
           checked: false,

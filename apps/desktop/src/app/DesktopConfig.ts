@@ -72,6 +72,10 @@ export const DesktopConfig = Config.all({
   ),
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),
+  // Fork: where the local build pipeline publishes its status (see
+  // updates/LocalStagedUpdate.ts). Defaults to a file under %LOCALAPPDATA%.
+  localUpdateStatusPath: trimmedString("T3CODE_LOCAL_UPDATE_STATUS_PATH"),
+  localAppData: trimmedString("LOCALAPPDATA"),
   mockUpdates: optionalBoolean("T3CODE_DESKTOP_MOCK_UPDATES"),
   mockUpdateServerPort: Config.Port("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(
     Config.withDefault(3000),

@@ -1,6 +1,6 @@
 # T3 Code Cloudbox overlay
 
-`local/boat` tracks upstream through `6108ef3d3` (app version 0.0.45, orchestrator protocol 2). Merge `47004a882` adopts upstream orchestrator V2 and its provider implementations.
+`local/boat` tracks upstream through `4fb04fe7f` (2026-10-06; app version 0.0.45, orchestrator protocol 2, Effect 4.0.1). Merge `47004a882` adopts upstream orchestrator V2 and its provider implementations.
 
 ## Retained overlay
 
@@ -32,6 +32,12 @@ The runner tracks names in `t3_fork_migrations`, orders pending entries by id, a
 ## Updating the installed build
 
 After frontend integration and verification, build and stage with `~/t3code-staging/rebuild-boat.sh` and the merged app version in `~/t3code-staging/boat/version`. The `t3-apply-boat` systemd waiter logs to `~/t3code-staging/apply-boat.log` and installs once the user exits T3 Code; it never closes or restarts the app. The installer backs up replaced resources as `*.pre-overlay-<UTC>`, swaps the staged files, and disables the stock updater. `apply-boat.sh --rollback` waits the same way and restores the newest backup.
+
+### Updates shown in the app
+
+With no update feed the stock updater is off. `apps/desktop/src/updates/LocalStagedUpdate.ts` makes the staging pipeline the update source instead: `status.sh` copies its status to `%LOCALAPPDATA%\\t3code-updater\\status.json` (phase, version, commit, notes), and `DesktopUpdates` polls that file, so the sidebar pill and Settings show a build in progress, a staged build with what it adds, or "up to date". Its install action quits the app, which is what `apply-boat.sh` waits for. The mode is on only when that directory exists and `app-update.yml` names no provider.
+
+The Boat box keeps its own server under `~/.t3/runtime/versions/<version>`, keyed by version only. `rebuild-boat.sh` uploads the new archive (`seed-boat-runtime.sh --upload`) and `apply-boat.sh` switches the box to it after the install (`--activate`).
 
 ## Design skills
 
