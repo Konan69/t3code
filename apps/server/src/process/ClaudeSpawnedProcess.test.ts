@@ -6,7 +6,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import {
   CLAUDE_PROCESS_FORCE_KILL_AFTER,

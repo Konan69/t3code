@@ -5,6 +5,7 @@ import type {
   ProjectMutation,
   ProjectId,
   ProjectMachineMode,
+  ServerConfig,
   SourceControlDiscoveryResult,
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
@@ -41,6 +42,19 @@ export function resolveNewProjectMachineMode(
   threadMachines: boolean | undefined,
 ): ProjectMachineMode {
   return threadMachines === true ? "thread" : "off";
+}
+
+/**
+ * The Scratch folder an environment offers threads without a project right
+ * now, or null while it is not connected or has none.
+ */
+export function availableScratchWorkspaceRoot(
+  connectionPhase: EnvironmentConnectionPhase | null | undefined,
+  serverConfig: Pick<ServerConfig, "scratchWorkspaceRoot"> | null | undefined,
+): string | null {
+  return canCreateProjectInEnvironment(connectionPhase)
+    ? (serverConfig?.scratchWorkspaceRoot ?? null)
+    : null;
 }
 
 export type AddProjectRemoteSourceReadiness = Record<

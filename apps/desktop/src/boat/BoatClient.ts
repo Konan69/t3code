@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 
@@ -203,9 +203,10 @@ const make = Effect.gen(function* () {
 
   const status = (action: Parameters<typeof operate>[0], ttlSeconds?: number | null) =>
     operate(action, ttlSeconds).pipe(
-      Effect.catchTag("BoatRequestError", ({ message }) =>
-        Effect.succeed(DesktopBoatStatus.cases.RequestFailed.make({ message })),
-      ),
+      Effect.catchTags({
+        BoatRequestError: ({ message }) =>
+          Effect.succeed(DesktopBoatStatus.cases.RequestFailed.make({ message })),
+      }),
       Effect.catchCause(() =>
         Effect.succeed(
           DesktopBoatStatus.cases.RequestFailed.make({ message: "Boat request failed." }),

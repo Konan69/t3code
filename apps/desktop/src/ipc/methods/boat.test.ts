@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 
 import * as DesktopConfig from "../../app/DesktopConfig.ts";
 import * as BoatClient from "../../boat/BoatClient.ts";

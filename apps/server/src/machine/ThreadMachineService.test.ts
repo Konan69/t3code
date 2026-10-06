@@ -15,7 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";

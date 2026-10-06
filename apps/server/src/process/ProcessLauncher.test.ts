@@ -3,7 +3,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 
 import { makeHostProcessLauncher } from "./ProcessLauncher.ts";

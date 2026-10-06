@@ -62,10 +62,11 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
+import { mcpToolPresentation } from "../../provider/McpToolPresentation.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   expandPiSkillReference,
@@ -998,6 +999,12 @@ export function makePiAdapterV2(
         if (toolName === "edit" || toolName === "write") {
           const fileName = recordString(args, "path") ?? recordString(args, "file_path");
           if (fileName !== undefined) {
+            // edit reports a unified patch in its result details; write only
+            // carries the new content in its args. A failed call keeps its error.
+            const diffStr =
+              recordString(recordField(resultRecord, "details"), "patch") ??
+              (isError && outputText.trim().length > 0 ? outputText : undefined);
+            const newStr = toolName === "write" ? recordString(args, "content") : undefined;
             yield* emit({
               type: "turn_item.updated",
               driver: PI_PROVIDER,
@@ -1006,6 +1013,8 @@ export function makePiAdapterV2(
                 title: toolName,
                 type: "file_change",
                 fileName,
+                ...(diffStr === undefined ? {} : { diffStr }),
+                ...(newStr === undefined ? {} : { newStr }),
               },
             });
             return;
@@ -1018,6 +1027,7 @@ export function makePiAdapterV2(
             ...shared,
             title: toolName,
             type: "dynamic_tool",
+            ...mcpToolPresentation({ toolName }),
             toolName,
             input: args ?? {},
             ...(outputText.length > 0 ? { output: outputText } : {}),

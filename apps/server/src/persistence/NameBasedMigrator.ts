@@ -1,8 +1,8 @@
 import type * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
-import { MigrationError } from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import { MigrationError } from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 export type MigrationEntry = readonly [
   id: number,

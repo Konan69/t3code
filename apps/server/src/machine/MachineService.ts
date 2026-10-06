@@ -14,8 +14,8 @@ import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
-import type * as ChildProcess from "effect/unstable/process/ChildProcess";
-import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import type * as ChildProcess from "effect/process/ChildProcess";
+import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 export const GOLDEN_IMAGE_ALIAS = "golden";
 /**

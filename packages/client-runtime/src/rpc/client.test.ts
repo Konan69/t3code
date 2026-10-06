@@ -23,7 +23,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
-import { RpcClientError } from "effect/unstable/rpc";
+import { RpcClientError } from "effect/rpc";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -924,7 +924,9 @@ describe("environment RPC", () => {
   it.effect("fails at once for an environment the user switched off", () =>
     Effect.gen(function* () {
       const { supervisor: relay, wakeCount } = yield* makeRelayHarness();
-      const off = yield* SubscriptionRef.make<SupervisorConnectionState>(AVAILABLE_CONNECTION_STATE);
+      const off = yield* SubscriptionRef.make<SupervisorConnectionState>(
+        AVAILABLE_CONNECTION_STATE,
+      );
       const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({ ...relay, state: off });
       const error = yield* request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {} as never).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),

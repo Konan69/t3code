@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import { MachineService } from "../machine/MachineService.ts";
 import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";

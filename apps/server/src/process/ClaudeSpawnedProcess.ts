@@ -11,7 +11,7 @@ import type { ThreadId } from "@t3tools/contracts";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 
 import type { ProcessLaunchInput } from "../process/ProcessLauncher.ts";
 import { observeProviderProcessExit, type ProviderProcessExit } from "./ChildProcessExit.ts";

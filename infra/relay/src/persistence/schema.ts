@@ -78,6 +78,8 @@ export const relayEnvironmentLinks = pgTable(
     hostLifecycleEndpoint: text("host_lifecycle_endpoint"),
     hostLifecycleName: text("host_lifecycle_name"),
     hostLifecycleSecret: text("host_lifecycle_secret"),
+    // Opt-in: hold webhook requests while the environment is offline.
+    holdWebhooksWhileOffline: boolean("hold_webhooks_while_offline").notNull().default(false),
     createdByDeviceId: varchar("created_by_device_id", { length: 191 }),
     revokedAt: varchar("revoked_at", { length: 64 }),
     createdAt: varchar("created_at", { length: 64 }).notNull(),
@@ -101,6 +103,8 @@ export const relayManagedEndpointAllocations = pgTable(
     readyAt: varchar("ready_at", { length: 64 }),
     recoveryEnabledAt: varchar("recovery_enabled_at", { length: 64 }),
     recoveryEnvironmentPublicKey: text("recovery_environment_public_key"),
+    // Set when cleanup deletes the recorded tunnel; cleared when a tunnel is recorded again.
+    tunnelReleasedAt: varchar("tunnel_released_at", { length: 64 }),
     origin: jsonb("origin").$type<RelayManagedEndpointOrigin>(),
     generation: integer("generation").notNull().default(0),
     createdAt: varchar("created_at", { length: 64 }).notNull(),

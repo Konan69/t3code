@@ -1,6 +1,6 @@
 import type { ThreadId, ThreadMachineBinding } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import type { ProcessLauncherShape } from "./ProcessLauncher.ts";
 
