@@ -95,6 +95,8 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
       [54, "ProjectionThreadsAutoSettleDisabledAt"],
       [55, "OrchestrationV2"],
       [56, "RemoveRedundantProjectionIndexes"],
+      [57, "ScheduledTaskWebhooks"],
+      [58, "WebhookRelayDeliveries"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT default_model_selection_json, auto_pull FROM projection_projects`,
@@ -115,7 +117,7 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
     );
     const counts =
       yield* sql`SELECT COUNT(*) AS total, COUNT(DISTINCT name) AS distinct_names FROM t3_fork_migrations`;
-    assert.deepStrictEqual(counts, [{ total: 59, distinct_names: 59 }]);
+    assert.deepStrictEqual(counts, [{ total: 61, distinct_names: 61 }]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
@@ -205,12 +207,14 @@ it.effect(
 it.effect("upgrades V1 with applied fork ids 900–902 before importing V2", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrationsByName(migrationEntries.filter(([id]) => id !== 55 && id !== 56));
+    yield* runMigrationsByName(migrationEntries.filter(([id]) => id < 55 || id >= 900));
     yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, machine_mode, created_at, updated_at)
       VALUES ('machine-project', 'Machine', '/repo', '[]', 'thread', '2026-01-01', '2026-01-01')`;
     assert.deepStrictEqual(yield* runMigrations(), [
       [55, "OrchestrationV2"],
       [56, "RemoveRedundantProjectionIndexes"],
+      [57, "ScheduledTaskWebhooks"],
+      [58, "WebhookRelayDeliveries"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT json_extract(payload_json, '$.machineMode') AS mode FROM orchestration_events WHERE application_event_version = 2 AND event_type = 'project.created'`,

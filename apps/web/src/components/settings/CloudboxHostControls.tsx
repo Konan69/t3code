@@ -1,4 +1,8 @@
-import type { RelayWakePolicy, WakeStatusResult } from "@t3tools/client-runtime/connection";
+import {
+  connectionRoutes,
+  type RelayWakePolicy,
+  type WakeStatusResult,
+} from "@t3tools/client-runtime/connection";
 import { useAtomValue } from "@effect/atom-react";
 import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import {
@@ -149,14 +153,19 @@ function toneDotClassName(tone: HostTone): string {
 }
 
 function relayWakePolicy(environment: EnvironmentPresentation): RelayWakePolicy | null {
-  const target = environment.entry.target;
-  return target._tag === "RelayConnectionTarget" && target.wakePolicy !== undefined
-    ? target.wakePolicy
-    : null;
+  // The relay route keeps the policy even when a direct route is preferred.
+  for (const { target } of connectionRoutes(environment.entry)) {
+    if (target._tag === "RelayConnectionTarget" && target.wakePolicy !== undefined) {
+      return target.wakePolicy;
+    }
+  }
+  return null;
 }
 
 function isRelayEnvironment(environment: EnvironmentPresentation): boolean {
-  return environment.entry.target._tag === "RelayConnectionTarget";
+  return connectionRoutes(environment.entry).some(
+    ({ target }) => target._tag === "RelayConnectionTarget",
+  );
 }
 
 function normalizeEndpoint(value: string): string | null {

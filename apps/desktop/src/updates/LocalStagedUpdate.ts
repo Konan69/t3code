@@ -60,6 +60,7 @@ export function isSameLocalStagedUpdateState(
     left.releaseNotes.every(
       (note, index) =>
         note.version === right.releaseNotes[index]?.version &&
+        note.totalItems === right.releaseNotes[index]?.totalItems &&
         note.items.join("\n") === right.releaseNotes[index]?.items.join("\n"),
     )
   );

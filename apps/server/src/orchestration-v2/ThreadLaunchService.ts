@@ -320,6 +320,22 @@ const make = Effect.gen(function* () {
         input.workspaceStrategy.type === "existing_worktree"
           ? input.workspaceStrategy.worktreePath
           : null;
+      // A machine provisions the worktree itself, before the checkout step
+      // below settles the temporary name, so settle it here first: a branch
+      // named like the prefix makes `t3/<hash>` impossible to create.
+      if (
+        Option.isSome(threadMachines) &&
+        branch !== null &&
+        isTemporaryWorktreeBranch(branch) &&
+        (yield* git
+          .hasCommit({
+            cwd: project.workspaceRoot,
+            refName: `refs/heads/${WORKTREE_BRANCH_PREFIX}`,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))))
+      ) {
+        branch = flattenTemporaryWorktreeBranchName(branch);
+      }
       const machine = Option.isSome(threadMachines)
         ? yield* threadMachines.value
             .ensureForThread(

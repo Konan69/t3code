@@ -9,6 +9,7 @@ import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
+  isLocalDesktopBuildVersion,
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -40,7 +41,9 @@ export function shouldUseSidebarUpdateReleaseNotesPopover(
   showUpdateDetails: boolean,
   state: DesktopUpdateState | null,
 ): boolean {
-  return showUpdateDetails && state?.channel === "nightly" && state.releaseNotes.length > 0;
+  if (!showUpdateDetails || !state || state.releaseNotes.length === 0) return false;
+  // A locally staged build lists its changes whatever the channel setting says.
+  return state.channel === "nightly" || isLocalDesktopBuildVersion(state.releaseNotes[0]?.version);
 }
 
 export function handleSidebarUpdateReleaseNotesPopoverOpenChange(

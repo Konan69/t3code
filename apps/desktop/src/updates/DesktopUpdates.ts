@@ -736,25 +736,59 @@ export const make = Effect.gen(function* () {
     expectedVersion?: string,
   ) {
     yield* refreshLocalStagedUpdate;
+    const refused = Effect.map(Ref.get(updateStateRef), (state) => ({
+      accepted: false,
+      completed: false,
+      failed: false,
+      state,
+    }));
     const state = yield* Ref.get(updateStateRef);
     const ready =
       state.status === "downloaded" &&
       state.downloadedVersion !== null &&
       (expectedVersion === undefined || state.downloadedVersion === expectedVersion);
-    if (!ready || Option.isNone(electronApp)) {
-      return { accepted: false, completed: false, failed: false, state };
+    if (!ready || Option.isNone(electronApp) || (yield* Ref.get(desktopState.quitting))) {
+      return yield* refused;
     }
+    // One install at a time, and no channel change while it runs.
+    if (!(yield* tryStartUpdateAction("install"))) return yield* refused;
+
     yield* Ref.set(desktopState.quitting, true);
-    const instances = yield* pool.list;
-    yield* Effect.forEach(
-      instances,
-      (instance) => instance.stop({ timeout: Duration.seconds(5) }),
-      {
+    const quit = Effect.gen(function* () {
+      const instances = yield* pool.list;
+      yield* Effect.forEach(
+        instances,
+        (instance) => instance.stop({ timeout: Duration.seconds(5) }),
+        { concurrency: "unbounded", discard: true },
+      );
+      yield* electronApp.value.quit;
+    });
+    const exit = yield* Effect.exit(quit);
+    if (Exit.isFailure(exit)) {
+      // The app is not going away: bring the backends back and allow a retry.
+      yield* Ref.set(desktopState.quitting, false);
+      const instances = yield* pool.list;
+      yield* Effect.forEach(instances, (instance) => instance.start, {
         concurrency: "unbounded",
-      },
-    );
-    yield* electronApp.value.quit;
-    return { accepted: true, completed: false, failed: false, state };
+        discard: true,
+      }).pipe(Effect.ignoreCause);
+      yield* finishUpdateAction("install");
+      yield* logUpdaterError("Could not quit to install the locally staged build.");
+      const failedState = yield* updateState((current) => ({
+        ...current,
+        status: "error",
+        errorContext: "install",
+        message: "T3 Code could not quit to install the update. Quit it from the menu instead.",
+      }));
+      return { accepted: true, completed: false, failed: true, state: failedState };
+    }
+    // The UI reads a message on an accepted, unfinished action as its error.
+    return {
+      accepted: true,
+      completed: false,
+      failed: false,
+      state: { ...(yield* Ref.get(updateStateRef)), message: null },
+    };
   });
 
   const installWithExpectedVersion = Effect.fn("desktop.updates.install")(function* (
@@ -1004,8 +1038,14 @@ export const make = Effect.gen(function* () {
       const enabled = yield* shouldEnableAutoUpdates;
       yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
       if (!enabled) {
+        // Only the packaged Windows fork install has this pipeline; every
+        // other build keeps the stock disabled state.
         const stagingDirectoryExists =
-          Option.isNone(appUpdateYmlConfig) && Option.isSome(localStagedStatusPath)
+          environment.platform === "win32" &&
+          environment.isPackaged &&
+          !config.disableAutoUpdate &&
+          Option.isNone(appUpdateYmlConfig) &&
+          Option.isSome(localStagedStatusPath)
             ? yield* fileSystem
                 .exists(environment.path.dirname(localStagedStatusPath.value))
                 .pipe(Effect.orElseSucceed(() => false))

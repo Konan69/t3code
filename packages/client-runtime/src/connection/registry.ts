@@ -1091,9 +1091,13 @@ export const make = Effect.gen(function* () {
     environmentId: EnvironmentId,
   ) {
     const entry = yield* getEntry(environmentId);
-    return entry.target._tag === "RelayConnectionTarget" && entry.target.wakePolicy !== undefined
-      ? yield* fetchWakeStatus(entry.target.wakePolicy)
-      : ({ _tag: "NoPolicy" } as const);
+    // The relay route keeps the policy even when a direct route is preferred.
+    const policy = connectionRoutes(entry).flatMap((route) =>
+      route.target._tag === "RelayConnectionTarget" && route.target.wakePolicy !== undefined
+        ? [route.target.wakePolicy]
+        : [],
+    )[0];
+    return policy === undefined ? ({ _tag: "NoPolicy" } as const) : yield* fetchWakeStatus(policy);
   });
   const setEnabled = Effect.fn("EnvironmentRegistry.setEnabled")(function* (
     environmentId: EnvironmentId,

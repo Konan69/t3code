@@ -14,10 +14,18 @@ export function getDesktopUpdateDownloadedVersion(state: DesktopUpdateState): st
   return state.downloadedVersion ?? state.availableVersion;
 }
 
+/**
+ * Fork: a build staged on this machine is labelled `<version>+<commit>`. It has
+ * no published release, so it has no release page.
+ */
+export function isLocalDesktopBuildVersion(version: string | null | undefined): boolean {
+  return version?.includes("+") === true;
+}
+
 /** Release notes for an exact downloaded build; nightly suffixes are part of the tag. */
 export function getDesktopUpdateReleaseUrl(version: string | null): string | null {
   const normalizedVersion = version?.trim();
-  if (!normalizedVersion) return null;
+  if (!normalizedVersion || isLocalDesktopBuildVersion(normalizedVersion)) return null;
   return `${DESKTOP_RELEASE_TAG_URL}/v${encodeURIComponent(normalizedVersion)}`;
 }
 
