@@ -5,7 +5,6 @@ import {
   makeClaudeProcessLaunchInput,
 } from "../../process/ClaudeSpawnedProcess.ts";
 import * as Scope from "effect/Scope";
-import * as NodeCrypto from "node:crypto";
 
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
@@ -80,6 +79,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1427,11 +1427,17 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
 
 // Stable per run attempt, so a replayed prompt offer matches its recording.
 // Claude echoes it back as user_message_uuid on the turn that answers it.
-export function claudePromptUuid(attemptId: string): NonNullable<SDKUserMessage["uuid"]> {
-  const hex = NodeCrypto.createHash("sha256").update(`t3-claude-prompt:${attemptId}`).digest("hex");
+export const claudePromptUuid = Effect.fn("claudePromptUuid")(function* (attemptId: string) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode(`t3-claude-prompt:${attemptId}`))
+    .pipe(Effect.orDie);
+  const hex = Hex.encode(digest);
   const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
+  const uuid: NonNullable<SDKUserMessage["uuid"]> =
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  return uuid;
+});
 
 type ClaudeAssistantContentBlock = SDKAssistantMessage["message"]["content"][number];
 type ClaudeToolUseContentBlock = Extract<
@@ -3005,6 +3011,7 @@ export interface ClaudeAdapterV2Options {
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
+  readonly crypto: Crypto.Crypto;
   readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
@@ -3020,7 +3027,7 @@ export interface ClaudeAdapterV2Options {
 export function makeClaudeAdapterV2(
   adapterOptions: ClaudeAdapterV2Options,
 ): ProviderAdapter.ProviderAdapterV2Shape {
-  const { attachmentsDir, fileSystem, path, idAllocator, queryRunner } = adapterOptions;
+  const { attachmentsDir, fileSystem, path, crypto, idAllocator, queryRunner } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests ?? {
     offer: () => Effect.void,
   };
@@ -7172,7 +7179,8 @@ export function makeClaudeAdapterV2(
               },
             })
             .pipe(
-              Effect.tapError(() =>
+              // An interrupted open leaves the old process just as dead.
+              Effect.onError(() =>
                 // Same-native-thread replacement: the old process is already
                 // dead, so its process-scoped roster is not authoritative.
                 // First-ever failed open (no prior live query) must not invent
@@ -7272,6 +7280,11 @@ export function makeClaudeAdapterV2(
             const startedAt = yield* DateTime.now;
             const nativeThreadId = yield* getNativeThreadId(turnInput.providerThread);
             const nativeTurnId = `turn:${turnInput.attemptId}`;
+            const promptUuid = isClaudeProviderContinuationTurn(turnInput)
+              ? null
+              : yield* claudePromptUuid(turnInput.attemptId).pipe(
+                  Effect.provideService(Crypto.Crypto, crypto),
+                );
             const providerTurnId = idAllocator.derive.providerTurn({
               driver: CLAUDE_PROVIDER,
               nativeTurnId,
@@ -7328,9 +7341,7 @@ export function makeClaudeAdapterV2(
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),
               pendingSubagentLaunchesByToolUseId: new Map(),
-              promptUuid: isClaudeProviderContinuationTurn(turnInput)
-                ? null
-                : claudePromptUuid(turnInput.attemptId),
+              promptUuid,
               promptEcho: isClaudeProviderContinuationTurn(turnInput) ? "confirmed" : "pending",
               gatedFramesBeforeEcho: 0,
               heldRootFrames: [],
@@ -7339,20 +7350,20 @@ export function makeClaudeAdapterV2(
             // produced instead of prompting it again: drain the buffered wake
             // messages into this turn and let any still-streaming messages
             // follow live. The continuation prompt text never reaches the CLI.
-            const isContinuationTurn = context.promptUuid === null;
-            const userMessage = isContinuationTurn
-              ? null
-              : yield* makeClaudeUserMessageWithAttachments({
-                  text: applyClaudePromptEffortPrefix(
-                    turnInput.message.text,
-                    compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
-                  ),
-                  attachments: turnInput.message.attachments,
-                  attachmentsDir,
-                  fileSystem,
-                  skillNames: yield* userInvocableSkillNames(turnInput.runtimePolicy.cwd),
-                  uuid: claudePromptUuid(turnInput.attemptId),
-                });
+            const userMessage =
+              promptUuid === null
+                ? null
+                : yield* makeClaudeUserMessageWithAttachments({
+                    text: applyClaudePromptEffortPrefix(
+                      turnInput.message.text,
+                      compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
+                    ),
+                    attachments: turnInput.message.attachments,
+                    attachmentsDir,
+                    fileSystem,
+                    skillNames: yield* userInvocableSkillNames(turnInput.runtimePolicy.cwd),
+                    uuid: promptUuid,
+                  });
             const querySession = yield* openQuery(turnInput, nativeThreadId);
             yield* Ref.set(activeTurn, context);
             yield* emitProviderEvent({
@@ -7936,6 +7947,7 @@ export function makeClaudeAdapterV2(
 
 export type ClaudeAdapterV2DriverEnv =
   | ClaudeAgentSdkQueryRunner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path
@@ -7956,6 +7968,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     const baseEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
     const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
     const path = yield* Path.Path;
+    const crypto = yield* Crypto.Crypto;
     const binaryPath = yield* resolveClaudeSdkExecutablePath(
       expandHomePath(config.binaryPath),
       claudeEnvironment,
@@ -7967,6 +7980,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
       path,
+      crypto,
       idAllocator,
       queryRunner,
       continuationRequests,
@@ -8000,6 +8014,7 @@ export const ClaudeAdapterV2Driver: ProviderAdapterDriver<
 const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   const hostEnvironment = yield* HostProcessEnvironment;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const queryRunner = yield* ClaudeAgentSdkQueryRunner;
@@ -8013,6 +8028,7 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
     attachmentsDir: serverConfig.attachmentsDir,
     fileSystem,
     path,
+    crypto,
     idAllocator,
     queryRunner,
     continuationRequests,
@@ -8023,6 +8039,7 @@ const layer: Layer.Layer<
   ProviderAdapter.ProviderAdapterV2,
   never,
   | ClaudeAgentSdkQueryRunner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path

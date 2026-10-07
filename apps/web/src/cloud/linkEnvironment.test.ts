@@ -241,7 +241,6 @@ describe("web cloud link environment client", () => {
         "http://127.0.0.1:3000/api/connect/preferences",
       );
       expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(bodyText(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
         publishAgentActivity: true,
       });
@@ -291,7 +290,6 @@ describe("web cloud link environment client", () => {
       expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
         "http://127.0.0.1:3000/api/connect/link-proof",
       );
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(bodyText(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
         challenge: "challenge",
         endpoint: {
@@ -342,11 +340,9 @@ describe("web cloud link environment client", () => {
         }),
       );
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(bodyText(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
         managedTunnelsEnabled: false,
       });
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(bodyText(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
         endpoint: { providerKind: "manual" },
       });

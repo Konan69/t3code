@@ -1,6 +1,6 @@
 # T3 Code Cloudbox overlay
 
-`local/boat` tracks upstream through `4fb04fe7f` (2026-10-06; app version 0.0.45, orchestrator protocol 2, Effect 4.0.1). Merge `47004a882` adopts upstream orchestrator V2 and its provider implementations.
+`local/boat` tracks upstream through nightly `v0.0.46-nightly.20261007.2774` (2026-10-07; app version 0.0.45, orchestrator protocol 2, Effect 4.0.1). Merge `47004a882` adopts upstream orchestrator V2 and its provider implementations.
 
 ## Retained overlay
 
@@ -10,6 +10,8 @@
 - WSL hardening: native ext4 staging, isolated shell startup, content-addressed runtime handling, IPv4 discovery from the default route (avoids Docker interfaces), and Windows loopback selection when WSL uses mirrored networking.
 - Fork SSH releases download versioned Linux archives and `SHA256SUMS` from `https://github.com/Konan69/t3code/releases/download/v$VERSION/`, without fallback to upstream releases.
 - The staged installer disables the stock updater so upstream nightlies cannot replace the fork installation.
+
+- `preview_set_cookie`: since upstream moved every preview tab (headless and desktop) behind the server's CDP browser, the tool runs as the `setCookie` case in `apps/server/src/preview/ServerBrowser.ts` (`Network.setCookie`). The desktop IPC `setCookie` method is still present but no longer on the tool's path.
 
 ## Superseded overlay and UI handoff
 
