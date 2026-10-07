@@ -127,19 +127,77 @@ const encodeHeader = (header) => {
   return [sizePickle.toBuffer(), headerBuffer];
 };
 
+// Writes an archive that holds exactly the files its header lists. `contents`
+// maps header nodes to new bytes; every other file is copied from
+// `sourceArchive`. Replaced and removed files leave nothing behind, so the
+// archive does not grow from one build to the next. Files are streamed one at
+// a time: the server archive is too large for a single Buffer write.
+const writeCompactArchive = ({ sourceArchive, rawHeader, contents, targetArchive }) => {
+  const packedDataStart = 8 + rawHeader.headerSize;
+  const plan = [];
+  let nextOffset = 0n;
+  const visit = (directory) => {
+    for (const node of Object.values(directory.files)) {
+      if (node.files !== undefined) {
+        visit(node);
+      } else if (node.link === undefined && node.unpacked !== true) {
+        const content = contents.get(node);
+        const size = content === undefined ? node.size : content.length;
+        plan.push({
+          content,
+          sourcePosition:
+            content === undefined ? BigInt(packedDataStart) + BigInt(node.offset) : undefined,
+          size,
+        });
+        node.offset = nextOffset.toString();
+        nextOffset += BigInt(size);
+      }
+    }
+  };
+  visit(rawHeader.header);
+
+  const [sizeBuffer, headerBuffer] = encodeHeader(rawHeader.header);
+  const source = fs.openSync(sourceArchive, "r");
+  const target = fs.openSync(targetArchive, "w");
+  try {
+    fs.writeSync(target, sizeBuffer);
+    fs.writeSync(target, headerBuffer);
+    const chunk = Buffer.allocUnsafe(8 * 1024 * 1024);
+    for (const { content, sourcePosition, size } of plan) {
+      if (content !== undefined) {
+        fs.writeSync(target, content);
+        continue;
+      }
+      let copied = 0;
+      while (copied < size) {
+        const read = fs.readSync(
+          source,
+          chunk,
+          0,
+          Math.min(chunk.length, size - copied),
+          sourcePosition + BigInt(copied),
+        );
+        if (read === 0) fail(`installed archive is truncated: ${sourceArchive}`);
+        fs.writeSync(target, chunk, 0, read);
+        copied += read;
+      }
+    }
+  } finally {
+    fs.closeSync(source);
+    fs.closeSync(target);
+  }
+  asar.uncache(targetArchive);
+};
+
 const rewriteArchiveSubtree = ({ sourceArchive, archiveRoot, buildDirectory, stagedArchive }) => {
   const rawHeader = asar.getRawHeader(sourceArchive);
-  const archiveBuffer = fs.readFileSync(sourceArchive);
-  const packedDataStart = 8 + rawHeader.headerSize;
-  const packedData = archiveBuffer.subarray(packedDataStart);
   const subtree = getHeaderNode(rawHeader.header, archiveRoot);
   if (subtree.files === undefined) {
     fail(`installed archive entry is not a directory: ${archiveRoot}`);
   }
 
   const replacementFiles = {};
-  const replacements = [];
-  let nextOffset = BigInt(packedData.length);
+  const contents = new Map();
 
   for (const buildFile of walkFiles(buildDirectory)) {
     const relativePath = path.relative(buildDirectory, buildFile).split(path.sep).join("/");
@@ -161,27 +219,17 @@ const rewriteArchiveSubtree = ({ sourceArchive, archiveRoot, buildDirectory, sta
     }
 
     const content = fs.readFileSync(buildFile);
-    directory[fileName] = {
-      size: content.length,
-      offset: nextOffset.toString(),
-      integrity: fileIntegrity(content),
-    };
-    nextOffset += BigInt(content.length);
-    replacements.push(content);
+    const node = { size: content.length, offset: "0", integrity: fileIntegrity(content) };
+    directory[fileName] = node;
+    contents.set(node, content);
   }
 
   subtree.files = replacementFiles;
-  const [sizeBuffer, headerBuffer] = encodeHeader(rawHeader.header);
-  fs.writeFileSync(
-    stagedArchive,
-    Buffer.concat([sizeBuffer, headerBuffer, packedData, ...replacements]),
-  );
+  writeCompactArchive({ sourceArchive, rawHeader, contents, targetArchive: stagedArchive });
 };
 
 const stampArchiveVersion = (archivePath, version) => {
   const rawHeader = asar.getRawHeader(archivePath);
-  const archiveBuffer = fs.readFileSync(archivePath);
-  const packedDataStart = 8 + rawHeader.headerSize;
   const packageNode = getHeaderNode(rawHeader.header, "package.json");
   const packageJson = JSON.parse(asar.extractFile(archivePath, "package.json").toString("utf8"));
   const commit = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
@@ -193,13 +241,15 @@ const stampArchiveVersion = (archivePath, version) => {
     `${JSON.stringify({ ...packageJson, version, buildVersion: version, t3codeCommitHash: commit.stdout.trim() }, null, 2)}\n`,
   );
   packageNode.size = content.length;
-  packageNode.offset = String(archiveBuffer.length - packedDataStart);
   packageNode.integrity = fileIntegrity(content);
-  const [sizeBuffer, headerBuffer] = encodeHeader(rawHeader.header);
-  fs.writeFileSync(
-    archivePath,
-    Buffer.concat([sizeBuffer, headerBuffer, archiveBuffer.subarray(packedDataStart), content]),
-  );
+  const stamped = `${archivePath}.stamped`;
+  writeCompactArchive({
+    sourceArchive: archivePath,
+    rawHeader,
+    contents: new Map([[packageNode, content]]),
+    targetArchive: stamped,
+  });
+  fs.renameSync(stamped, archivePath);
   asar.uncache(archivePath);
 };
 
@@ -491,6 +541,18 @@ try {
   const installedChecksum = fs.readFileSync(wslRuntimeChecksumPath, "utf8").trim();
   if (installedChecksum !== sha256File(wslRuntimeArchivePath)) {
     fail("installed WSL runtime checksum does not match its archive");
+  }
+  // Each build leaves a backup of what it replaced; only the newest two are kept.
+  for (const target of [archivePath, serverTarget, wslRuntimeArchivePath, wslRuntimeChecksumPath]) {
+    const prefix = `${path.basename(target)}.pre-local-`;
+    const backups = fs
+      .readdirSync(resourcesDir)
+      .filter((entry) => entry.startsWith(prefix))
+      .sort();
+    // The oldest is the stock archive the first build started from; it stays too.
+    for (const stale of backups.slice(1, -2)) {
+      fs.rmSync(path.join(resourcesDir, stale), { force: true });
+    }
   }
   console.log(`[local-bundle] installed; archive backup: ${archiveBackup}`);
   console.log(`[local-bundle] installed; server backup: ${serverBackup}`);
