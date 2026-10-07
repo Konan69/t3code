@@ -92,17 +92,19 @@ describe("LocalStagedUpdate", () => {
       const older = release("0.0.46-nightly.20261005.2702", "2026-10-05T23:30:00Z", "- old");
       const newer = release("0.0.46-nightly.20261006.2735", "2026-10-06T17:12:08Z", "- new thing");
       const stable = release("0.0.46", "2026-10-07T00:00:00Z", "- stable thing");
+      const preview = release("0.0.47-preview.20261007.1", "2026-10-07T01:00:00Z", "- preview");
       const reduceWith = (releases: ReadonlyArray<typeof older> | null) =>
         parseLocalStagedUpdateStatus(raw).pipe(
           Effect.map((parsed) =>
             reduceDesktopUpdateStateOnLocalStagedStatus(initial, parsed, checkedAt, "aaaaaaa", {
               checkedAt: "2026-10-07T10:00:00.000Z",
               releases,
+              failed: releases === null,
             }),
           ),
         );
 
-      const behind = yield* reduceWith([stable, newer, older]);
+      const behind = yield* reduceWith([preview, stable, newer, older]);
       assert.equal(behind.status, "up-to-date");
       assert.equal(behind.availableVersion, null);
       assert.equal(behind.checkedAt, "2026-10-07T10:00:00.000Z");

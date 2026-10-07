@@ -8,7 +8,9 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
-const UPSTREAM_RELEASES_URL = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=30";
+// One page of 100 is the API's maximum and covers weeks of nightlies; a build
+// further behind than that under-counts the newer releases.
+const UPSTREAM_RELEASES_URL = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=100";
 
 const GitHubReleases = Schema.Array(
   Schema.Struct({
@@ -27,10 +29,25 @@ export interface UpstreamRelease {
   readonly note: string | null;
 }
 
-/** The last answer from GitHub. `releases` is null when the request failed. */
+/**
+ * The last answer from GitHub. `releases` is null when no request has
+ * succeeded yet; `checkedAt` is the time of the last request that did, or of
+ * the first failure. `failed` is true when the latest request did not succeed.
+ */
 export interface UpstreamReleasesSnapshot {
   readonly checkedAt: string;
   readonly releases: ReadonlyArray<UpstreamRelease> | null;
+  readonly failed: boolean;
+}
+
+/** Whether a release version belongs to the channel; preview cuts belong to neither. */
+export function isUpstreamReleaseOnChannel(
+  version: string,
+  channel: "latest" | "nightly",
+): boolean {
+  return channel === "nightly"
+    ? /^[^-+]+-nightly\.\d{8}\.\d+$/.test(version)
+    : /^[^-+]+$/.test(version);
 }
 
 export const fetchUpstreamReleases = (

@@ -64,7 +64,15 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
   const result = yield* updates.check("menu");
   const updateState = result.state;
 
-  if (updateState.status === "up-to-date") {
+  if (updateState.status === "up-to-date" && updateState.message) {
+    // Fork: the check compared this build with the T3 team's releases.
+    yield* electronDialog.showMessageBox({
+      type: "info",
+      title: "Update check",
+      message: updateState.message,
+      buttons: ["OK"],
+    });
+  } else if (updateState.status === "up-to-date") {
     yield* electronDialog.showMessageBox({
       type: "info",
       title: "You're up to date!",

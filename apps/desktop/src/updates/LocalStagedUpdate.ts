@@ -12,8 +12,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
-import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
-import type { UpstreamReleasesSnapshot } from "./UpstreamReleases.ts";
+import { isUpstreamReleaseOnChannel, type UpstreamReleasesSnapshot } from "./UpstreamReleases.ts";
 
 export const LOCAL_STAGED_UPDATE_DIRECTORY = "t3code-updater";
 export const LOCAL_STAGED_UPDATE_FILE = "status.json";
@@ -138,11 +137,12 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
         message: "Could not reach GitHub to compare with the T3 team's releases.",
       };
     }
-    const onChannel = upstream.releases.filter(
-      (release) => resolveDefaultDesktopUpdateChannel(release.version) === state.channel,
+    const onChannel = upstream.releases.filter((release) =>
+      isUpstreamReleaseOnChannel(release.version, state.channel),
     );
     const latest = onChannel[0];
     if (latest === undefined) return { ...installed, checkedAt: upstream.checkedAt };
+    const stale = upstream.failed ? " GitHub could not be reached on the last check." : "";
     const baseTime = Date.parse(upstreamBase.committedAt);
     const newer = onChannel.filter((release) => Date.parse(release.createdAt) > baseTime);
     const channelName = state.channel === "nightly" ? "nightly" : "stable release";
@@ -154,7 +154,7 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
       return {
         ...installed,
         checkedAt: upstream.checkedAt,
-        message: `Your build includes the latest ${channelName}, ${latest.version}.`,
+        message: `Your build includes the latest ${channelName}, ${latest.version}.${stale}`,
       };
     }
     const upcoming = normalizeDesktopUpdateReleaseNotes(newer, latest.version, state.channel);
@@ -163,7 +163,7 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
       checkedAt: upstream.checkedAt,
       releaseNotes: upcoming.releaseNotes,
       omittedReleaseCount: upcoming.omittedReleaseCount,
-      message: `${newer.length} newer ${newerNoun} from the T3 team, latest ${latest.version}. Not in your build yet.`,
+      message: `${newer.length} newer ${newerNoun} from the T3 team, latest ${latest.version}. Not in your build yet.${stale}`,
     };
   }
   switch (phase) {

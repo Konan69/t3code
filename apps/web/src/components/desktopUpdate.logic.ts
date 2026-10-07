@@ -114,6 +114,10 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
       typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
     return `Downloading update${progress}`;
   }
+  if (state.status === "downloaded" && isLocalDesktopBuildVersion(state.downloadedVersion)) {
+    // Fork: nothing was downloaded; the build was made on this machine.
+    return `Fork build ${state.downloadedVersion} was built on this machine and is ready. Nothing is installed until you click to restart and install.`;
+  }
   if (state.status === "downloaded") {
     return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
   }

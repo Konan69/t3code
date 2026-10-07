@@ -382,16 +382,20 @@ export const make = Effect.gen(function* () {
   // check. Absent in tests and wherever no HTTP client is provided.
   const httpClient = yield* Effect.serviceOption(HttpClient.HttpClient);
   const upstreamReleasesRef = yield* Ref.make<UpstreamReleasesSnapshot | null>(null);
+  const upstreamReleasesMutex = yield* Semaphore.make(1);
+  // One request at a time, so an older answer never replaces a newer one.
   const refreshUpstreamReleases = Effect.gen(function* () {
     if (Option.isNone(httpClient)) return;
     const releases = yield* fetchUpstreamReleases(httpClient.value);
     const previous = yield* Ref.get(upstreamReleasesRef);
-    yield* Ref.set(upstreamReleasesRef, {
-      checkedAt: yield* currentIsoTimestamp,
-      // A failed request keeps the last good list; the time still moves on.
-      releases: releases ?? previous?.releases ?? null,
-    });
-  });
+    yield* Ref.set(
+      upstreamReleasesRef,
+      releases === null && previous !== null && previous.releases !== null
+        ? // A failed request keeps the last good list and the time it was fetched.
+          { ...previous, failed: true }
+        : { checkedAt: yield* currentIsoTimestamp, releases, failed: releases === null },
+    );
+  }).pipe(upstreamReleasesMutex.withPermits(1));
 
   const refreshLocalStagedUpdate = Effect.gen(function* () {
     if (Option.isNone(localStagedStatusPath)) return;
@@ -1080,9 +1084,10 @@ export const make = Effect.gen(function* () {
         yield* refreshLocalStagedUpdate;
         yield* refreshUpstreamReleases.pipe(
           Effect.andThen(refreshLocalStagedUpdate),
+          // A failed round must not end the loop.
+          Effect.ignoreCause,
           Effect.andThen(Effect.sleep(UPSTREAM_RELEASES_CHECK_INTERVAL)),
           Effect.forever,
-          Effect.ignoreCause,
           Effect.forkScoped,
         );
         yield* Effect.sleep(LOCAL_STAGED_UPDATE_POLL_INTERVAL).pipe(
