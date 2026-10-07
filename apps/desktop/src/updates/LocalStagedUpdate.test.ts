@@ -77,6 +77,55 @@ describe("LocalStagedUpdate", () => {
     }),
   );
 
+  it.effect("compares the running build with the T3 team's releases", () =>
+    Effect.gen(function* () {
+      const raw = status("installed", {
+        commit: "aaaaaaa",
+        notes: ["fork change"],
+        upstreamBase: { commit: "ccccccc", committedAt: "2026-10-06T09:33:40Z" },
+      });
+      const release = (version: string, createdAt: string, note: string) => ({
+        version,
+        createdAt,
+        note,
+      });
+      const older = release("0.0.46-nightly.20261005.2702", "2026-10-05T23:30:00Z", "- old");
+      const newer = release("0.0.46-nightly.20261006.2735", "2026-10-06T17:12:08Z", "- new thing");
+      const stable = release("0.0.46", "2026-10-07T00:00:00Z", "- stable thing");
+      const reduceWith = (releases: ReadonlyArray<typeof older> | null) =>
+        parseLocalStagedUpdateStatus(raw).pipe(
+          Effect.map((parsed) =>
+            reduceDesktopUpdateStateOnLocalStagedStatus(initial, parsed, checkedAt, "aaaaaaa", {
+              checkedAt: "2026-10-07T10:00:00.000Z",
+              releases,
+            }),
+          ),
+        );
+
+      const behind = yield* reduceWith([stable, newer, older]);
+      assert.equal(behind.status, "up-to-date");
+      assert.equal(behind.availableVersion, null);
+      assert.equal(behind.checkedAt, "2026-10-07T10:00:00.000Z");
+      assert.deepStrictEqual(behind.releaseNotes, [
+        { version: "0.0.46-nightly.20261006.2735", items: ["new thing"], totalItems: 1 },
+      ]);
+      assert.include(behind.message ?? "", "1 newer nightly build from the T3 team");
+
+      const current = yield* reduceWith([older]);
+      assert.equal(
+        current.message,
+        "Your build includes the latest nightly, 0.0.46-nightly.20261005.2702.",
+      );
+      assert.deepStrictEqual(current.releaseNotes, [
+        { version: "0.0.45+aaaaaaa", items: ["fork change"], totalItems: 1 },
+      ]);
+
+      const offline = yield* reduceWith(null);
+      assert.include(offline.message ?? "", "Could not reach GitHub");
+      assert.equal(offline.releaseNotes.length, 1);
+    }),
+  );
+
   it.effect("reports a failed build and treats an unreadable file as no update", () =>
     Effect.gen(function* () {
       const failed = yield* reduce(status("failed"));

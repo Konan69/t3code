@@ -9,6 +9,7 @@ import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
+  getDesktopUpdateStandingMessage,
   isLocalDesktopBuildVersion,
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
@@ -43,8 +44,9 @@ export function shouldUseSidebarUpdateReleaseNotesPopover(
 ): boolean {
   if (!state || state.releaseNotes.length === 0) return false;
   // A locally built version lists its changes whatever the channel setting says,
-  // and keeps listing them once it is installed and no update is pending.
+  // and an up-to-date fork build keeps listing them or the upstream releases it lacks.
   if (isLocalDesktopBuildVersion(state.releaseNotes[0]?.version)) return true;
+  if (state.status === "up-to-date") return true;
   return showUpdateDetails && state.channel === "nightly";
 }
 
@@ -154,7 +156,7 @@ function SidebarUpdateControl() {
       : "Update available"
     : showCheckIcon
       ? "Checking for updates…"
-      : "Check for updates";
+      : (getDesktopUpdateStandingMessage(state) ?? "Check for updates");
   const disabled = showCheckIcon
     ? true
     : showUpdateDetails

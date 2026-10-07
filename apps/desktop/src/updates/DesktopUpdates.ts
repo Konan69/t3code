@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/http";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -41,6 +42,7 @@ import {
   parseRunningCommit,
   reduceDesktopUpdateStateOnLocalStagedStatus,
 } from "./LocalStagedUpdate.ts";
+import { fetchUpstreamReleases, type UpstreamReleasesSnapshot } from "./UpstreamReleases.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
@@ -59,6 +61,7 @@ import {
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
 const LOCAL_STAGED_UPDATE_POLL_INTERVAL = "10 seconds";
+const UPSTREAM_RELEASES_CHECK_INTERVAL = "1 hour";
 const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
@@ -375,19 +378,37 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => null),
     );
 
+  // The T3 team's releases, asked for at startup, hourly and on every manual
+  // check. Absent in tests and wherever no HTTP client is provided.
+  const httpClient = yield* Effect.serviceOption(HttpClient.HttpClient);
+  const upstreamReleasesRef = yield* Ref.make<UpstreamReleasesSnapshot | null>(null);
+  const refreshUpstreamReleases = Effect.gen(function* () {
+    if (Option.isNone(httpClient)) return;
+    const releases = yield* fetchUpstreamReleases(httpClient.value);
+    const previous = yield* Ref.get(upstreamReleasesRef);
+    yield* Ref.set(upstreamReleasesRef, {
+      checkedAt: yield* currentIsoTimestamp,
+      // A failed request keeps the last good list; the time still moves on.
+      releases: releases ?? previous?.releases ?? null,
+    });
+  });
+
   const refreshLocalStagedUpdate = Effect.gen(function* () {
     if (Option.isNone(localStagedStatusPath)) return;
     const status = yield* fileSystem.readFileString(localStagedStatusPath.value, "utf-8").pipe(
       Effect.flatMap(parseLocalStagedUpdateStatus),
       Effect.orElseSucceed(() => Option.none()),
     );
-    const checkedAt = yield* currentIsoTimestamp;
     const current = yield* Ref.get(updateStateRef);
+    const upstream = yield* Ref.get(upstreamReleasesRef);
+    // `checkedAt` is the last real check, not the last poll of the status file.
+    const checkedAt = upstream?.checkedAt ?? current.checkedAt ?? (yield* currentIsoTimestamp);
     const next = reduceDesktopUpdateStateOnLocalStagedStatus(
       current,
       status,
       checkedAt,
       runningCommit,
+      upstream,
     );
     // The poll runs often; only a real change is worth a broadcast.
     yield* isSameLocalStagedUpdateState(current, next)
@@ -1057,6 +1078,13 @@ export const make = Effect.gen(function* () {
           runningCommit,
         });
         yield* refreshLocalStagedUpdate;
+        yield* refreshUpstreamReleases.pipe(
+          Effect.andThen(refreshLocalStagedUpdate),
+          Effect.andThen(Effect.sleep(UPSTREAM_RELEASES_CHECK_INTERVAL)),
+          Effect.forever,
+          Effect.ignoreCause,
+          Effect.forkScoped,
+        );
         yield* Effect.sleep(LOCAL_STAGED_UPDATE_POLL_INTERVAL).pipe(
           Effect.andThen(refreshLocalStagedUpdate),
           Effect.forever,
@@ -1153,6 +1181,7 @@ export const make = Effect.gen(function* () {
     check: Effect.fn("desktop.updates.check")(function* (reason: string) {
       yield* Effect.annotateCurrentSpan({ reason });
       if (yield* Ref.get(localStagedUpdatesRef)) {
+        yield* refreshUpstreamReleases;
         yield* refreshLocalStagedUpdate;
         return { checked: true, state: yield* Ref.get(updateStateRef) };
       }

@@ -4,7 +4,8 @@ import { ExternalLinkIcon } from "lucide-react";
 import {
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
-  getInstalledLocalBuildReleaseNote,
+  getDesktopUpdateStandingMessage,
+  getUpToDateReleaseNotes,
   isLocalDesktopBuildVersion,
 } from "../desktopUpdate.logic";
 import { openDesktopUpdateReleaseNotes } from "../desktopUpdate.toast";
@@ -55,10 +56,14 @@ export function SidebarUpdateReleaseNotes({
   readonly tooltip: string;
 }) {
   const isLocalBuild = isLocalDesktopBuildVersion(state.releaseNotes[0]?.version);
-  if ((state.channel !== "nightly" && !isLocalBuild) || state.releaseNotes.length === 0) {
+  const upToDate = getUpToDateReleaseNotes(state);
+  if (
+    (state.channel !== "nightly" && !isLocalBuild && !upToDate) ||
+    state.releaseNotes.length === 0
+  ) {
     return <>{tooltip}</>;
   }
-  const installedLocalBuild = getInstalledLocalBuildReleaseNote(state);
+  const standing = getDesktopUpdateStandingMessage(state);
 
   return (
     <div className="flex max-h-[calc(var(--available-height)-0.5rem)] min-h-0 w-fit max-w-[min(24rem,calc(100vw-2rem))] flex-col text-left">
@@ -74,11 +79,13 @@ export function SidebarUpdateReleaseNotes({
               </div>
             ) : null}
           </div>
-        ) : installedLocalBuild ? (
+        ) : upToDate ? (
           <div>
-            <div className="whitespace-nowrap text-sm leading-5 font-medium">Up to date</div>
+            <div className="whitespace-nowrap text-sm leading-5 font-medium">
+              {upToDate.kind === "upcoming" ? "Newer upstream builds" : "Up to date"}
+            </div>
             <div className="mt-0.5 text-xs leading-4 text-muted-foreground">
-              {installedLocalBuild.version}
+              {standing ?? upToDate.releaseNotes[0]?.version}
             </div>
           </div>
         ) : (
@@ -99,11 +106,13 @@ export function SidebarUpdateReleaseNotes({
               {index > 0 && <Separator className="my-3" />}
               <section>
                 <h3 className="text-foreground text-xs leading-4 font-semibold">
-                  {installedLocalBuild
+                  {upToDate?.kind === "installed"
                     ? "What's in this build"
-                    : index === 0
-                      ? "What's changed"
-                      : `Changes in ${releaseNote.version}`}
+                    : upToDate?.kind === "upcoming"
+                      ? `Changes in ${releaseNote.version}`
+                      : index === 0
+                        ? "What's changed"
+                        : `Changes in ${releaseNote.version}`}
                 </h3>
                 <ul className="mt-2 space-y-1.5 pl-4 text-xs leading-5 text-popover-foreground/90">
                   {keyReleaseNoteItems(releaseNote.items).map(({ item, key }) => (

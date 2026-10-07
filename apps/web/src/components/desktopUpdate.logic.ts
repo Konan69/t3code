@@ -23,15 +23,30 @@ export function isLocalDesktopBuildVersion(version: string | null | undefined): 
 }
 
 /**
- * Fork: the change list of the locally built version that is running. The
- * desktop keeps it on the state after the install, when nothing is pending.
+ * Fork: release notes carried by an up-to-date state. Stock builds never have
+ * any there. A locally built version lists what the running build brought; any
+ * other version is a T3 team release that the running build does not have yet.
  */
-export function getInstalledLocalBuildReleaseNote(
-  state: DesktopUpdateState | null,
-): DesktopUpdateState["releaseNotes"][number] | null {
-  if (state?.status !== "up-to-date") return null;
-  const releaseNote = state.releaseNotes[0];
-  return releaseNote && isLocalDesktopBuildVersion(releaseNote.version) ? releaseNote : null;
+export function getUpToDateReleaseNotes(state: DesktopUpdateState | null): {
+  readonly kind: "installed" | "upcoming";
+  readonly releaseNotes: DesktopUpdateState["releaseNotes"];
+} | null {
+  if (state?.status !== "up-to-date" || state.releaseNotes.length === 0) return null;
+  return {
+    kind: isLocalDesktopBuildVersion(state.releaseNotes[0]?.version) ? "installed" : "upcoming",
+    releaseNotes: state.releaseNotes,
+  };
+}
+
+/** Fork: where the running build stands against upstream, with the time of that check. */
+export function getDesktopUpdateStandingMessage(state: DesktopUpdateState | null): string | null {
+  if (state?.status !== "up-to-date" || !state.message) return null;
+  const checkedAt = state.checkedAt ? new Date(state.checkedAt) : null;
+  const checked =
+    checkedAt && !Number.isNaN(checkedAt.getTime())
+      ? ` Checked ${checkedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`
+      : "";
+  return `${state.message}${checked}`;
 }
 
 /** Release notes for an exact downloaded build; nightly suffixes are part of the tag. */

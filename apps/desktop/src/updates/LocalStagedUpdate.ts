@@ -11,6 +11,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
+import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
+import type { UpstreamReleasesSnapshot } from "./UpstreamReleases.ts";
+
 export const LOCAL_STAGED_UPDATE_DIRECTORY = "t3code-updater";
 export const LOCAL_STAGED_UPDATE_FILE = "status.json";
 
@@ -25,6 +29,10 @@ export const LocalStagedUpdateStatus = Schema.Struct({
   // The commit the staged build was made from; absent while nothing is staged.
   commit: Schema.optional(Schema.String),
   notes: Schema.optional(Schema.Array(Schema.String)),
+  // The newest upstream commit merged into that build.
+  upstreamBase: Schema.optional(
+    Schema.Struct({ commit: Schema.String, committedAt: Schema.String }),
+  ),
 });
 export type LocalStagedUpdateStatus = typeof LocalStagedUpdateStatus.Type;
 
@@ -45,7 +53,7 @@ export const parseRunningCommit = (packageJson: string): Effect.Effect<string | 
     Effect.orElseSucceed(() => null),
   );
 
-/** True when two states would render the same; `checkedAt` alone is not a change. */
+/** True when two states would render the same. */
 export function isSameLocalStagedUpdateState(
   left: DesktopUpdateState,
   right: DesktopUpdateState,
@@ -53,6 +61,8 @@ export function isSameLocalStagedUpdateState(
   return (
     left.enabled === right.enabled &&
     left.status === right.status &&
+    left.checkedAt === right.checkedAt &&
+    left.omittedReleaseCount === right.omittedReleaseCount &&
     left.availableVersion === right.availableVersion &&
     left.downloadedVersion === right.downloadedVersion &&
     left.message === right.message &&
@@ -78,12 +88,18 @@ export function localStagedUpdateVersion(status: LocalStagedUpdateStatus): strin
  * app that is running: a staged build made from that same commit is already
  * installed, whatever the file's phase still says. That build keeps its change
  * list, so the app can still show what the running build brought.
+ *
+ * `upstream` is the T3 team's release list. When the running build's upstream
+ * base is known, the state also says whether newer releases exist on the
+ * followed channel and lists their notes. They are shown, never offered:
+ * a fork build is made on this machine, not downloaded.
  */
 export function reduceDesktopUpdateStateOnLocalStagedStatus(
   state: DesktopUpdateState,
   status: Option.Option<LocalStagedUpdateStatus>,
   checkedAt: string,
   runningCommit: string | null,
+  upstream: UpstreamReleasesSnapshot | null = null,
 ): DesktopUpdateState {
   const base: DesktopUpdateState = {
     ...state,
@@ -111,7 +127,44 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
   // A build in progress is never shown: nothing is offered until it is staged.
   if (phase === "building") return base;
   if (phase === "installed" || isRunning) {
-    return isRunning ? { ...base, releaseNotes } : base;
+    if (!isRunning) return base;
+    const installed = { ...base, releaseNotes };
+    const upstreamBase = status.value.upstreamBase;
+    if (upstream === null || upstreamBase === undefined) return installed;
+    if (upstream.releases === null) {
+      return {
+        ...installed,
+        checkedAt: upstream.checkedAt,
+        message: "Could not reach GitHub to compare with the T3 team's releases.",
+      };
+    }
+    const onChannel = upstream.releases.filter(
+      (release) => resolveDefaultDesktopUpdateChannel(release.version) === state.channel,
+    );
+    const latest = onChannel[0];
+    if (latest === undefined) return { ...installed, checkedAt: upstream.checkedAt };
+    const baseTime = Date.parse(upstreamBase.committedAt);
+    const newer = onChannel.filter((release) => Date.parse(release.createdAt) > baseTime);
+    const channelName = state.channel === "nightly" ? "nightly" : "stable release";
+    const newerNoun =
+      state.channel === "nightly"
+        ? `nightly build${newer.length === 1 ? "" : "s"}`
+        : `stable release${newer.length === 1 ? "" : "s"}`;
+    if (newer.length === 0) {
+      return {
+        ...installed,
+        checkedAt: upstream.checkedAt,
+        message: `Your build includes the latest ${channelName}, ${latest.version}.`,
+      };
+    }
+    const upcoming = normalizeDesktopUpdateReleaseNotes(newer, latest.version, state.channel);
+    return {
+      ...installed,
+      checkedAt: upstream.checkedAt,
+      releaseNotes: upcoming.releaseNotes,
+      omittedReleaseCount: upcoming.omittedReleaseCount,
+      message: `${newer.length} newer ${newerNoun} from the T3 team, latest ${latest.version}. Not in your build yet.`,
+    };
   }
   switch (phase) {
     case "ready":
