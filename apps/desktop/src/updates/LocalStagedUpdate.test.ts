@@ -45,11 +45,12 @@ describe("LocalStagedUpdate", () => {
     }),
   );
 
-  it.effect("shows a running build as downloading", () =>
+  it.effect("shows nothing while a build is in progress", () =>
     Effect.gen(function* () {
-      const state = yield* reduce(status("building"));
-      assert.equal(state.status, "downloading");
-      assert.equal(state.availableVersion, "0.0.45");
+      const state = yield* reduce(status("building", { commit: "bbbbbbb", notes: ["one"] }));
+      assert.equal(state.status, "up-to-date");
+      assert.equal(state.availableVersion, null);
+      assert.deepStrictEqual(state.releaseNotes, []);
     }),
   );
 

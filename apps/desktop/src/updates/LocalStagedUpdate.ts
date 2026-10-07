@@ -108,12 +108,12 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
     notes.length === 0
       ? []
       : [{ version, items: notes.slice(0, MAX_NOTES), totalItems: notes.length }];
-  if (phase === "installed" || (isRunning && phase !== "building")) {
+  // A build in progress is never shown: nothing is offered until it is staged.
+  if (phase === "building") return base;
+  if (phase === "installed" || isRunning) {
     return isRunning ? { ...base, releaseNotes } : base;
   }
   switch (phase) {
-    case "building":
-      return { ...base, status: "downloading", availableVersion: version, releaseNotes, message };
     case "ready":
     case "installing":
       return {
