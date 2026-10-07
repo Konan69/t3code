@@ -44,6 +44,17 @@ describe("sidebar update release notes popover", () => {
     ).toBe(false);
   });
 
+  it("lists a locally built version's changes while up to date and on any channel", () => {
+    const installed: DesktopUpdateState = {
+      ...nightlyState,
+      status: "up-to-date",
+      channel: "latest",
+      availableVersion: null,
+      releaseNotes: [{ version: "0.0.45+11cb5c76ea", items: ["one"], totalItems: 1 }],
+    };
+    expect(shouldUseSidebarUpdateReleaseNotesPopover(false, installed)).toBe(true);
+  });
+
   it("cancels trigger presses without canceling other open reasons", () => {
     const cancelTriggerPress = vi.fn();
     const cancelHover = vi.fn();

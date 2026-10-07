@@ -57,6 +57,7 @@ import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateInstallConfirmationMessage,
+  getInstalledLocalBuildReleaseNote,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
@@ -421,6 +422,8 @@ function AboutVersionSection() {
     action === "download" || action === "install"
       ? "Update available."
       : "Current version of the application.";
+  // Fork: a locally built version has no release page, so its changes are listed here.
+  const installedLocalBuild = getInstalledLocalBuildReleaseNote(updateState);
 
   return (
     <>
@@ -444,7 +447,27 @@ function AboutVersionSection() {
             {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
           </Tooltip>
         }
-      />
+      >
+        {installedLocalBuild ? (
+          <section className="pb-2">
+            <h4 className="text-xs leading-4 font-semibold text-foreground">
+              What's in this build{" "}
+              <code className="text-2xs font-medium text-muted-foreground">
+                {installedLocalBuild.version}
+              </code>
+            </h4>
+            <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto pl-4 text-xs leading-5 text-muted-foreground">
+              {installedLocalBuild.items.map((item, index) => (
+                // The list is fixed for a build and may repeat a line.
+                // oxlint-disable-next-line react/no-array-index-key
+                <li className="list-disc break-words" key={`${index}:${item}`}>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+      </SettingsRow>
       {hasDesktopBridge ? (
         <SettingsRow
           title="Update track"

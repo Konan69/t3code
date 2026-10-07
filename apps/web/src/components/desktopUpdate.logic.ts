@@ -22,6 +22,18 @@ export function isLocalDesktopBuildVersion(version: string | null | undefined): 
   return version?.includes("+") === true;
 }
 
+/**
+ * Fork: the change list of the locally built version that is running. The
+ * desktop keeps it on the state after the install, when nothing is pending.
+ */
+export function getInstalledLocalBuildReleaseNote(
+  state: DesktopUpdateState | null,
+): DesktopUpdateState["releaseNotes"][number] | null {
+  if (state?.status !== "up-to-date") return null;
+  const releaseNote = state.releaseNotes[0];
+  return releaseNote && isLocalDesktopBuildVersion(releaseNote.version) ? releaseNote : null;
+}
+
 /** Release notes for an exact downloaded build; nightly suffixes are part of the tag. */
 export function getDesktopUpdateReleaseUrl(version: string | null): string | null {
   const normalizedVersion = version?.trim();

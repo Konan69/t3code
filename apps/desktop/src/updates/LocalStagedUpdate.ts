@@ -14,7 +14,8 @@ import * as Schema from "effect/Schema";
 export const LOCAL_STAGED_UPDATE_DIRECTORY = "t3code-updater";
 export const LOCAL_STAGED_UPDATE_FILE = "status.json";
 
-const MAX_NOTES = 8;
+// rebuild-boat.sh already caps the list; the popover and the settings row scroll.
+const MAX_NOTES = 40;
 
 export const LocalStagedUpdateStatus = Schema.Struct({
   phase: Schema.Literals(["building", "ready", "installing", "installed", "failed"]),
@@ -75,7 +76,8 @@ export function localStagedUpdateVersion(status: LocalStagedUpdateStatus): strin
 /**
  * The update state for a staging status. `runningCommit` is the commit of the
  * app that is running: a staged build made from that same commit is already
- * installed, whatever the file's phase still says.
+ * installed, whatever the file's phase still says. That build keeps its change
+ * list, so the app can still show what the running build brought.
  */
 export function reduceDesktopUpdateStateOnLocalStagedStatus(
   state: DesktopUpdateState,
@@ -101,13 +103,14 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
 
   const { phase, message, notes = [], commit } = status.value;
   const isRunning = commit !== undefined && runningCommit !== null && commit === runningCommit;
-  if (phase === "installed" || (isRunning && phase !== "building")) return base;
-
   const version = localStagedUpdateVersion(status.value);
   const releaseNotes =
     notes.length === 0
       ? []
       : [{ version, items: notes.slice(0, MAX_NOTES), totalItems: notes.length }];
+  if (phase === "installed" || (isRunning && phase !== "building")) {
+    return isRunning ? { ...base, releaseNotes } : base;
+  }
   switch (phase) {
     case "building":
       return { ...base, status: "downloading", availableVersion: version, releaseNotes, message };

@@ -4,6 +4,8 @@ import { ExternalLinkIcon } from "lucide-react";
 import {
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
+  getInstalledLocalBuildReleaseNote,
+  isLocalDesktopBuildVersion,
 } from "../desktopUpdate.logic";
 import { openDesktopUpdateReleaseNotes } from "../desktopUpdate.toast";
 import { Separator } from "../ui/separator";
@@ -52,9 +54,11 @@ export function SidebarUpdateReleaseNotes({
   readonly state: DesktopUpdateState;
   readonly tooltip: string;
 }) {
-  if (state.channel !== "nightly" || state.releaseNotes.length === 0) {
+  const isLocalBuild = isLocalDesktopBuildVersion(state.releaseNotes[0]?.version);
+  if ((state.channel !== "nightly" && !isLocalBuild) || state.releaseNotes.length === 0) {
     return <>{tooltip}</>;
   }
+  const installedLocalBuild = getInstalledLocalBuildReleaseNote(state);
 
   return (
     <div className="flex max-h-[calc(var(--available-height)-0.5rem)] min-h-0 w-fit max-w-[min(24rem,calc(100vw-2rem))] flex-col text-left">
@@ -69,6 +73,13 @@ export function SidebarUpdateReleaseNotes({
                 {state.availableVersion}
               </div>
             ) : null}
+          </div>
+        ) : installedLocalBuild ? (
+          <div>
+            <div className="whitespace-nowrap text-sm leading-5 font-medium">Up to date</div>
+            <div className="mt-0.5 text-xs leading-4 text-muted-foreground">
+              {installedLocalBuild.version}
+            </div>
           </div>
         ) : (
           <div className="text-sm leading-5 font-medium">{tooltip}</div>
@@ -88,7 +99,11 @@ export function SidebarUpdateReleaseNotes({
               {index > 0 && <Separator className="my-3" />}
               <section>
                 <h3 className="text-foreground text-xs leading-4 font-semibold">
-                  {index === 0 ? "What's changed" : `Changes in ${releaseNote.version}`}
+                  {installedLocalBuild
+                    ? "What's in this build"
+                    : index === 0
+                      ? "What's changed"
+                      : `Changes in ${releaseNote.version}`}
                 </h3>
                 <ul className="mt-2 space-y-1.5 pl-4 text-xs leading-5 text-popover-foreground/90">
                   {keyReleaseNoteItems(releaseNote.items).map(({ item, key }) => (

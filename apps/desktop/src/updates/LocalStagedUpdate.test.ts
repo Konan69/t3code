@@ -63,6 +63,19 @@ describe("LocalStagedUpdate", () => {
     }),
   );
 
+  it.effect("keeps the change list of the build that is running", () =>
+    Effect.gen(function* () {
+      const running = yield* reduce(status("installed", { commit: "aaaaaaa", notes: ["one"] }));
+      assert.equal(running.status, "up-to-date");
+      assert.equal(running.downloadedVersion, null);
+      assert.deepStrictEqual(running.releaseNotes, [
+        { version: "0.0.45+aaaaaaa", items: ["one"], totalItems: 1 },
+      ]);
+      const other = yield* reduce(status("installed", { commit: "bbbbbbb", notes: ["one"] }));
+      assert.deepStrictEqual(other.releaseNotes, []);
+    }),
+  );
+
   it.effect("reports a failed build and treats an unreadable file as no update", () =>
     Effect.gen(function* () {
       const failed = yield* reduce(status("failed"));

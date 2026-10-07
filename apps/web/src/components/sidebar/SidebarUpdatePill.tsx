@@ -41,9 +41,11 @@ export function shouldUseSidebarUpdateReleaseNotesPopover(
   showUpdateDetails: boolean,
   state: DesktopUpdateState | null,
 ): boolean {
-  if (!showUpdateDetails || !state || state.releaseNotes.length === 0) return false;
-  // A locally staged build lists its changes whatever the channel setting says.
-  return state.channel === "nightly" || isLocalDesktopBuildVersion(state.releaseNotes[0]?.version);
+  if (!state || state.releaseNotes.length === 0) return false;
+  // A locally built version lists its changes whatever the channel setting says,
+  // and keeps listing them once it is installed and no update is pending.
+  if (isLocalDesktopBuildVersion(state.releaseNotes[0]?.version)) return true;
+  return showUpdateDetails && state.channel === "nightly";
 }
 
 export function handleSidebarUpdateReleaseNotesPopoverOpenChange(
@@ -395,7 +397,7 @@ function SidebarUpdateControl() {
         {showReleaseNotesPopover && state ? (
           <PopoverPopup
             align="center"
-            aria-label="Nightly update release notes"
+            aria-label="Update release notes"
             initialFocus={false}
             onKeyDownCapture={(event) => {
               if (
