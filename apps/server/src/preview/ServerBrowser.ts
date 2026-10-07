@@ -1552,6 +1552,23 @@ const make = Effect.gen(function* () {
           return statusWithTitle(tab, request.agentSessionId);
         });
       }
+      case "setCookie": {
+        // Fork: a cookie is usually set before the first navigation. A session
+        // with no tab yet gets a blank hidden one, in the same browser context
+        // the tabs opened afterwards use.
+        if (
+          request.agentSessionId &&
+          request.tabId === undefined &&
+          latestThreadTab(request.threadId, request.agentSessionId) === undefined
+        ) {
+          await runOperation({
+            ...request,
+            operation: "open",
+            input: { open: false, reuseExistingTab: false },
+          });
+        }
+        break;
+      }
       case "recordingStop": {
         if (
           !request.tabIdExplicit &&
