@@ -6,21 +6,12 @@ import * as Layer from "effect/Layer";
 import type * as PlatformError from "effect/PlatformError";
 import type * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import type {
+  ProcessLaunchInput,
+  ProcessLauncherShape,
+} from "@t3tools/provider-core/server/ProviderProcessLauncher";
 
-export interface ProcessLaunchInput {
-  readonly threadId?: ThreadId | undefined;
-  readonly command: string;
-  readonly args: ReadonlyArray<string>;
-  readonly cwd?: string | undefined;
-  readonly env?: NodeJS.ProcessEnv | undefined;
-  readonly extendEnv?: boolean | undefined;
-  readonly shell?: boolean | string | undefined;
-  readonly detached?: boolean | undefined;
-  readonly forceKillAfter?: Duration.Input | undefined;
-  readonly stdin?: ChildProcess.CommandInput | ChildProcess.StdinConfig | undefined;
-  readonly stdout?: ChildProcess.CommandOutput | ChildProcess.StdoutConfig | undefined;
-  readonly stderr?: ChildProcess.CommandOutput | ChildProcess.StderrConfig | undefined;
-}
+export type { ProcessLaunchInput, ProcessLauncherShape };
 
 export function processLaunchLogFields(input: ProcessLaunchInput) {
   return {
@@ -30,20 +21,6 @@ export function processLaunchLogFields(input: ProcessLaunchInput) {
     cwd: input.cwd,
     envKeys: Object.keys(input.env ?? {}).sort(),
   };
-}
-
-export interface ProcessLauncherShape {
-  readonly hostReachableUrl?: (input: {
-    readonly threadId?: ThreadId;
-    readonly url: string;
-  }) => Effect.Effect<string, PlatformError.PlatformError>;
-  readonly launch: (
-    input: ProcessLaunchInput,
-  ) => Effect.Effect<
-    ChildProcessSpawner.ChildProcessHandle,
-    PlatformError.PlatformError,
-    Scope.Scope
-  >;
 }
 
 export class ProcessLauncher extends Context.Service<ProcessLauncher, ProcessLauncherShape>()(

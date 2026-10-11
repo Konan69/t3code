@@ -190,8 +190,12 @@ const makeTestRelay = Effect.fnUntraced(function* (
         catchUp.shellSnapshotReads += 1;
         return { schemaVersion: 2, snapshotSequence: 1, threads: [], archivedThreads: [] };
       }),
+    readShellSnapshot: unused,
     ensureLegacyTranscript: unused,
     dispatch: unused,
+    searchThread: () => Effect.die("unused"),
+    searchThreadStream: () => Stream.empty,
+    getThreadHistoryPage: () => Effect.die("unused"),
     getTimelinePage: () => Effect.die("Unused timeline read"),
     getMessageCount: () => Effect.die("unused message count"),
     getTurnItem: () => Effect.die("unused turn item read"),
@@ -205,7 +209,10 @@ const makeTestRelay = Effect.fnUntraced(function* (
     listProjectThreads: unused,
     sendToThread: unused,
     waitForThread: unused,
+    settleAfterRun: unused,
+    settleThread: unused,
     interruptThread: unused,
+    stopWorkflow: () => Effect.die("unused stopWorkflow"),
     stopDelegatedTasks: unused,
     getThreadEventSequence: unused,
     recoverDelegatedTask: unused,

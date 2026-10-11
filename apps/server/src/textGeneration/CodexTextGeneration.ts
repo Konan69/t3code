@@ -17,12 +17,16 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
-import { expandHomePath } from "../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { codexExecLaunchArgs, resolveCodexLaunchArgs } from "../provider/codexLaunchArgs.ts";
-import * as TextGenerationOperations from "./TextGenerationOperations.ts";
-import { normalizeCliError, toJsonSchemaObject } from "./TextGenerationUtils.ts";
+import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
+import {
+  normalizeCliError,
+  toJsonSchemaObject,
+} from "@t3tools/provider-core/server/textGenerationUtils";
 import { codexModelFamily, getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const CODEX_TIMEOUT_MS = 180_000;
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -146,6 +150,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     outputSchema: outputSchemaJson,
     modelSelection,
     attachments,
+    investigate,
   }: TextGenerationOperations.Request<S>): Effect.fn.Return<
     S["Type"],
     TextGenerationError,
@@ -211,7 +216,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         env: {
           ...effectiveEnvironment,
           ...(effectiveConfig.homePath
-            ? { CODEX_HOME: expandHomePath(effectiveConfig.homePath) }
+            ? {
+                CODEX_HOME: expandHomePath(
+                  effectiveConfig.homePath,
+                  yield* HostProcess.HomeDirectory,
+                ),
+              }
             : {}),
         },
         cwd,
@@ -263,7 +273,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     return yield* Effect.gen(function* () {
       yield* runCodexCommand().pipe(
         Effect.scoped,
-        Effect.timeoutOption(CODEX_TIMEOUT_MS),
+        // The read-only sandbox already holds an investigation to reading; it only needs longer.
+        Effect.timeoutOption(investigate?.timeoutMs ?? CODEX_TIMEOUT_MS),
         Effect.flatMap(
           Option.match({
             onNone: () =>

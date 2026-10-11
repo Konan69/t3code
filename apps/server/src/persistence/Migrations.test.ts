@@ -97,6 +97,9 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
       [56, "RemoveRedundantProjectionIndexes"],
       [57, "ScheduledTaskWebhooks"],
       [58, "WebhookRelayDeliveries"],
+      [59, "McpAppModelContext"],
+      [60, "ThreadSnapshotWindowIndexes"],
+      [61, "PullRequestReviewGuides"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT default_model_selection_json, auto_pull FROM projection_projects`,
@@ -117,7 +120,7 @@ it.effect("recovers upstream migrations from legacy reused ids and preserves mod
     );
     const counts =
       yield* sql`SELECT COUNT(*) AS total, COUNT(DISTINCT name) AS distinct_names FROM t3_fork_migrations`;
-    assert.deepStrictEqual(counts, [{ total: 61, distinct_names: 61 }]);
+    assert.deepStrictEqual(counts, [{ total: 64, distinct_names: 64 }]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
@@ -215,6 +218,9 @@ it.effect("upgrades V1 with applied fork ids 900–902 before importing V2", () 
       [56, "RemoveRedundantProjectionIndexes"],
       [57, "ScheduledTaskWebhooks"],
       [58, "WebhookRelayDeliveries"],
+      [59, "McpAppModelContext"],
+      [60, "ThreadSnapshotWindowIndexes"],
+      [61, "PullRequestReviewGuides"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT json_extract(payload_json, '$.machineMode') AS mode FROM orchestration_events WHERE application_event_version = 2 AND event_type = 'project.created'`,

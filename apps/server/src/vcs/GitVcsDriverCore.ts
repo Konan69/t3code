@@ -29,9 +29,10 @@ import {
   type VcsRef,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
@@ -920,12 +921,52 @@ const collectOutput = Effect.fnUntraced(function* (
   };
 });
 
+/**
+ * Git on Windows cannot create or delete a path longer than MAX_PATH (260)
+ * unless `core.longpaths` is set. The OS-level LongPathsEnabled setting does not
+ * cover it, and git leaves it off by default, so deep worktrees fail to check
+ * out and fail midway through removal.
+ *
+ * Passed through `GIT_CONFIG_*` rather than `-c` so argv stays the same on every
+ * platform and nothing is written to the user's config. The entry is appended
+ * after any inherited ones. Windows env names are case-insensitive, so the
+ * inherited count is found regardless of casing and updated under its own name.
+ * A count git would reject is left alone so git still reports it.
+ */
+export const windowsLongPathConfigEnv = (
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv => {
+  if (platform !== "win32") {
+    return {};
+  }
+  const countKey =
+    Object.keys(env).find((key) => key.toUpperCase() === "GIT_CONFIG_COUNT") ?? "GIT_CONFIG_COUNT";
+  const inherited = env[countKey];
+  if (
+    inherited !== undefined &&
+    inherited !== "" &&
+    // Git parses the count with strtoul: leading whitespace, an optional sign
+    // (only -0 is non-negative), digits, and nothing after them.
+    /^[ \t\r\n\v\f]*(?:\+?\d+|-0+)/.exec(inherited)?.[0] !== inherited
+  ) {
+    return {};
+  }
+  const count = inherited === undefined || inherited === "" ? 0 : Number.parseInt(inherited, 10);
+  return {
+    [countKey]: String(count + 1),
+    [`GIT_CONFIG_KEY_${count}`]: "core.longpaths",
+    [`GIT_CONFIG_VALUE_${count}`]: "true",
+  };
+};
+
 export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig.ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  const hostPlatform = yield* HostProcess.Platform;
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -950,18 +991,24 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               }),
           ),
         );
+        const env = {
+          ...process.env,
+          // Status polling runs beside the user's own git commands; without this,
+          // `git status` takes index.lock to save its refreshed index.
+          GIT_OPTIONAL_LOCKS: "0",
+          ...input.env,
+          ...trace2Monitor.env,
+        };
+        const spawnEnv = { ...env, ...windowsLongPathConfigEnv(hostPlatform, env) };
+        const resolved = yield* resolveSpawnCommand("git", [], { env: spawnEnv });
+        // A git.cmd wrapper would need cmd.exe, which cuts multi-line commit
+        // messages at the first newline; leave that case to Node's lookup.
+        const executable = resolved.shell ? "git" : resolved.command;
         const child = yield* commandSpawner
           .spawn(
-            ChildProcess.make("git", commandInput.args, {
+            ChildProcess.make(executable, commandInput.args, {
               cwd: commandInput.cwd,
-              env: {
-                ...process.env,
-                // Status polling runs beside the user's own git commands; without this,
-                // `git status` takes index.lock to save its refreshed index.
-                GIT_OPTIONAL_LOCKS: "0",
-                ...input.env,
-                ...trace2Monitor.env,
-              },
+              env: spawnEnv,
             }),
           )
           .pipe(
@@ -2492,9 +2539,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ["rev-parse", "HEAD"],
       true,
     ).pipe(Effect.map((stdout) => stdout.trim()));
+    // After a successful pull, HEAD before and after decides the result, so its output is not
+    // needed. A large fast-forward's diffstat can exceed the output cap, which must not fail a
+    // pull Git applied.
     yield* executeGit("GitVcsDriver.pullCurrentBranch.pull", cwd, ["pull", "--ff-only"], {
       timeoutMs: 30_000,
       fallbackErrorDetail: "git pull failed",
+      appendTruncationMarker: true,
     });
     const afterSha = yield* runGitStdout(
       "GitVcsDriver.pullCurrentBranch.afterSha",
@@ -2637,7 +2688,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       "hash-object",
       "-t",
       "tree",
-      (yield* HostProcessPlatform) === "win32" ? "NUL" : "/dev/null",
+      (yield* HostProcess.Platform) === "win32" ? "NUL" : "/dev/null",
     ]);
     return stdout.trim();
   });
@@ -3402,6 +3453,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         options?.worktreesDirectory ?? "",
         worktreesDir,
         path,
+        yield* HostProcess.HomeDirectory,
       );
       if (parentDir === null) {
         return yield* new GitCommandError({
@@ -3783,7 +3835,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
-    const args = ["worktree", "remove"];
+    // Git refuses to remove a worktree with untracked files unless forced, but
+    // its check honors `status.showUntrackedFiles=no` and would delete them.
+    const args = ["-c", "status.showUntrackedFiles=normal", "worktree", "remove"];
     if (input.force) {
       args.push("--force");
     }

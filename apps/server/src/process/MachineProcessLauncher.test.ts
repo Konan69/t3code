@@ -6,6 +6,7 @@ import {
   type ThreadMachineBinding,
 } from "@t3tools/contracts";
 import { it } from "@effect/vitest";
+import { agentScopeCommand } from "@t3tools/shared/AgentScope";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Sink from "effect/Sink";
@@ -120,6 +121,32 @@ describe("MachineProcessLauncher", () => {
         "http://10.42.0.18:4301/",
       );
       expect(hostReachableInput).toEqual({ binding, url: "http://127.0.0.1:4301" });
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("sends a scope-wrapped command into the machine without the host wrapper", () => {
+    const handle = makeHandle();
+    let machineInput: { readonly command: string; readonly args: ReadonlyArray<string> } | undefined;
+    const host = makeHostProcessLauncher(ChildProcessSpawner.make(() => Effect.succeed(handle)));
+    const exec = (input: { readonly command: string; readonly args: ReadonlyArray<string> }) => {
+      machineInput = input;
+      return Effect.succeed(handle);
+    };
+    const machines = { exec, hostReachableUrl: () => Effect.succeed("") };
+    const bound = makeMachineProcessLauncher(host, machines, {
+      getThread: () => Effect.succeed(thread),
+    });
+    const unbound = makeMachineProcessLauncher(host, machines, {
+      getThread: () => Effect.succeed({ ...thread, machine: null }),
+    });
+
+    return Effect.gen(function* () {
+      const wrapped = agentScopeCommand({ command: "/host/bin/codex", args: ["app-server"] });
+      yield* bound.launch({ threadId, command: wrapped.command, args: wrapped.args });
+      expect(machineInput?.command).toBe("/host/bin/codex");
+      expect(machineInput?.args).toEqual(["app-server"]);
+      expect(yield* bound.runsInMachine!(threadId)).toBe(true);
+      expect(yield* unbound.runsInMachine!(threadId)).toBe(false);
     }).pipe(Effect.scoped);
   });
 

@@ -1,3 +1,4 @@
+import { unwrapAgentScopeCommand } from "@t3tools/shared/AgentScope";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
@@ -43,12 +44,20 @@ export const makeMachineProcessLauncher = (
                 .pipe(Effect.mapError((error) => processError(error, "hostReachableUrl"))),
         ),
       ),
+    runsInMachine: (threadId) =>
+      resolveBinding(threadId).pipe(
+        Effect.map((binding) => binding !== undefined),
+        Effect.orElseSucceed(() => false),
+      ),
     launch: (input) =>
       resolveBinding(input.threadId).pipe(
         Effect.flatMap((binding) => {
           if (binding === undefined) {
             return host.launch(input);
           }
+          // AgentScope leaves machine threads unwrapped; a caller that wrapped
+          // anyway must not send this host's scope wrapper into the guest.
+          const guest = unwrapAgentScopeCommand({ command: input.command, args: input.args });
           return Effect.logDebug("Launching provider child inside thread machine.", {
             ...processLaunchLogFields(input),
             machineName: binding.machineName,
@@ -57,8 +66,8 @@ export const makeMachineProcessLauncher = (
               machines
                 .exec({
                   binding,
-                  command: input.command,
-                  args: input.args,
+                  command: guest.command,
+                  args: guest.args,
                   ...(Object.hasOwn(input, "cwd") ? { cwd: input.cwd } : {}),
                   ...(Object.hasOwn(input, "env") ? { env: input.env } : {}),
                   ...(Object.hasOwn(input, "extendEnv") ? { extendEnv: input.extendEnv } : {}),

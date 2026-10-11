@@ -71,6 +71,9 @@ import Migration0055 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0056 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import Migration0057 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0058 from "./Migrations/058_WebhookRelayDeliveries.ts";
+import Migration0059 from "./Migrations/059_McpAppModelContext.ts";
+import Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
+import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
 import Migration0900 from "./Migrations/900_ProjectionMachineBindings.ts";
 import Migration0901 from "./Migrations/901_ProjectionMachineProjectWorkspaceRoot.ts";
 import Migration0902 from "./Migrations/902_RepairProjectionProjectsAutoPull.ts";
@@ -137,6 +140,9 @@ export const migrationEntries = [
   [56, "RemoveRedundantProjectionIndexes", Migration0056],
   [57, "ScheduledTaskWebhooks", Migration0057],
   [58, "WebhookRelayDeliveries", Migration0058],
+  [59, "McpAppModelContext", Migration0059],
+  [60, "ThreadSnapshotWindowIndexes", Migration0060],
+  [61, "PullRequestReviewGuides", Migration0061],
   [900, "ProjectionMachineBindings", Migration0900],
   [901, "ProjectionMachineProjectWorkspaceRoot", Migration0901],
   [902, "RepairProjectionProjectsAutoPull", Migration0902],
