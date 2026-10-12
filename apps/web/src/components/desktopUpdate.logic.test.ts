@@ -6,6 +6,7 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
+  getUpToDateReleaseNotes,
   getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
@@ -345,5 +346,39 @@ describe("getDesktopUpdateButtonTooltip", () => {
     expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "up-to-date" })).toBe(
       "Up to date",
     );
+  });
+});
+
+describe("fork builds of an upstream release", () => {
+  const offered: DesktopUpdateState = {
+    ...baseState,
+    status: "available",
+    availableVersion: "0.0.46-nightly.20261012.3021+fork",
+    releaseNotes: [{ version: "0.0.46-nightly.20261012.3021", items: ["a"], totalItems: 1 }],
+  };
+
+  it("offers the release as a build, never a download", () => {
+    expect(resolveDesktopUpdateButtonAction(offered)).toBe("download");
+    const tooltip = getDesktopUpdateButtonTooltip(offered);
+    expect(tooltip).toContain("0.0.46-nightly.20261012.3021 is out");
+    expect(tooltip).not.toMatch(/download|\+fork/i);
+    expect(getUpToDateReleaseNotes(offered)?.kind).toBe("upcoming");
+  });
+
+  it("words a running and a failed build", () => {
+    const building = { ...offered, status: "downloading" as const, message: "Merging." };
+    expect(getDesktopUpdateButtonTooltip(building)).toBe(
+      "Building 0.0.46-nightly.20261012.3021 into your fork. Merging.",
+    );
+    const failed = {
+      ...offered,
+      status: "error" as const,
+      errorContext: "download" as const,
+      message: "Tests failed.",
+    };
+    expect(getDesktopUpdateButtonTooltip(failed)).toBe(
+      "Building 0.0.46-nightly.20261012.3021 failed. Tests failed. Click to retry.",
+    );
+    expect(resolveDesktopUpdateButtonAction(failed)).toBe("download");
   });
 });

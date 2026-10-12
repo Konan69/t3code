@@ -37,7 +37,11 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import {
   LOCAL_STAGED_UPDATE_DIRECTORY,
   LOCAL_STAGED_UPDATE_FILE,
+  encodeLocalRelaunchRequest,
+  encodeLocalUpdateRequest,
   isSameLocalStagedUpdateState,
+  LOCAL_STAGED_UPDATE_RELAUNCH_FILE,
+  LOCAL_STAGED_UPDATE_REQUEST_FILE,
   parseLocalStagedUpdateStatus,
   parseRunningCommit,
   reduceDesktopUpdateStateOnLocalStagedStatus,
@@ -61,6 +65,9 @@ import {
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
 const LOCAL_STAGED_UPDATE_POLL_INTERVAL = "10 seconds";
+// How long a requested update may wait for the pipeline to report itself
+// before the button offers the update again.
+const LOCAL_UPDATE_REQUEST_PICKUP_MS = 120_000;
 const UPSTREAM_RELEASES_CHECK_INTERVAL = "1 hour";
 const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
 
@@ -397,6 +404,14 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(upstreamReleasesMutex.withPermits(1));
 
+  // Fork: the files the app leaves for the staging pipeline, beside its status.
+  const localStagedFile = (name: string) =>
+    Option.map(localStagedStatusPath, (statusPath) =>
+      environment.path.join(environment.path.dirname(statusPath), name),
+    );
+  // When the update button last asked for a build, until the pipeline answers.
+  const localUpdateRequestedAtRef = yield* Ref.make(Option.none<number>());
+
   const refreshLocalStagedUpdate = Effect.gen(function* () {
     if (Option.isNone(localStagedStatusPath)) return;
     const status = yield* fileSystem.readFileString(localStagedStatusPath.value, "utf-8").pipe(
@@ -407,13 +422,26 @@ export const make = Effect.gen(function* () {
     const upstream = yield* Ref.get(upstreamReleasesRef);
     // `checkedAt` is the last real check, not the last poll of the status file.
     const checkedAt = upstream?.checkedAt ?? current.checkedAt ?? (yield* currentIsoTimestamp);
-    const next = reduceDesktopUpdateStateOnLocalStagedStatus(
+    const reduced = reduceDesktopUpdateStateOnLocalStagedStatus(
       current,
       status,
       checkedAt,
       runningCommit,
       upstream,
     );
+    // The pipeline takes a few seconds to pick a request up. Until its status
+    // is newer than the request, the button keeps showing the update as started.
+    const requestedAt = yield* Ref.get(localUpdateRequestedAtRef);
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const answered =
+      Option.isNone(requestedAt) ||
+      now - requestedAt.value > LOCAL_UPDATE_REQUEST_PICKUP_MS ||
+      Option.exists(status, (value) => Date.parse(value.updatedAt) >= requestedAt.value);
+    if (answered) yield* Ref.set(localUpdateRequestedAtRef, Option.none());
+    const next: DesktopUpdateState =
+      answered || reduced.status !== "available"
+        ? reduced
+        : { ...reduced, status: "downloading", message: null };
     // The poll runs often; only a real change is worth a broadcast.
     yield* isSameLocalStagedUpdateState(current, next)
       ? Ref.set(updateStateRef, next)
@@ -754,9 +782,59 @@ export const make = Effect.gen(function* () {
       }),
     ).pipe(Effect.withSpan("desktop.updates.installDownloadedUpdate"));
 
+  // Fork: "download" asks the staging pipeline to merge, build and stage the
+  // newest upstream release. The build runs outside the app and takes a while,
+  // so the action is accepted without completing; the status file reports it.
+  const requestLocalUpdate = Effect.gen(function* () {
+    yield* refreshLocalStagedUpdate;
+    const state = yield* Ref.get(updateStateRef);
+    const requestPath = localStagedFile(LOCAL_STAGED_UPDATE_REQUEST_FILE);
+    const offered =
+      state.availableVersion !== null &&
+      (state.status === "available" ||
+        (state.status === "error" && state.errorContext === "download"));
+    if (!offered || Option.isNone(requestPath)) return { accepted: false, completed: false };
+    if (!(yield* tryStartUpdateAction("download"))) return { accepted: false, completed: false };
+    return yield* Effect.gen(function* () {
+      const requestedAt = yield* DateTime.now;
+      yield* fileSystem.writeFileString(
+        requestPath.value,
+        encodeLocalUpdateRequest({
+          action: "update",
+          target: state.availableVersion,
+          requestedAt: DateTime.formatIso(requestedAt),
+        }),
+      );
+      yield* Ref.set(localUpdateRequestedAtRef, Option.some(DateTime.toEpochMillis(requestedAt)));
+      yield* logUpdaterInfo("requested a local build of the newest upstream release", {
+        target: state.availableVersion,
+      });
+      yield* setState({ ...state, status: "downloading", message: null, errorContext: null });
+      return { accepted: true, completed: false };
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          yield* logUpdaterError("Could not write the local update request.", {
+            errorTag: error._tag,
+          });
+          yield* setState({
+            ...state,
+            status: "error",
+            errorContext: "download",
+            canRetry: true,
+            message: "T3 Code could not ask the update pipeline for a build.",
+          });
+          return { accepted: true, completed: false };
+        }),
+      ),
+      Effect.ensuring(finishUpdateAction("download")),
+    );
+  }).pipe(Effect.withSpan("desktop.updates.requestLocalUpdate"));
+
   // Fork: the staged build is swapped in by apply-boat.sh, which waits for the
-  // app to exit. Installing is therefore a clean quit; that script's own
-  // window says when it is safe to open the app again.
+  // app to exit. Installing is therefore a clean quit. The relaunch file tells
+  // that script the quit came from the update button, so it opens the app
+  // again once the swap is done; a quit from the menu leaves the app closed.
   const installLocalStagedUpdate = Effect.fn("desktop.updates.installLocalStagedUpdate")(function* (
     expectedVersion?: string,
   ) {
@@ -778,6 +856,22 @@ export const make = Effect.gen(function* () {
     // One install at a time, and no channel change while it runs.
     if (!(yield* tryStartUpdateAction("install"))) return yield* refused;
 
+    const relaunchPath = localStagedFile(LOCAL_STAGED_UPDATE_RELAUNCH_FILE);
+    if (Option.isSome(relaunchPath)) {
+      yield* fileSystem
+        .writeFileString(
+          relaunchPath.value,
+          encodeLocalRelaunchRequest({ requestedAt: yield* currentIsoTimestamp }),
+        )
+        .pipe(
+          Effect.catch((error) =>
+            logUpdaterWarning("Could not ask the installer to reopen the app.", {
+              errorTag: error._tag,
+            }),
+          ),
+        );
+    }
+    yield* writeUpdateRestartMarker;
     yield* Ref.set(desktopState.quitting, true);
     const quit = Effect.gen(function* () {
       const instances = yield* pool.list;
@@ -792,6 +886,10 @@ export const make = Effect.gen(function* () {
     if (Exit.isFailure(exit)) {
       // The app is not going away: bring the backends back and allow a retry.
       yield* Ref.set(desktopState.quitting, false);
+      if (Option.isSome(relaunchPath)) {
+        yield* fileSystem.remove(relaunchPath.value, { force: true }).pipe(Effect.ignore);
+      }
+      yield* removeUpdateRestartMarker;
       const instances = yield* pool.list;
       yield* Effect.forEach(instances, (instance) => instance.start, {
         concurrency: "unbounded",
@@ -1203,7 +1301,9 @@ export const make = Effect.gen(function* () {
       };
     }),
     download: Effect.gen(function* () {
-      const result = yield* downloadAvailableUpdate;
+      const result = (yield* Ref.get(localStagedUpdatesRef))
+        ? yield* requestLocalUpdate
+        : yield* downloadAvailableUpdate;
       return {
         accepted: result.accepted,
         completed: result.completed,

@@ -61,6 +61,7 @@ import {
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateStandingMessage,
+  getLocalBuildTarget,
   getUpToDateReleaseNotes,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -414,10 +415,15 @@ function AboutVersionSection() {
       ? !canCheckForUpdate(updateState)
       : isDesktopUpdateButtonDisabled(updateState);
 
-  const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
+  // Fork: an update is built on this machine, never downloaded.
+  const buildsLocally = getLocalBuildTarget(updateState?.availableVersion) !== null;
+  const actionLabel: Record<string, string> = {
+    download: buildsLocally ? "Build Update" : "Download",
+    install: "Install",
+  };
   const statusLabel: Record<string, string> = {
     checking: "Checking…",
-    downloading: "Downloading…",
+    downloading: buildsLocally ? "Building…" : "Downloading…",
     "up-to-date": "Up to Date",
   };
   const buttonLabel =

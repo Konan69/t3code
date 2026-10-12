@@ -23,6 +23,17 @@ export function isLocalDesktopBuildVersion(version: string | null | undefined): 
 }
 
 /**
+ * Fork: an upstream release the update button can build into the fork is
+ * labelled `<release>+fork`. Shown without the suffix.
+ */
+const LOCAL_BUILD_TARGET_SUFFIX = "+fork";
+export function getLocalBuildTarget(version: string | null | undefined): string | null {
+  return version?.endsWith(LOCAL_BUILD_TARGET_SUFFIX)
+    ? version.slice(0, -LOCAL_BUILD_TARGET_SUFFIX.length)
+    : null;
+}
+
+/**
  * Fork: release notes carried by an up-to-date state. Stock builds never have
  * any there. A locally built version lists what the running build brought; any
  * other version is a T3 team release that the running build does not have yet.
@@ -31,7 +42,12 @@ export function getUpToDateReleaseNotes(state: DesktopUpdateState | null): {
   readonly kind: "installed" | "upcoming";
   readonly releaseNotes: DesktopUpdateState["releaseNotes"];
 } | null {
-  if (state?.status !== "up-to-date" || state.releaseNotes.length === 0) return null;
+  if (!state || state.releaseNotes.length === 0) return null;
+  // A release the button can build, is building or failed to build is still upcoming.
+  if (getLocalBuildTarget(state.availableVersion) !== null) {
+    return { kind: "upcoming", releaseNotes: state.releaseNotes };
+  }
+  if (state.status !== "up-to-date") return null;
   return {
     kind: isLocalDesktopBuildVersion(state.releaseNotes[0]?.version) ? "installed" : "upcoming",
     releaseNotes: state.releaseNotes,
@@ -106,6 +122,20 @@ export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState):
 }
 
 export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {
+  // Fork: the update is built on this machine from the T3 team's release.
+  const buildTarget = getLocalBuildTarget(state.availableVersion);
+  if (buildTarget !== null && state.status === "available") {
+    return `${buildTarget} is out. Click to build it into your fork; you can keep working while it builds.`;
+  }
+  if (buildTarget !== null && state.status === "downloading") {
+    return `Building ${buildTarget} into your fork. ${state.message ?? "Starting…"}`;
+  }
+  if (buildTarget !== null && state.status === "error" && state.errorContext === "download") {
+    return `Building ${buildTarget} failed. ${state.message ?? ""} Click to retry.`.replace(
+      /\s+/g,
+      " ",
+    );
+  }
   if (state.status === "available") {
     return `Update ${state.availableVersion ?? "available"} ready to download`;
   }

@@ -5,6 +5,11 @@
  * app has closed. Those scripts publish their progress as a small JSON status
  * file, and this module turns that file into the update state the app already
  * renders, so "Check for updates" shows the local build instead of nothing.
+ *
+ * The update button also starts that pipeline: the app drops a request file
+ * beside the status file, `update-watch.sh` picks it up and runs
+ * `update-boat.sh`, which merges the newest upstream release into the fork,
+ * builds it and stages it. That run reports itself as phase "updating".
  */
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -16,17 +21,30 @@ import { isUpstreamReleaseOnChannel, type UpstreamReleasesSnapshot } from "./Ups
 
 export const LOCAL_STAGED_UPDATE_DIRECTORY = "t3code-updater";
 export const LOCAL_STAGED_UPDATE_FILE = "status.json";
+/** Written by the app to ask the pipeline for a build of the newest upstream release. */
+export const LOCAL_STAGED_UPDATE_REQUEST_FILE = "request.json";
+/** Written by the app before it quits to install: the installer reopens the app. */
+export const LOCAL_STAGED_UPDATE_RELAUNCH_FILE = "relaunch.json";
+// A version with a build suffix was made on this machine; see `localStagedUpdateVersion`.
+const LOCAL_BUILD_TARGET_SUFFIX = "+fork";
+
+/** The label of a fork build of an upstream release that does not exist yet. */
+export const localBuildTargetVersion = (upstreamVersion: string): string =>
+  `${upstreamVersion}${LOCAL_BUILD_TARGET_SUFFIX}`;
 
 // rebuild-boat.sh already caps the list; the popover and the settings row scroll.
 const MAX_NOTES = 40;
 
 export const LocalStagedUpdateStatus = Schema.Struct({
-  phase: Schema.Literals(["building", "ready", "installing", "installed", "failed"]),
+  phase: Schema.Literals(["building", "updating", "ready", "installing", "installed", "failed"]),
   version: Schema.String,
   message: Schema.String,
   updatedAt: Schema.String,
   // The commit the staged build was made from; absent while nothing is staged.
   commit: Schema.optional(Schema.String),
+  // The upstream release a requested update is building; set while that run
+  // is "updating" and kept when it ends "failed".
+  target: Schema.optional(Schema.String),
   notes: Schema.optional(Schema.Array(Schema.String)),
   // The newest upstream commit merged into that build.
   upstreamBase: Schema.optional(
@@ -38,6 +56,21 @@ export type LocalStagedUpdateStatus = typeof LocalStagedUpdateStatus.Type;
 const decodeStatus = Schema.decodeUnknownEffect(Schema.fromJsonString(LocalStagedUpdateStatus));
 const decodeCommit = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ t3codeCommitHash: Schema.optional(Schema.String) })),
+);
+
+const LocalUpdateRequest = Schema.Struct({
+  action: Schema.Literal("update"),
+  // The release the button offered; the pipeline builds the newest one it finds.
+  target: Schema.NullOr(Schema.String),
+  requestedAt: Schema.String,
+});
+/** The text of `request.json`. */
+export const encodeLocalUpdateRequest = Schema.encodeSync(
+  Schema.fromJsonString(LocalUpdateRequest),
+);
+/** The text of `relaunch.json`. */
+export const encodeLocalRelaunchRequest = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ requestedAt: Schema.String })),
 );
 
 /** Decodes the status file's text; anything unreadable counts as no status. */
@@ -90,8 +123,9 @@ export function localStagedUpdateVersion(status: LocalStagedUpdateStatus): strin
  *
  * `upstream` is the T3 team's release list. When the running build's upstream
  * base is known, the state also says whether newer releases exist on the
- * followed channel and lists their notes. They are shown, never offered:
- * a fork build is made on this machine, not downloaded.
+ * followed channel and lists their notes, and offers a fork build of the
+ * newest one: nothing is downloaded, the build is made on this machine once
+ * the update button asks for it.
  */
 export function reduceDesktopUpdateStateOnLocalStagedStatus(
   state: DesktopUpdateState,
@@ -123,8 +157,18 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
     notes.length === 0
       ? []
       : [{ version, items: notes.slice(0, MAX_NOTES), totalItems: notes.length }];
-  // A build in progress is never shown: nothing is offered until it is staged.
+  // A build nobody asked for is never shown: nothing is offered until it is staged.
   if (phase === "building") return base;
+  // A requested update is this fork's download. It is checked before the
+  // running-build test below: the file still names the running commit until
+  // the new build is staged.
+  const target = status.value.target?.trim();
+  if (target && (phase === "updating" || phase === "failed")) {
+    const requested = { ...base, availableVersion: localBuildTargetVersion(target) };
+    return phase === "updating"
+      ? { ...requested, status: "downloading", message }
+      : { ...requested, status: "error", errorContext: "download", canRetry: true, message };
+  }
   if (phase === "installed" || isRunning) {
     if (!isRunning) return base;
     const installed = { ...base, releaseNotes };
@@ -160,6 +204,8 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
     const upcoming = normalizeDesktopUpdateReleaseNotes(newer, latest.version, state.channel);
     return {
       ...installed,
+      status: "available",
+      availableVersion: localBuildTargetVersion(latest.version),
       checkedAt: upstream.checkedAt,
       releaseNotes: upcoming.releaseNotes,
       omittedReleaseCount: upcoming.omittedReleaseCount,
@@ -178,6 +224,9 @@ export function reduceDesktopUpdateStateOnLocalStagedStatus(
         releaseNotes,
         message,
       };
+    case "updating":
+      // Without a target there is nothing to name; treat it as a silent build.
+      return base;
     case "failed":
       return { ...base, status: "error", errorContext: "download", message };
   }

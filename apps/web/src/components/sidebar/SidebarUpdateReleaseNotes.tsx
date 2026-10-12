@@ -5,6 +5,7 @@ import {
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
   getDesktopUpdateStandingMessage,
+  getLocalBuildTarget,
   getUpToDateReleaseNotes,
   isLocalDesktopBuildVersion,
 } from "../desktopUpdate.logic";
@@ -64,11 +65,26 @@ export function SidebarUpdateReleaseNotes({
     return <>{tooltip}</>;
   }
   const standing = getDesktopUpdateStandingMessage(state);
+  // Fork: a T3 team release the update button builds on this machine.
+  const buildTarget = getLocalBuildTarget(state.availableVersion);
 
   return (
     <div className="flex max-h-[calc(var(--available-height)-0.5rem)] min-h-0 w-fit max-w-[min(24rem,calc(100vw-2rem))] flex-col text-left">
       <div className="shrink-0 px-1">
-        {state.status === "available" ? (
+        {buildTarget !== null ? (
+          <div>
+            <div className="whitespace-nowrap text-sm leading-5 font-medium">
+              {state.status === "available"
+                ? "Update ready to build"
+                : state.status === "downloading"
+                  ? "Building update"
+                  : "Update build failed"}
+            </div>
+            <div className="mt-0.5 text-xs leading-4 text-muted-foreground">
+              {state.status === "available" ? buildTarget : (state.message ?? buildTarget)}
+            </div>
+          </div>
+        ) : state.status === "available" ? (
           <div>
             <div className="whitespace-nowrap text-sm leading-5 font-medium">
               Update ready to download

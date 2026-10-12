@@ -105,8 +105,9 @@ describe("LocalStagedUpdate", () => {
         );
 
       const behind = yield* reduceWith([preview, stable, newer, older]);
-      assert.equal(behind.status, "up-to-date");
-      assert.equal(behind.availableVersion, null);
+      // A newer release is offered: the update button builds it into the fork.
+      assert.equal(behind.status, "available");
+      assert.equal(behind.availableVersion, "0.0.46-nightly.20261006.2735+fork");
       assert.equal(behind.checkedAt, "2026-10-07T10:00:00.000Z");
       assert.deepStrictEqual(behind.releaseNotes, [
         { version: "0.0.46-nightly.20261006.2735", items: ["new thing"], totalItems: 1 },
@@ -125,6 +126,27 @@ describe("LocalStagedUpdate", () => {
       const offline = yield* reduceWith(null);
       assert.include(offline.message ?? "", "Could not reach GitHub");
       assert.equal(offline.releaseNotes.length, 1);
+    }),
+  );
+
+  it.effect("shows a requested update as building, and its failure as retryable", () =>
+    Effect.gen(function* () {
+      // The file still names the running commit until the new build is staged.
+      const extra = { commit: "aaaaaaa", target: "0.0.46-nightly.20261012.3021" };
+      const updating = yield* reduce(status("updating", extra));
+      assert.equal(updating.status, "downloading");
+      assert.equal(updating.availableVersion, "0.0.46-nightly.20261012.3021+fork");
+      assert.equal(updating.downloadedVersion, null);
+      assert.equal(updating.message, "updating message");
+
+      const failed = yield* reduce(status("failed", extra));
+      assert.equal(failed.status, "error");
+      assert.equal(failed.errorContext, "download");
+      assert.equal(failed.availableVersion, "0.0.46-nightly.20261012.3021+fork");
+      assert.equal(failed.canRetry, true);
+
+      // Without a target it is a build nobody asked for: nothing is shown.
+      assert.equal((yield* reduce(status("updating", { commit: "bbbbbbb" }))).status, "up-to-date");
     }),
   );
 
