@@ -26,8 +26,13 @@ import {
  * only once npm confirms that version. `run` performs the whole pass, including
  * this app's own download and install when given.
  */
-export function useUpdateEverything(localUpdateVersion: string | null) {
-  const targetVersion = localUpdateVersion ?? APP_VERSION;
+export function useUpdateEverything(
+  localUpdateVersion: string | null,
+  // Fork: a build made on this machine is not a published version, so servers
+  // cannot follow it; they stay on this app's own version.
+  followsLocalUpdate = true,
+) {
+  const targetVersion = (followsLocalUpdate ? localUpdateVersion : null) ?? APP_VERSION;
   const { environments } = useEnvironments();
   const machinesAtom = useMemo(
     () =>

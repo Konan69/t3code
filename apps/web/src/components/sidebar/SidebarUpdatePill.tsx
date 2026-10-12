@@ -233,13 +233,15 @@ function SidebarUpdateControl() {
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
   const isDownloading = state?.status === "downloading";
-  // Remote servers follow this app to the version it is about to install. A
-  // fork build has no published version for them to follow.
-  const pendingVersion =
+  // Remote servers follow this app to the version it is about to install,
+  // unless that is a fork build: it has no published version to follow.
+  const localUpdateVersion =
     state && action !== "none" ? getDesktopUpdateDownloadedVersion(state) : null;
-  const localUpdateVersion = isLocalDesktopBuildVersion(pendingVersion) ? null : pendingVersion;
   const buildsLocally = getLocalBuildTarget(state?.availableVersion) !== null;
-  const everything = useUpdateEverything(localUpdateVersion);
+  const everything = useUpdateEverything(
+    localUpdateVersion,
+    !isLocalDesktopBuildVersion(localUpdateVersion),
+  );
   const runsEverything = everything.hasUpdates && !isDownloading;
   // Providers leave the list once queued, so the run keeps its own state.
   const isRunningEverything = isUpdatingEverything && !isDownloading;
