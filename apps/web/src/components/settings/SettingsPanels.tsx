@@ -330,12 +330,18 @@ function AboutVersionSection() {
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
 
     if (action === "download") {
+      const startsLocalBuild = getLocalBuildTarget(updateState?.availableVersion) !== null;
       void bridge.downloadUpdate().catch((error: unknown) => {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not download update",
-            description: error instanceof Error ? error.message : "Download failed.",
+            title: startsLocalBuild ? "Could not build update" : "Could not download update",
+            description:
+              error instanceof Error
+                ? error.message
+                : startsLocalBuild
+                  ? "The build could not be started."
+                  : "Download failed.",
           }),
         );
       });

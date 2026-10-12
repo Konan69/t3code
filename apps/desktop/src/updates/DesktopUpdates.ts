@@ -438,10 +438,14 @@ export const make = Effect.gen(function* () {
       now - requestedAt.value > LOCAL_UPDATE_REQUEST_PICKUP_MS ||
       Option.exists(status, (value) => Date.parse(value.updatedAt) >= requestedAt.value);
     if (answered) yield* Ref.set(localUpdateRequestedAtRef, Option.none());
+    // A retry waits the same way over the failure it is retrying.
+    const offered =
+      reduced.status === "available" ||
+      (reduced.status === "error" && reduced.errorContext === "download");
     const next: DesktopUpdateState =
-      answered || reduced.status !== "available"
+      answered || !offered
         ? reduced
-        : { ...reduced, status: "downloading", message: null };
+        : { ...reduced, status: "downloading", message: null, errorContext: null };
     // The poll runs often; only a real change is worth a broadcast.
     yield* isSameLocalStagedUpdateState(current, next)
       ? Ref.set(updateStateRef, next)

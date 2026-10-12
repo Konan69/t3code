@@ -10,6 +10,7 @@ import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   getDesktopUpdateStandingMessage,
+  getLocalBuildTarget,
   isLocalDesktopBuildVersion,
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
@@ -128,7 +129,14 @@ function SidebarUpdateArchitectureWarningContent() {
     failures toast and resolve false. */
 async function downloadLocalUpdate(
   bridge: DesktopBridge,
-  { notifyDownloaded }: { readonly notifyDownloaded: boolean },
+  {
+    notifyDownloaded,
+    buildsLocally = false,
+  }: {
+    readonly notifyDownloaded: boolean;
+    /** Fork: the update is built on this machine, so nothing is downloaded. */
+    readonly buildsLocally?: boolean;
+  },
 ): Promise<boolean> {
   try {
     const result = await bridge.downloadUpdate();
@@ -142,7 +150,7 @@ async function downloadLocalUpdate(
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not download update",
+          title: buildsLocally ? "Could not build update" : "Could not download update",
           description: actionError,
         }),
       );
@@ -152,7 +160,7 @@ async function downloadLocalUpdate(
     toastManager.add(
       stackedThreadToast({
         type: "error",
-        title: "Could not start update download",
+        title: buildsLocally ? "Could not start update build" : "Could not start update download",
         description: error instanceof Error ? error.message : "An unexpected error occurred.",
       }),
     );
@@ -225,9 +233,12 @@ function SidebarUpdateControl() {
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
   const isDownloading = state?.status === "downloading";
-  // Remote servers follow this app to the version it is about to install.
-  const localUpdateVersion =
+  // Remote servers follow this app to the version it is about to install. A
+  // fork build has no published version for them to follow.
+  const pendingVersion =
     state && action !== "none" ? getDesktopUpdateDownloadedVersion(state) : null;
+  const localUpdateVersion = isLocalDesktopBuildVersion(pendingVersion) ? null : pendingVersion;
+  const buildsLocally = getLocalBuildTarget(state?.availableVersion) !== null;
   const everything = useUpdateEverything(localUpdateVersion);
   const runsEverything = everything.hasUpdates && !isDownloading;
   // Providers leave the list once queued, so the run keeps its own state.
@@ -292,7 +303,7 @@ function SidebarUpdateControl() {
     setIsActionPending(true);
 
     if (action === "download") {
-      void downloadLocalUpdate(bridge, { notifyDownloaded: true }).finally(() =>
+      void downloadLocalUpdate(bridge, { notifyDownloaded: true, buildsLocally }).finally(() =>
         setIsActionPending(false),
       );
       return;
@@ -350,7 +361,7 @@ function SidebarUpdateControl() {
         );
       })
       .finally(() => setIsActionPending(false));
-  }, [action, isInteractionDisabled, prefersReducedMotion, runsEverything, state]);
+  }, [action, buildsLocally, isInteractionDisabled, prefersReducedMotion, runsEverything, state]);
 
   const runEverything = useCallback(async () => {
     const bridge = window.desktopBridge;
@@ -360,7 +371,10 @@ function SidebarUpdateControl() {
     try {
       await everything.run({
         ...(bridge && action === "download"
-          ? { downloadLocal: () => downloadLocalUpdate(bridge, { notifyDownloaded: false }) }
+          ? {
+              downloadLocal: () =>
+                downloadLocalUpdate(bridge, { notifyDownloaded: false, buildsLocally }),
+            }
           : {}),
         ...(bridge && action !== "none" ? { installLocal: () => installLocalUpdate(bridge) } : {}),
       });
@@ -376,7 +390,7 @@ function SidebarUpdateControl() {
       setIsUpdatingEverything(false);
       setIsActionPending(false);
     }
-  }, [action, everything]);
+  }, [action, buildsLocally, everything]);
 
   const handleCheckAnimationIteration = useCallback(() => {
     setIsCheckAnimationLatched(
