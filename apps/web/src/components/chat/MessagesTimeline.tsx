@@ -152,7 +152,7 @@ import {
   ZapIcon,
   RotateCcwIcon,
 } from "lucide-react";
-import { ChevronDown, ChevronRight } from "lucide";
+import { ChevronDown, ChevronRight, Link as LinkIconNode } from "lucide";
 import type {
   ComposerContextId,
   ComposerContextRecord,
@@ -186,6 +186,7 @@ import {
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { WorkspaceEntryIcon, WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
@@ -297,6 +298,7 @@ import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { SkillChipIcon, SkillInlineText } from "./SkillInlineText";
 import * as DateTime from "effect/DateTime";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import { forwardWheelToTimeline } from "./timelineMinimapWheel";
 import {
   buildReviewCommentRenderablePatch,
   formatReviewCommentFence,
@@ -480,6 +482,8 @@ interface MessagesTimelineProps {
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   routeThreadKey: string;
   displayThreadKey?: string;
+  /** The rows are a held snapshot of the previous thread while the next one loads. */
+  paintOnly?: boolean;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
@@ -594,6 +598,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   turnDiffSummaries,
   routeThreadKey,
   displayThreadKey,
+  paintOnly = false,
   onOpenTurnDiff,
   onOpenThread,
   parentThreadLink = null,
@@ -654,7 +659,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const previousLatestRunRef = useRef(latestRun);
   // The list stays mounted across thread switches. Its first end pins on the
   // new thread must snap, not glide, even if that thread is mid-turn.
-  const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(null);
+  const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(listIdentityKey);
   let paintedExpandedRunIds = expandedRunIds;
   let paintedExpandedWorkGroupIds = expandedWorkGroupIds;
   let paintedExpandedAttemptIds = expandedAttemptIds;
@@ -1213,24 +1218,28 @@ const ConversationTimeline = memo(function ConversationTimeline({
     if (restoringThreadPosition || state?.data !== rows) return;
     const isAtEnd = resolveTimelineIsAtEnd(state);
     const position = state?.data?.length ? resolveWorkGroupScrollAnchor(state) : undefined;
-    if (position && state && isAtEnd !== undefined) {
+    if (position && state && isAtEnd !== undefined && !paintOnly) {
       const index = state.indexByKey(position.rowId);
       const row = index === undefined ? undefined : state.elementAtIndex(index);
       const element = listRef.current?.getScrollableNode();
       if (row && element) {
-        rememberTimelinePosition(listIdentityKey, {
-          ...position,
-          // DOM geometry includes the header and the virtualizer's layout adjustment.
-          offsetWithinRow: element.getBoundingClientRect().top - row.getBoundingClientRect().top,
-          scrollOffset: element.scrollTop,
-          atEnd: isAtEnd,
-          disclosures: {
-            runs: paintedExpandedRunIds,
-            workGroups: paintedExpandedWorkGroupIds,
-            attempts: paintedExpandedAttemptIds,
-            workGroupState: workGroupViewState,
+        rememberTimelinePosition(
+          listIdentityKey,
+          {
+            ...position,
+            // DOM geometry includes the header and the virtualizer's layout adjustment.
+            offsetWithinRow: element.getBoundingClientRect().top - row.getBoundingClientRect().top,
+            scrollOffset: element.scrollTop,
+            atEnd: isAtEnd,
+            disclosures: {
+              runs: paintedExpandedRunIds,
+              workGroups: paintedExpandedWorkGroupIds,
+              attempts: paintedExpandedAttemptIds,
+              workGroupState: workGroupViewState,
+            },
           },
-        });
+          liveFollowEnabled && !anchoredEndSpace,
+        );
       }
     }
     if (isAtEnd !== undefined && !citationPositioning) {
@@ -1282,6 +1291,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     workGroupViewState,
     rows,
     listIdentityKey,
+    liveFollowEnabled,
+    anchoredEndSpace,
+    paintOnly,
     restoringThreadPosition,
     listRef,
     minimapItems,
@@ -1294,6 +1306,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const frame = requestAnimationFrame(handleScroll);
     return () => cancelAnimationFrame(frame);
   }, [handleScroll, rows.length]);
+
+  const savedLiveFollowEnabledRef = useRef(liveFollowEnabled);
+  useLayoutEffect(() => {
+    const wasFollowing = savedLiveFollowEnabledRef.current;
+    savedLiveFollowEnabledRef.current = liveFollowEnabled;
+    if (wasFollowing && !liveFollowEnabled) handleScroll();
+  }, [handleScroll, liveFollowEnabled]);
 
   useEffect(() => {
     if (!timelineViewportElement) {
@@ -1571,6 +1590,14 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [],
   );
 
+  const forwardMinimapWheel = useCallback(
+    (event: WheelEvent) => {
+      const scrollNode = listRef.current?.getScrollableNode();
+      if (scrollNode) forwardWheelToTimeline(event, scrollNode);
+    },
+    [listRef],
+  );
+
   if (
     rows.length === 0 &&
     !isWorking &&
@@ -1585,7 +1612,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return <div className="h-full min-h-0 bg-background" data-timeline-loading="true" />;
     }
     return (
-      <div className="flex h-full items-center justify-center">
+      <div
+        className="flex h-full items-center justify-center ps-(--chat-lane-inset-start) pe-(--chat-lane-inset-end)"
+        style={{ paddingBottom: contentInsetEndAdjustment }}
+      >
         <p className="text-sm text-muted-foreground/30">
           Send a message to start the conversation.
         </p>
@@ -1661,6 +1691,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               hitStripWidth={minimapHitStripWidth}
               currentIndex={minimapCurrentIndex}
               stripMap={minimapStripMap}
+              onWheel={forwardMinimapWheel}
               onSelect={(item) => {
                 onManualNavigation();
                 void listRef.current?.scrollToIndex({
@@ -1741,6 +1772,7 @@ function TimelineMinimap({
   currentIndex,
   items,
   stripMap,
+  onWheel,
   onSelect,
 }: {
   hasPersistentGutter: boolean;
@@ -1748,9 +1780,18 @@ function TimelineMinimap({
   currentIndex: number | null;
   items: ReadonlyArray<TimelineMinimapItem>;
   stripMap: Map<string, HTMLSpanElement>;
+  onWheel: (event: WheelEvent) => void;
   onSelect: (item: TimelineMinimapItem) => void;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const wheelTargetRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) return;
+      node.addEventListener("wheel", onWheel, { passive: false });
+      return () => node.removeEventListener("wheel", onWheel);
+    },
+    [onWheel],
+  );
 
   const resolvedActiveIndex =
     activeIndex !== null && activeIndex < items.length ? activeIndex : null;
@@ -1825,6 +1866,7 @@ function TimelineMinimap({
       )}
       data-testid="timeline-minimap"
       data-persistent-gutter={hasPersistentGutter ? "true" : "false"}
+      ref={wheelTargetRef}
     >
       <div className="relative h-full w-full select-none">
         <div
@@ -2285,6 +2327,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         .map((record) => record.contextId),
     [resolvedContext.records],
   );
+  // Chips read as their labels outside a draft, so a shared link carries the prose alone.
+  const plainText = useMemo(
+    () => replaceComposerContextReferences(resolvedContext.text, (reference) => reference.label),
+    [resolvedContext.text],
+  );
+  const promptLink = useMemo(() => promptLinkFor(plainText), [plainText]);
   const contextClipboardFragment =
     resolvedContext.records.length === 0
       ? null
@@ -2574,19 +2622,20 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             {resolvedContext.text && (
               <MessageCopyButton
                 // Structured paste needs the canonical links to retain their positions.
-                text={
-                  contextClipboardFragment
-                    ? resolvedContext.text
-                    : replaceComposerContextReferences(
-                        resolvedContext.text,
-                        (reference) => reference.label,
-                      )
-                }
+                text={contextClipboardFragment ? resolvedContext.text : plainText}
                 {...(contextClipboardFragment
                   ? {
                       extraFlavors: { [COMPOSER_CONTEXT_CLIPBOARD_MIME]: contextClipboardFragment },
                     }
                   : {})}
+                variant="ghost"
+              />
+            )}
+            {promptLink !== null && (
+              <MessageCopyButton
+                text={promptLink}
+                label="Copy prompt link"
+                icon={LinkIconNode}
                 variant="ghost"
               />
             )}

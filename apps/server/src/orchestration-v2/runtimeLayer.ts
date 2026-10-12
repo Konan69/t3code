@@ -245,6 +245,7 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
     Layer.mergeAll(
       layerOrchestratorProvided,
       layerLegacyV1ThreadImporterProvided,
+      layerCommandReceiptStoreProvided,
       layerProviderSessionManagerProvided,
     ),
   ),

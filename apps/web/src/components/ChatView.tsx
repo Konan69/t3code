@@ -81,6 +81,7 @@ import {
   ProviderInteractionMode,
   ProviderDriverKind,
   resolveEnvironmentMachineKind,
+  resolveProjectProviderInstanceEnabled,
   RuntimeMode,
   TerminalOpenInput,
   type WorktreeSetupSnapshot,
@@ -3241,9 +3242,13 @@ export default function ChatView(props: ChatViewProps) {
   const providerInstanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(providerStatuses),
+          settings,
+          activeProject?.id ?? null,
+        ),
       ),
-    [providerStatuses, settings],
+    [providerStatuses, settings, activeProject?.id],
   );
   const { selectedProviderEntry, requestedDriverKind } = useMemo(
     () =>
@@ -4359,7 +4364,14 @@ export default function ChatView(props: ChatViewProps) {
                     (activeProviderInstanceId === null ||
                       provider.instanceId === activeProviderInstanceId) &&
                     provider.driver === selectedProvider &&
-                    provider.enabled &&
+                    // The destination project may override the machine switch.
+                    (environment.serverConfig?.settings
+                      ? resolveProjectProviderInstanceEnabled(
+                          environment.serverConfig.settings,
+                          candidate.projectId,
+                          provider.instanceId,
+                        )
+                      : provider.enabled) &&
                     provider.installed &&
                     provider.status !== "error" &&
                     provider.auth.status !== "unauthenticated" &&
@@ -10901,6 +10913,45 @@ export default function ChatView(props: ChatViewProps) {
   }, [cancelWorktreeSetup, draftId, setupTarget.environmentId, worktreeSetup]);
   const onSendRef = useRef(onSend);
   onSendRef.current = onSend;
+  const onResumeRef = useRef(onResume);
+  onResumeRef.current = onResume;
+  const onCompactContextRef = useRef(onCompactContext);
+  onCompactContextRef.current = onCompactContext;
+  const onComposerSend = useCallback(
+    (...args: Parameters<typeof onSend>) => onSendRef.current(...args),
+    [],
+  );
+  const onComposerResume = useCallback(() => onResumeRef.current(), []);
+  const onComposerCompactContext = useCallback(() => onCompactContextRef.current(), []);
+  const queuedRunsControl = useMemo(
+    () =>
+      isServerThread && activeThread ? (
+        <QueuedRunsControl
+          ref={queuedRunsControlRef}
+          steerShortcutLabel={shortcutLabelForCommand(keybindings, "thread.steerQueuedMessage", {
+            context: { terminalFocus: false },
+          })}
+          editShortcutLabel={shortcutLabelForCommand(keybindings, "thread.editQueuedMessage", {
+            context: { composerFocus: true },
+          })}
+          environmentId={activeThread.environmentId}
+          threadId={activeThread.id}
+          optimisticMessages={optimisticUserMessages}
+          editingRunId={editingQueuedRun?.runId ?? null}
+          onEditQueuedRun={beginEditingQueuedRun}
+          onCancelEdit={cancelEditingQueuedRun}
+        />
+      ) : null,
+    [
+      activeThread,
+      beginEditingQueuedRun,
+      cancelEditingQueuedRun,
+      editingQueuedRun?.runId,
+      isServerThread,
+      keybindings,
+      optimisticUserMessages,
+    ],
+  );
   // Resend once the cancelled dispatch has settled and the composer is free.
   // Every state that makes `onSend` bail and wait is part of the readiness
   // check, so the flag survives a reconnect, a reverting checkpoint, or a
@@ -10965,12 +11016,21 @@ export default function ChatView(props: ChatViewProps) {
   const onOpenTurnDiff = useCallback(
     (runId: RunId, filePath?: string) => {
       if (!isServerThread || !activeThreadRef) return;
+      const diffOpen =
+        selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) ===
+        "diff";
       explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
       useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath);
       useRightPanelStore.getState().open(activeThreadRef, "diff");
       onDiffPanelOpen?.();
     },
-    [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen],
+    [activeThreadRef, isServerThread, onDiffPanelOpen],
+  );
+  const onTimelineRollbackCheckpoint = useCallback(
+    (input: { readonly checkpointId: string; readonly scopeId: string }) => {
+      if (!paintOnlyDisplayedTimeline) void onRollbackCheckpoint(input);
+    },
+    [onRollbackCheckpoint, paintOnlyDisplayedTimeline],
   );
   // The revert handler is read from a ref at call-time so the callback
   // reference is fully stable and never busts TimelineRowCtx identity.
@@ -11488,13 +11548,12 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 routeThreadKey={displayedTimelineKey}
                 displayThreadKey={displayedTimelineKey}
+                paintOnly={paintOnlyDisplayedTimeline}
                 onOpenTurnDiff={paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiff}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={paintOnlyDisplayedTimeline ? null : parentThreadLink}
                 onForkFromRun={paintOnlyDisplayedTimeline ? async () => {} : onForkFromRun}
-                onRollbackCheckpoint={(input) => {
-                  if (!paintOnlyDisplayedTimeline) void onRollbackCheckpoint(input);
-                }}
+                onRollbackCheckpoint={onTimelineRollbackCheckpoint}
                 supportsConversationRollback={
                   !paintOnlyDisplayedTimeline && supportsConversationRollback
                 }
@@ -11699,29 +11758,7 @@ export default function ChatView(props: ChatViewProps) {
                                             : projectCloneSendBlockReason
                               }
                               isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
-                              queuedRunsControl={
-                                isServerThread && activeThread ? (
-                                  <QueuedRunsControl
-                                    ref={queuedRunsControlRef}
-                                    steerShortcutLabel={shortcutLabelForCommand(
-                                      keybindings,
-                                      "thread.steerQueuedMessage",
-                                      { context: { terminalFocus: false } },
-                                    )}
-                                    editShortcutLabel={shortcutLabelForCommand(
-                                      keybindings,
-                                      "thread.editQueuedMessage",
-                                      { context: { composerFocus: true } },
-                                    )}
-                                    environmentId={activeThread.environmentId}
-                                    threadId={activeThread.id}
-                                    optimisticMessages={optimisticUserMessages}
-                                    editingRunId={editingQueuedRun?.runId ?? null}
-                                    onEditQueuedRun={beginEditingQueuedRun}
-                                    onCancelEdit={cancelEditingQueuedRun}
-                                  />
-                                ) : null
-                              }
+                              queuedRunsControl={queuedRunsControl}
                               bannerItems={composerBannerItems}
                               resumeCompactionTokens={resumeCompactionTokens}
                               keepFullHistory={keepFullHistory}
@@ -11759,6 +11796,7 @@ export default function ChatView(props: ChatViewProps) {
                                 activeProjectDefaultModelSelection
                               }
                               activeThreadModelSelection={activeThread?.modelSelection}
+                              activeProjectId={activeProject?.id ?? null}
                               activeContextWindow={activeContextWindow}
                               activeTasksProgress={activeComposerTasksProgress}
                               activeTaskSteps={activeComposerTaskSteps}
@@ -11794,9 +11832,9 @@ export default function ChatView(props: ChatViewProps) {
                               onPageScrollKeyDown={onComposerPageScrollKeyDown}
                               onPageScrollKeyUp={onComposerPageScrollKeyUp}
                               onPageScrollRelease={onComposerPageScrollRelease}
-                              onCompactContext={onCompactContext}
-                              onSend={onSend}
-                              onResume={onResume}
+                              onCompactContext={onComposerCompactContext}
+                              onSend={onComposerSend}
+                              onResume={onComposerResume}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
