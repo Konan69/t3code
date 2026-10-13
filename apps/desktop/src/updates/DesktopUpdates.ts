@@ -7,6 +7,7 @@ import {
   type DesktopUpdateCheckResult,
   type DesktopUpdateState,
 } from "@t3tools/contracts";
+import { errorTag } from "@t3tools/shared/observability";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -215,6 +216,63 @@ const {
   logWarning: logUpdaterWarning,
   logError: logUpdaterError,
 } = DesktopObservability.makeComponentLogger("desktop-updater");
+
+function redactMessage(message: string): string {
+  // Updater HTTP errors append response bodies and headers after the first line.
+  return (message.split(/[\r\n]/, 1)[0] ?? "")
+    .replace(/\b(?:https?|file):\/\/[^\s"'<>]+/gi, "[redacted URL]")
+    .replace(/\b(?:Bearer|Basic)\s+[^\s,;]+/gi, "[redacted credential]")
+    .replace(
+      /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=].*$/gi,
+      "[redacted header]",
+    )
+    .replace(
+      /\b[\w-]*(?:token|password|secret|credential|api[_-]?key)[\w-]*\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "[redacted credential]",
+    )
+    .slice(0, 512);
+}
+
+function summarizeCause(cause: unknown, depth: number): string {
+  if (depth >= 3) return "[truncated cause]";
+  if (Cause.isCause(cause)) {
+    return cause.reasons
+      .slice(0, 3)
+      .map((reason) =>
+        reason._tag === "Fail"
+          ? summarizeCause(reason.error, depth + 1)
+          : reason._tag === "Die"
+            ? summarizeCause(reason.defect, depth + 1)
+            : "Interrupted",
+      )
+      .join("; ");
+  }
+  if (typeof cause === "string") return redactMessage(cause);
+  if (typeof cause !== "object" || cause === null) return errorTag(cause);
+
+  const error = cause as {
+    readonly message?: unknown;
+    readonly code?: unknown;
+    readonly cause?: unknown;
+  };
+  const code =
+    typeof error.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(error.code)
+      ? ` [${error.code}]`
+      : "";
+  const message = typeof error.message === "string" ? `: ${redactMessage(error.message)}` : "";
+  const nested =
+    error.cause === undefined ? "" : `; caused by ${summarizeCause(error.cause, depth + 1)}`;
+  return `${errorTag(cause)}${code}${message}${nested}`;
+}
+
+/** Log a bounded cause summary without stacks, response payloads, or request credentials. */
+export function describeUpdateErrorCause(cause: unknown): string {
+  try {
+    return summarizeCause(cause, 0).slice(0, 1024);
+  } catch {
+    return "UnknownError";
+  }
+}
 
 function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
   const entries: Record<string, string> = {};
@@ -546,6 +604,7 @@ export const make = Effect.gen(function* () {
             );
             yield* logUpdaterError(error.message, {
               errorTag: error._tag,
+              cause: describeUpdateErrorCause(error.cause),
               channel: error.channel,
             });
             return true;
@@ -589,6 +648,7 @@ export const make = Effect.gen(function* () {
             );
             yield* logUpdaterError(error.message, {
               errorTag: error._tag,
+              cause: describeUpdateErrorCause(error.cause),
               channel: error.channel,
             });
             return { accepted: true, completed: false };
@@ -611,6 +671,7 @@ export const make = Effect.gen(function* () {
           );
           yield* logUpdaterError(error.message, {
             errorTag: error._tag,
+            cause: describeUpdateErrorCause(error.cause),
             action: error.action,
           });
           return { accepted: true, completed: false };
@@ -759,6 +820,7 @@ export const make = Effect.gen(function* () {
                 yield* recoverFailedInstall(error.message);
                 yield* logUpdaterError(error.message, {
                   errorTag: error._tag,
+                  cause: describeUpdateErrorCause(error.cause),
                   channel: error.channel,
                   isSilent: error.isSilent,
                   isForceRunAfter: error.isForceRunAfter,
@@ -777,6 +839,7 @@ export const make = Effect.gen(function* () {
               yield* recoverFailedInstall(error.message);
               yield* logUpdaterError(error.message, {
                 errorTag: error._tag,
+                cause: describeUpdateErrorCause(error.cause),
                 action: error.action,
               });
               return { accepted: true, completed: false, failed: true };
@@ -951,6 +1014,7 @@ export const make = Effect.gen(function* () {
         const error = new DesktopUpdatePollerError({ poller: "startup", cause });
         return logUpdaterError(error.message, {
           errorTag: error._tag,
+          cause: describeUpdateErrorCause(error.cause),
           poller: error.poller,
         });
       }),
@@ -966,6 +1030,7 @@ export const make = Effect.gen(function* () {
         const error = new DesktopUpdatePollerError({ poller: "poll", cause });
         return logUpdaterError(error.message, {
           errorTag: error._tag,
+          cause: describeUpdateErrorCause(error.cause),
           poller: error.poller,
         });
       }),
@@ -1021,6 +1086,7 @@ export const make = Effect.gen(function* () {
         const error = new DesktopUpdateEventHandlingError({ event: "update-available", cause });
         return logUpdaterWarning(error.message, {
           errorTag: error._tag,
+          cause: describeUpdateErrorCause(error.cause),
           event: error.event,
         });
       }),
@@ -1050,6 +1116,7 @@ export const make = Effect.gen(function* () {
       yield* recoverFailedInstall(error.message);
       yield* logUpdaterError(error.message, {
         errorTag: error._tag,
+        cause: describeUpdateErrorCause(error.cause),
         operation: error.operation,
       });
       return;
@@ -1070,6 +1137,7 @@ export const make = Effect.gen(function* () {
 
     yield* logUpdaterError(error.message, {
       errorTag: error._tag,
+      cause: describeUpdateErrorCause(error.cause),
       operation: error.operation,
     });
   });
@@ -1100,6 +1168,7 @@ export const make = Effect.gen(function* () {
         const error = new DesktopUpdateEventHandlingError({ event: "download-progress", cause });
         return logUpdaterWarning(error.message, {
           errorTag: error._tag,
+          cause: describeUpdateErrorCause(error.cause),
           event: error.event,
         });
       }),
@@ -1124,6 +1193,7 @@ export const make = Effect.gen(function* () {
         const error = new DesktopUpdateEventHandlingError({ event: "update-downloaded", cause });
         return logUpdaterWarning(error.message, {
           errorTag: error._tag,
+          cause: describeUpdateErrorCause(error.cause),
           event: error.event,
         });
       }),

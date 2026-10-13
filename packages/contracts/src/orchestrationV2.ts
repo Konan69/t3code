@@ -3197,7 +3197,9 @@ const OrchestrationV2InternalCommand = Schema.Union([
    * Follows a Stop once its provider returned: background work the settled
    * thread still shows on that provider thread is no longer reported by any
    * provider process, so it is marked interrupted. Only the stopped turn's run
-   * and older runs are settled; a later run's work is its own.
+   * and older runs are settled; a later run's work is its own. A subagent target
+   * limits repair to that task and its runless child work, using a confirmed
+   * provider outcome.
    */
   Schema.Struct({
     type: Schema.Literal("thread.background-work.settle"),
@@ -3205,6 +3207,17 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
+    subagent: Schema.optional(
+      Schema.Struct({
+        id: NodeId,
+        stoppedAt: Schema.DateTimeUtc,
+        outcome: Schema.Struct({
+          status: Schema.Literals(["completed", "failed", "cancelled"]),
+          completedAt: Schema.DateTimeUtc,
+          result: Schema.NullOr(Schema.String),
+        }),
+      }),
+    ),
   }),
   /**
    * Stop for one thread, whatever it is doing: interrupts its running turn, holds its queue,
@@ -3428,6 +3441,11 @@ const knownDomainEventTypes: ReadonlySet<string> = new Set(
     return "literals" in type ? type.literals : [type.literal];
   }),
 );
+
+/** Whether `type` is an {@link OrchestrationV2DomainEvent} discriminant in this build. */
+export function isKnownOrchestrationV2EventType(type: string): boolean {
+  return knownDomainEventTypes.has(type);
+}
 
 /**
  * A thread event whose type this build does not know, or a turn-item.updated
