@@ -29,6 +29,7 @@ import {
   ConnectionTransientError,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
+  SshConnectionTarget,
   type ConnectionAttemptError,
   type ConnectionTarget,
   type NetworkStatus,
@@ -546,6 +547,41 @@ describe("EnvironmentSupervisor", () => {
           message: "Test environment did not respond during connection setup.",
         },
       });
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("gives an SSH connection 60 seconds to set up before timing out", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        prepare: () => Effect.never,
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(
+        {
+          target: new SshConnectionTarget({
+            environmentId: TARGET.environmentId,
+            label: TARGET.label,
+            connectionId: "ssh-1",
+          }),
+          profile: Option.none(),
+          enabled: true,
+        },
+        { initiallyDesired: true },
+      ).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connecting" && state.stage === "preparing",
+      );
+      yield* TestClock.adjust("59 seconds");
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connecting");
+      yield* TestClock.adjust("1 second");
+      const retrying = yield* eventuallyState(
+        supervisor.state,
+        (state) => state.phase === "backoff" && state.attempt === 1,
+      );
+      expect(retrying.lastFailure?.message).toBe(
+        "Test environment did not respond during connection setup.",
+      );
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

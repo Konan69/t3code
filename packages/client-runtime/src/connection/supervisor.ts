@@ -41,6 +41,21 @@ const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 300_000;
 const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
 const establishmentTimeout = Duration.fromInputUnsafe(CONNECTION_ESTABLISHMENT_TIMEOUT);
+// An SSH route starts the remote server and opens a tunnel before it can
+// answer, which takes several SSH round trips on a slow link.
+const SSH_CONNECTION_ESTABLISHMENT_TIMEOUT = "60 seconds";
+const sshEstablishmentTimeout = Duration.fromInputUnsafe(SSH_CONNECTION_ESTABLISHMENT_TIMEOUT);
+const routesEstablishmentTimeout = (routes: ReadonlyArray<ConnectionRoute>): Duration.Duration =>
+  routes.reduce(
+    (total, route) =>
+      Duration.sum(
+        total,
+        route.target._tag === "SshConnectionTarget"
+          ? sshEstablishmentTimeout
+          : establishmentTimeout,
+      ),
+    Duration.zero,
+  );
 const CONNECTION_PROBE_TIMEOUT = "15 seconds";
 // Mobile resumes, explicit retries, and offline events want a fast answer:
 // the user is waiting, or the network may be gone.
@@ -712,9 +727,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         })),
       ),
       // Each route may use the full setup time before the next is tried.
-      Effect.sleep(
-        Duration.times(establishmentTimeout, connectionRoutes(yield* Ref.get(currentEntry)).length),
-      ).pipe(Effect.as<EstablishmentEvent>({ _tag: "TimedOut" })),
+      Effect.sleep(routesEstablishmentTimeout(connectionRoutes(yield* Ref.get(currentEntry)))).pipe(
+        Effect.as<EstablishmentEvent>({ _tag: "TimedOut" }),
+      ),
     ]);
 
     if (establishment._tag === "Interrupted") {
