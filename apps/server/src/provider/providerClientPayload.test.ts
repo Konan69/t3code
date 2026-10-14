@@ -1,5 +1,5 @@
 import type { ServerProvider } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import {
   CLIENT_DESCRIPTION_MAX_LENGTH,

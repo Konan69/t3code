@@ -173,10 +173,7 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
 const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean =>
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
 
-// Every client receives every snapshot on connect and on each status change,
-// so keep only the folders used most recently. A composer in an older folder
-// falls back to the provider's own lists and asks for a rescan.
-const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 4;
+const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 16;
 
 function dropProviderWorkspaceSnapshot(provider: ServerProvider, cwd: string): ServerProvider {
   return provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === cwd)
