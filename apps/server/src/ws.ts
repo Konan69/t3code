@@ -19,6 +19,7 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
+import { compactProvidersForClient } from "./provider/providerClientPayload.ts";
 import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -1699,9 +1700,11 @@ const layerWsRpc = (
         Effect.gen(function* () {
           const keybindingsConfig = yield* keybindings.loadConfigState;
           const currentProviders = yield* providerRegistry.getProviders;
-          const providers = options.usageLimitsCommand
-            ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
-            : currentProviders;
+          const providers = compactProvidersForClient(
+            options.usageLimitsCommand
+              ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
+              : currentProviders,
+          );
           const settings = ServerSettings.redactServerSettingsForClient(
             yield* serverSettings.getSettings,
           );
@@ -3013,7 +3016,9 @@ const layerWsRpc = (
                   ),
                 ),
                 (providers, sources) =>
-                  usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
+                  compactProvidersForClient(
+                    usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
+                  ),
               ).pipe(
                 // Both sides replay their current value, so the first pairing normally
                 // repeats the snapshot the client already holds. Compare against that

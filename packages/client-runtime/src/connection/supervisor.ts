@@ -42,17 +42,18 @@ const RETRY_MAX_DELAY_MS = 300_000;
 const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
 const establishmentTimeout = Duration.fromInputUnsafe(CONNECTION_ESTABLISHMENT_TIMEOUT);
 // An SSH route starts the remote server and opens a tunnel before it can
-// answer, which takes several SSH round trips on a slow link.
-const SSH_CONNECTION_ESTABLISHMENT_TIMEOUT = "60 seconds";
-const sshEstablishmentTimeout = Duration.fromInputUnsafe(SSH_CONNECTION_ESTABLISHMENT_TIMEOUT);
+// answer, and a relay route carries everything over the host's uplink; both
+// take far longer than a direct connection when that link is slow.
+const SLOW_ROUTE_ESTABLISHMENT_TIMEOUT = "60 seconds";
+const slowRouteEstablishmentTimeout = Duration.fromInputUnsafe(SLOW_ROUTE_ESTABLISHMENT_TIMEOUT);
+const isSlowRoute = (route: ConnectionRoute): boolean =>
+  route.target._tag === "SshConnectionTarget" || route.target._tag === "RelayConnectionTarget";
 const routesEstablishmentTimeout = (routes: ReadonlyArray<ConnectionRoute>): Duration.Duration =>
   routes.reduce(
     (total, route) =>
       Duration.sum(
         total,
-        route.target._tag === "SshConnectionTarget"
-          ? sshEstablishmentTimeout
-          : establishmentTimeout,
+        isSlowRoute(route) ? slowRouteEstablishmentTimeout : establishmentTimeout,
       ),
     Duration.zero,
   );

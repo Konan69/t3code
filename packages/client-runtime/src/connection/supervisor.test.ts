@@ -598,7 +598,9 @@ describe("EnvironmentSupervisor", () => {
         }).pipe(Effect.provide(harness.dependencies));
 
         yield* awaitState(supervisor.state, (state) => state.phase === "connecting");
-        yield* TestClock.adjust("15 seconds");
+        yield* TestClock.adjust("59 seconds");
+        expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connecting");
+        yield* TestClock.adjust("1 second");
         const failed = yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
         expect(failed.lastFailure?.message).toBe(
           `Test environment did not respond during connection setup. ${NETWORK_BLOCKING_HINT}`,
