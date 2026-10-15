@@ -74,6 +74,7 @@ import Migration0058 from "./Migrations/058_WebhookRelayDeliveries.ts";
 import Migration0059 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
 import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
+import Migration0062 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 import Migration0900 from "./Migrations/900_ProjectionMachineBindings.ts";
 import Migration0901 from "./Migrations/901_ProjectionMachineProjectWorkspaceRoot.ts";
 import Migration0902 from "./Migrations/902_RepairProjectionProjectsAutoPull.ts";
@@ -143,6 +144,7 @@ export const migrationEntries = [
   [59, "McpAppModelContext", Migration0059],
   [60, "ThreadSnapshotWindowIndexes", Migration0060],
   [61, "PullRequestReviewGuides", Migration0061],
+  [62, "ThreadFailureLookupIndex", Migration0062],
   [900, "ProjectionMachineBindings", Migration0900],
   [901, "ProjectionMachineProjectWorkspaceRoot", Migration0901],
   [902, "RepairProjectionProjectsAutoPull", Migration0902],

@@ -3,7 +3,7 @@ import { ThreadMarkdownVideo, ThreadMediaVisibleContext } from "./ThreadMarkdown
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
 import { enrichedContextLinkPresentation } from "../../lib/enrichedLinkPresentation";
 import { ThreadContextDivider } from "./thread-context-divider";
-import { ThreadHandoffRow } from "./thread-handoff-row";
+import { ThreadHandoffDivider, ThreadHandoffRow } from "./thread-handoff-row";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import {
@@ -15,6 +15,7 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
@@ -54,7 +55,7 @@ import {
 } from "@t3tools/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
 import {
-  renderCodexFileCitationsAsMarkdown,
+  renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/shared/codexMarkdownDirectives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
@@ -292,6 +293,7 @@ export interface ThreadFeedProps {
   readonly threadTitle: string;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  readonly pendingHandoff?: HandoffEndpoints | null;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestRun: ThreadFeedLatestRun | null;
@@ -835,7 +837,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
     }
     if (segment.markdown.trim().length === 0) return null;
 
-    const markdown = renderCodexFileCitationsAsMarkdown(segment.markdown);
+    const markdown = renderCodexInlineDirectivesAsMarkdown(segment.markdown);
     return (
       <SelectableMarkdownText
         key={`markdown:${segment.sourceOffset}`}
@@ -1311,10 +1313,12 @@ function renderFeedEntry(
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             {intentBadge ? (
-              <View
-                accessible
-                accessibilityRole="text"
+              <Pressable
+                accessibilityRole="button"
                 accessibilityLabel={intentBadge.accessibilityLabel}
+                accessibilityHint="Explains this message's badge"
+                hitSlop={8}
+                onPress={() => Alert.alert("Message history", intentBadge.explanation)}
                 className={cn(
                   "rounded-full border px-1.5 py-0.5",
                   intentBadge.tone === "queued"
@@ -1332,7 +1336,7 @@ function renderFeedEntry(
                 >
                   {intentBadge.label}
                 </Text>
-              </View>
+              </Pressable>
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {entry.pendingMessage && !entry.acknowledged ? "Pending" : timestampLabel}
@@ -2755,6 +2759,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                   <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
               </>
+            }
+            ListFooterComponent={
+              props.pendingHandoff ? (
+                <ThreadHandoffDivider
+                  environmentId={props.environmentId}
+                  endpoints={props.pendingHandoff}
+                  iconColor={iconSubtleColor}
+                  label="Context handoff pending"
+                />
+              ) : null
             }
             contentContainerStyle={{
               paddingTop: 12,

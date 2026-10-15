@@ -122,7 +122,7 @@ export const make = Effect.gen(function* () {
   const projectionStore = yield* ProjectionStoreV2;
   const projects = yield* ProjectStoreV2;
   const commandId = (operation: string) =>
-    crypto.randomUUIDv4.pipe(
+    crypto.randomUUIDv4().pipe(
       Effect.orDie,
       Effect.map((id) => CommandId.make(`server:machine:${operation}:${id}`)),
     );
