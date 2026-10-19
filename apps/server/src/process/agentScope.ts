@@ -19,20 +19,8 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { runsInThreadMachine } from "./ProviderProcessLauncher.ts";
 
-/**
- * Agents and terminals share this slice. It sits in app.slice next to the
- * server's own unit, so the server's CPUWeight and IOWeight compete with the
- * agents directly.
- */
 const AGENT_SLICE = "app-t3code-agents.slice";
 
-/**
- * The child slice for one server's agents, named after its state directory.
- * Only one server uses a state directory at a time, so an agent in this slice
- * when the server starts was left by an earlier server on the same state,
- * for example one the launcher killed during an update. Other servers on the
- * machine, such as dev servers, have their own slice.
- */
 export function ownedAgentSlice(stateDir: string): string {
   const hash = NodeCrypto.createHash("sha256").update(stateDir).digest("hex").slice(0, 12);
   return `app-t3code-agents-${hash}.slice`;
@@ -41,10 +29,10 @@ export function ownedAgentSlice(stateDir: string): string {
 const GiB = 1024 ** 3;
 
 /**
- * Memory limits for the agents slice. Agents together leave about 6 GB free
- * before they are throttled and 4 GB before the kernel kills one, so the
- * server, sshd, and tailscaled keep working. Small machines still give agents
- * at least half of RAM before throttling and three quarters before a kill.
+ * Agents together leave about 6 GB free before they are throttled and 4 GB
+ * before the kernel kills one, so the server, sshd, and tailscaled keep
+ * working. Small machines still give agents at least half of RAM before
+ * throttling and three quarters before a kill.
  */
 export function agentSliceMemoryLimits(totalBytes: number) {
   return {
@@ -57,14 +45,11 @@ export interface ScopeState {
   readonly loadState: string;
   readonly activeState: string;
   readonly result: string;
-  /** `oom_kill` from the scope's memory.events, while its cgroup exists. */
   readonly oomKills: number;
-  /** `populated` from the scope's cgroup.events, while its cgroup exists. */
   readonly populated: boolean | undefined;
 }
 
 /**
- * Reads one scope as the server sees it right after the agent process exits.
  * Our pipe can close before systemd handles the kill, so a scope that is
  * still stopping, is empty, or already counted an OOM kill is "stopping":
  * systemd records `Result=oom-kill` for it in a moment.
@@ -103,7 +88,6 @@ function parseCgroupCounter(text: string, key: string): number | undefined {
 const STOP_TIMEOUT_OPTION = "--property=TimeoutStopSec=10s";
 const STOPPING_POLL_INTERVAL = "100 millis";
 const STOPPING_POLL_ATTEMPTS = 20;
-// A stopping scope can wait out its TimeoutStopSec for a stuck process.
 const CLEAR_FAILED_INTERVAL = "1 second";
 const CLEAR_FAILED_ATTEMPTS = 120;
 const MAX_TRACKED_THREADS = 500;
@@ -149,12 +133,10 @@ export const make = Effect.gen(function* () {
       if (shown._tag === "None") return;
       const values = parseKeyValues(shown.value.stdout);
       if (values.get("ActiveState") !== "active") return;
-      // An active slice can be empty once its last agent exited.
       const controlGroup = values.get("ControlGroup") ?? "";
       const events = controlGroup ? yield* readCgroupFile(controlGroup, "cgroup.events") : "";
       if (parseCgroupCounter(events, "populated") === 0) return;
       yield* Effect.logWarning("Stopping agents left by a previous server", { slice: ownedSlice });
-      // Agents get SIGTERM, then SIGKILL after their stop timeout.
       const stopped = yield* runner
         .run({ command: systemctl, args: ["--user", "stop", ownedSlice], timeout: "30 seconds" })
         .pipe(Effect.option);
@@ -166,9 +148,6 @@ export const make = Effect.gen(function* () {
       }
     });
 
-  // Runs once, on the first agent or terminal launch. It proves this process
-  // can reach a systemd user manager, stops agents a previous server left,
-  // creates the agents slice, and sets its limits.
   const systemd = yield* Effect.cached(
     Effect.gen(function* () {
       const runtimeDir = hostEnvironment.XDG_RUNTIME_DIR;
@@ -230,8 +209,6 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  // The newest scope per thread, oldest thread first. A thread runs one agent
-  // at a time, so only its latest scope can explain a failure.
   const scopeByThread = new Map<string, { unit: string; oomKilled: boolean }>();
 
   const readScope = (systemctl: string, unit: string) =>
@@ -242,7 +219,6 @@ export const make = Effect.gen(function* () {
         unit,
         "--property=LoadState,ActiveState,Result,ControlGroup",
       ]);
-      // A failed query says nothing about the scope; the caller keeps the unit.
       if (shown._tag === "None" || shown.value.code !== 0) return undefined;
       const values = parseKeyValues(shown.value.stdout);
       const controlGroup = values.get("ControlGroup") ?? "";
@@ -272,20 +248,15 @@ export const make = Effect.gen(function* () {
       }
     });
 
-  // Failed scopes stay loaded so we can read their result. Clear them once
-  // systemd finishes stopping them.
   const forget = (systemctl: string, unit: string) =>
     clearFailed(systemctl, unit).pipe(Effect.forkIn(layerScope), Effect.asVoid);
 
-  // Drops the oldest thread's scope once it has ended. A scope that still
-  // runs moves to the back, so its thread keeps its OOM answer and cleanup.
   const evictOldest = (systemctl: string) =>
     Effect.gen(function* () {
       const oldest = scopeByThread.entries().next();
       if (oldest.done === true) return;
       const [threadId, tracked] = oldest.value;
       const state = yield* readScope(systemctl, tracked.unit);
-      // A newer launch replaced it while we read, and forgets it itself.
       if (scopeByThread.get(threadId) !== tracked) return;
       scopeByThread.delete(threadId);
       const status = state === undefined ? "running" : classifyScope(state);
@@ -296,8 +267,6 @@ export const make = Effect.gen(function* () {
       yield* forget(systemctl, tracked.unit);
     });
 
-  // Records a thread's newest scope, or forgets the thread when `unit` is
-  // undefined. The replaced scope has its failed state cleared.
   const track = (systemctl: string, threadId: string, unit: string | undefined) =>
     Effect.gen(function* () {
       const previous = scopeByThread.get(threadId);
@@ -357,7 +326,6 @@ export const make = Effect.gen(function* () {
         return { command, args };
       }
       const resolved = yield* resolve(command, env ?? hostEnvironment);
-      // Leave unresolved commands alone so the spawn reports the missing binary.
       if (resolved === null) return { command, args };
       const scope = yield* systemd;
       if (scope === undefined) return agentScopeCommand({ command: resolved, args });

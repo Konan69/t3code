@@ -19,7 +19,6 @@ const seedUpstreamLedger = Effect.gen(function* () {
   yield* sql`DROP TABLE t3_fork_migrations`;
 });
 
-// The V2 schema is unchanged from the published September 15–16 previews.
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* seedUpstreamLedger;
@@ -52,6 +51,8 @@ describe("V2 preview upgrade", () => {
         [60, "ThreadSnapshotWindowIndexes"],
         [61, "PullRequestReviewGuides"],
         [62, "ThreadFailureLookupIndex"],
+        [63, "DropUnusedV1Projections"],
+        [64, "CanonicalizeThreadPullRequestLinks"],
         [900, "ProjectionMachineBindings"],
         [901, "ProjectionMachineProjectWorkspaceRoot"],
         [902, "RepairProjectionProjectsAutoPull"],
@@ -140,6 +141,8 @@ describe("V2 preview upgrade", () => {
         [60, "ThreadSnapshotWindowIndexes"],
         [61, "PullRequestReviewGuides"],
         [62, "ThreadFailureLookupIndex"],
+        [63, "DropUnusedV1Projections"],
+        [64, "CanonicalizeThreadPullRequestLinks"],
         [900, "ProjectionMachineBindings"],
         [901, "ProjectionMachineProjectWorkspaceRoot"],
         [902, "RepairProjectionProjectsAutoPull"],

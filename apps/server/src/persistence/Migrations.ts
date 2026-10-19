@@ -1,18 +1,8 @@
-/**
- * Migration runner with an inline loader.
- *
- * Uses Migrator.make with fromRecord to define migrations inline.
- * All migrations are statically imported - no dynamic file system loading.
- *
- * `runMigrations` is called by the SQLite persistence layer at startup, so the
- * schema is always up to date before the application starts.
- */
 
 import { type MigrationEntry, runMigrationsByName } from "./NameBasedMigrator.ts";
 import * as Effect from "effect/Effect";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
-// Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
 import Migration0003 from "./Migrations/003_CheckpointDiffBlobs.ts";
@@ -75,6 +65,8 @@ import Migration0059 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
 import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
 import Migration0062 from "./Migrations/062_ThreadFailureLookupIndex.ts";
+import Migration0063 from "./Migrations/063_DropUnusedV1Projections.ts";
+import Migration0064 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
 import Migration0900 from "./Migrations/900_ProjectionMachineBindings.ts";
 import Migration0901 from "./Migrations/901_ProjectionMachineProjectWorkspaceRoot.ts";
 import Migration0902 from "./Migrations/902_RepairProjectionProjectsAutoPull.ts";
@@ -135,7 +127,6 @@ export const migrationEntries = [
   [52, "ProjectionThreadTitleState", Migration0052],
   [53, "PullRequestFilesViewed", Migration0053],
   [54, "ProjectionThreadsAutoSettleDisabledAt", Migration0054],
-  // Released as 53 and 54 in V2 previews; reconcileV2PreviewMigration preserves their ledger.
   // Preserve this migration's schema. Future V2 schema changes need new migrations.
   [55, "OrchestrationV2", Migration0055],
   [56, "RemoveRedundantProjectionIndexes", Migration0056],
@@ -145,6 +136,8 @@ export const migrationEntries = [
   [60, "ThreadSnapshotWindowIndexes", Migration0060],
   [61, "PullRequestReviewGuides", Migration0061],
   [62, "ThreadFailureLookupIndex", Migration0062],
+  [63, "DropUnusedV1Projections", Migration0063],
+  [64, "CanonicalizeThreadPullRequestLinks", Migration0064],
   [900, "ProjectionMachineBindings", Migration0900],
   [901, "ProjectionMachineProjectWorkspaceRoot", Migration0901],
   [902, "RepairProjectionProjectsAutoPull", Migration0902],
@@ -152,7 +145,6 @@ export const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-// V2's schema migrations start at 55 after the legacy schema migrations.
 const FIRST_V2_MIGRATION_ID = 55;
 
 export interface RunMigrationsOptions {
