@@ -1,4 +1,5 @@
 import type { ServerSettingsError } from "@t3tools/contracts";
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as PeerEnvironmentService from "../../../peer/PeerEnvironmentService.ts";
@@ -7,7 +8,7 @@ import { PeerToolkit } from "./tools.ts";
 
 // A settings read that fails is this server's problem, not the peer's.
 const settingsUnavailable = <A, E, R>(effect: Effect.Effect<A, E | ServerSettingsError, R>) =>
-  effect.pipe(Effect.catchTag("ServerSettingsError", () => Effect.fail(unavailable())));
+  effect.pipe(Effect.catchTags({ ServerSettingsError: () => Effect.fail(unavailable()) }));
 
 export const PeerHandlersLive = PeerToolkit.toLayer({
   t3_peer_environment_list: (input) =>
@@ -40,7 +41,14 @@ export const PeerHandlersLive = PeerToolkit.toLayer({
     Effect.gen(function* () {
       // Prompting another machine's agent is a mutation: only a provider that
       // still owns an active run of the calling thread may do it.
-      const { scope, caller } = yield* readMutationCaller();
+      const { scope, limits } = yield* readMutationCaller();
+      // The peer attributes the message to a thread; a connected client has none.
+      if (scope.thread === undefined) {
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "Only a thread can prompt a thread on a peer environment.",
+        });
+      }
       const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
       return yield* peers.sendMessage(input.peerId, {
         threadId: input.threadId,
@@ -48,9 +56,9 @@ export const PeerHandlersLive = PeerToolkit.toLayer({
         clientRequestId: input.clientRequestId,
         sender: {
           environmentId: scope.environmentId,
-          threadId: scope.threadId,
-          runtimeMode: caller.runtimeMode,
-          interactionMode: caller.interactionMode,
+          threadId: scope.thread.threadId,
+          runtimeMode: limits.runtimeMode,
+          interactionMode: limits.interactionMode,
         },
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
       });

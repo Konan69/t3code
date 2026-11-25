@@ -421,8 +421,10 @@ obtained through the pairing flow, held in memory only. The first call that
 needs a peer opens it, concurrent callers share it, and it is closed after ten
 minutes without use so a machine billed while awake can sleep again. Closing
 ends the tunnel and never stops the peer's server, and connecting uses the SSH
-launch script's attach-only mode: a live server is reused whatever started it,
-never stopped or restarted, and one is started only when none is running.
+launch script's attach-only mode: it finds the server already running on the
+peer, pairs through that server's own executable, and installs, writes, starts
+and stops nothing. A peer with no T3 server running fails
+`PeerEnvironmentUnreachable`; opening that environment in the T3 app starts it.
 
 Every call is bounded to 45 seconds, under the shortest provider tool timeout.
 A call that is still waiting for the machine to wake returns

@@ -51,8 +51,11 @@ const SSH_READY_TIMEOUT_MS = 20_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
-// How long an attach-only caller waits for another one to finish launching.
-const ATTACH_LOCK_WAIT_SECONDS = 120;
+/**
+ * Exit status of an attach-only launch that found no T3 server running on the
+ * remote. Attach mode never starts one.
+ */
+export const REMOTE_ATTACH_NOT_RUNNING_EXIT = 76;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
 // A cold archive launch also downloads and unpacks a ~70 MB release archive
 // and may wait on another installer's lock. The budgets nest: the checksum
@@ -81,15 +84,13 @@ export interface RemoteT3RunnerOptions {
   readonly archiveVersion?: string | null;
   readonly releaseBaseUrl?: string | null;
   /**
-   * Attach without ever disturbing a server that is already running. The
-   * remote is searched first, with the shell alone: when a server process is
-   * alive nothing is installed, written, or killed; it is reused if it
-   * answers, the launch fails if it does not, and pairing runs through that
-   * server's own executable. Only when no server process is alive is this
-   * runner installed and a server started, under a lock that a second
-   * attach-only caller waits on. Off by default, which is the desktop app's
-   * behaviour: it owns the server it manages and restarts it when the runner
-   * changes.
+   * Attach only. The remote is searched with the shell alone and nothing is
+   * installed, written, started, or killed: a live server that answers is
+   * reused and pairing runs through that server's own executable, a live
+   * server that does not answer fails the launch, and so does a remote with
+   * no server running (`REMOTE_ATTACH_NOT_RUNNING_EXIT`). Off by default,
+   * which is the desktop app's behaviour: it owns the server it manages,
+   * starts it, and restarts it when the runner changes.
    */
   readonly preserveRunningServer?: boolean;
 }
@@ -622,62 +623,11 @@ MANAGED_FILE="$STATE_DIR/managed"
 LOG_FILE="$STATE_DIR/server.log"
 RUNNER_FILE="$STATE_DIR/run-t3.sh"
 RUNNER_NEXT="$STATE_DIR/run-t3.next.$$"
-ATTACH_LOCK=""
+mkdir -p "$STATE_DIR"
 cleanup_runner_next() {
   rm -f "$RUNNER_NEXT"
-  if [ -n "$ATTACH_LOCK" ]; then
-    rm -rf "$ATTACH_LOCK"
-  fi
 }
 trap cleanup_runner_next EXIT
-T3_PRESERVE_RUNNING=@@T3_PRESERVE_RUNNING@@
-if [ "$T3_PRESERVE_RUNNING" = "1" ]; then
-  # Attach only: look before touching anything. While a server process is
-  # alive this block ends the script, having installed nothing, written no
-  # runner or ownership record, and killed nothing.
-@@T3_ATTACH_DISCOVER_SCRIPT@@
-  attach_report() {
-    attach_discover
-    if [ -z "$LIVE_PID" ] && [ -z "$LIVE_PORT" ]; then
-      return 0
-    fi
-    if [ -n "$LIVE_PORT" ] && attach_ready "$LIVE_PORT"; then
-      printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$LIVE_PORT" "$LIVE_KIND"
-      exit 0
-    fi
-    printf 'A T3 server is running on the remote host (PID %s) but did not answer on 127.0.0.1:%s. It was left running.\\n' "$LIVE_PID" "\${LIVE_PORT:-unknown}" >&2
-    exit 75
-  }
-  attach_report
-  mkdir -p "$STATE_DIR"
-  # No server is alive. Installing and starting one is serialized between
-  # attach-only callers: mkdir is the atomic create, the owner publishes its
-  # pid, and a lock whose owner is dead (or never published one) is reclaimed.
-  ATTACH_LOCK_DIR="$STATE_DIR/attach.lock"
-  ATTACH_LOCK_WAITED=0
-  while ! mkdir "$ATTACH_LOCK_DIR" 2>/dev/null; do
-    ATTACH_LOCK_OWNER="$(cat "$ATTACH_LOCK_DIR/pid" 2>/dev/null || true)"
-    if [ -n "$ATTACH_LOCK_OWNER" ] && ! kill -0 "$ATTACH_LOCK_OWNER" 2>/dev/null; then
-      rm -rf "$ATTACH_LOCK_DIR"
-      continue
-    fi
-    if [ -z "$ATTACH_LOCK_OWNER" ] && [ "$ATTACH_LOCK_WAITED" -ge 5 ]; then
-      rm -rf "$ATTACH_LOCK_DIR"
-      continue
-    fi
-    if [ "$ATTACH_LOCK_WAITED" -ge @@T3_ATTACH_LOCK_WAIT_SECONDS@@ ]; then
-      printf 'Another client has been starting the T3 server on the remote host for too long.\\n' >&2
-      exit 1
-    fi
-    sleep 1
-    ATTACH_LOCK_WAITED=$((ATTACH_LOCK_WAITED + 1))
-  done
-  ATTACH_LOCK="$ATTACH_LOCK_DIR"
-  printf '%s\\n' "$$" >"$ATTACH_LOCK/pid"
-  # Whoever held the lock, or anything else, may have started a server since.
-  attach_report
-fi
-mkdir -p "$STATE_DIR"
 cat >"$RUNNER_NEXT" <<'SH'
 @@T3_RUNNER_SCRIPT@@
 SH
@@ -759,13 +709,7 @@ if [ -n "$DEFAULT_RUNTIME_INFO" ]; then
   DEFAULT_RUNTIME_PID="\${DEFAULT_RUNTIME_INFO%% *}"
   DEFAULT_REMOTE_PORT="\${DEFAULT_RUNTIME_INFO#* }"
 fi
-if [ "$T3_PRESERVE_RUNNING" = "1" ]; then
-  # Attach only, and no server was alive under the lock: the records left by
-  # one that exited are ignored and a server is started below.
-  REMOTE_PID=""
-  REMOTE_PORT=""
-  REMOTE_MANAGED=""
-elif [ -n "$DEFAULT_REMOTE_PORT" ]; then
+if [ -n "$DEFAULT_REMOTE_PORT" ]; then
   REMOTE_PORT="$DEFAULT_REMOTE_PORT"
   if wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
     if [ "$REMOTE_MANAGED" = "managed" ]; then
@@ -846,6 +790,26 @@ if [ -z "$REMOTE_PORT" ]; then
   fi
 fi
 printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$REMOTE_PORT" "\${REMOTE_MANAGED:-managed}"
+`;
+
+// The whole of an attach-only connect: find the server that is already
+// running and report its port. It installs nothing, writes nothing, starts
+// nothing, and kills nothing; when no server is running it says so and fails.
+const REMOTE_ATTACH_LAUNCH_SCRIPT = `set -eu
+STATE_DIR="$HOME/.t3/ssh-launch/$1"
+DEFAULT_RUNTIME_FILE="$HOME/.t3/userdata/server-runtime.json"
+@@T3_ATTACH_DISCOVER_SCRIPT@@
+attach_discover
+if [ -z "$LIVE_PID" ] && [ -z "$LIVE_PORT" ]; then
+  printf 'T3 is not running on the remote host.\\n' >&2
+  exit @@T3_ATTACH_NOT_RUNNING_EXIT@@
+fi
+if [ -n "$LIVE_PORT" ] && attach_ready "$LIVE_PORT"; then
+  printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$LIVE_PORT" "$LIVE_KIND"
+  exit 0
+fi
+printf 'A T3 server is running on the remote host (PID %s) but did not answer on 127.0.0.1:%s. It was left running.\\n' "$LIVE_PID" "\${LIVE_PORT:-unknown}" >&2
+exit 75
 `;
 
 const REMOTE_PAIRING_SCRIPT = `set -eu
@@ -1009,11 +973,14 @@ export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string 
 }
 
 export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
+  if (input?.preserveRunningServer === true) {
+    return applyScriptPlaceholders(REMOTE_ATTACH_LAUNCH_SCRIPT, {
+      T3_ATTACH_DISCOVER_SCRIPT: REMOTE_ATTACH_DISCOVER_SCRIPT,
+      T3_ATTACH_NOT_RUNNING_EXIT: String(REMOTE_ATTACH_NOT_RUNNING_EXIT),
+    });
+  }
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
     T3_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
-    T3_PRESERVE_RUNNING: input?.preserveRunningServer === true ? "1" : "0",
-    T3_ATTACH_DISCOVER_SCRIPT: REMOTE_ATTACH_DISCOVER_SCRIPT,
-    T3_ATTACH_LOCK_WAIT_SECONDS: String(ATTACH_LOCK_WAIT_SECONDS),
     T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
     T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),

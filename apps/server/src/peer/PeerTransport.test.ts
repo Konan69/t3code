@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION, PeerEnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { hasCompatibleOrchestrationProtocol } from "../ws.ts";
 import { peerProtocolMismatch, peerSocketUrl, refusesSocketProtocol } from "./PeerTransport.ts";

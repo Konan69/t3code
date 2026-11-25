@@ -199,26 +199,27 @@ describe("attach-only remote launch", () => {
     assert.isFalse(await answers(port));
   }, 60_000);
 
-  it("starts a server when none is alive", async () => {
+  it("fails, and leaves the remote home untouched, when no server is running", () => {
     const { home, stateDir, serverScript } = makeHome();
     // A record left behind by a server that has since exited.
     const exited = NodeChildProcess.spawnSync(process.execPath, ["-e", ""]);
-    recordServer(stateDir, { pid: exited.pid, port: await freePort(), runner: "#!/bin/sh\n" });
+    recordServer(stateDir, { pid: exited.pid, port: 3773, runner: "#!/bin/sh\n" });
+    const tree = () =>
+      NodeFS.readdirSync(home, { recursive: true, withFileTypes: true })
+        .map((entry) => {
+          const path = NodePath.join(entry.parentPath, entry.name);
+          return `${path} ${NodeFS.statSync(path).mtimeMs}`;
+        })
+        .toSorted();
+    const before = tree();
 
     const result = launch(home, serverScript, true);
-    const pid = Number(NodeFS.readFileSync(NodePath.join(stateDir, "pid"), "utf8"));
-    spawned.push(pid);
 
-    assert.equal(result.status, 0, result.stderr);
-    const launched = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
-    assert.equal(launched.serverKind, "managed");
-    assert.isTrue(isAlive(pid));
-    assert.isTrue(await answers(launched.remotePort));
-    // It now owns that server: its runner is the record, and the lock that
-    // serialized the launch is released.
-    assert.include(NodeFS.readFileSync(NodePath.join(stateDir, "run-t3.sh"), "utf8"), serverScript);
-    assert.isFalse(NodeFS.existsSync(NodePath.join(stateDir, "attach.lock")));
-  }, 90_000);
+    assert.equal(result.status, SshTunnel.REMOTE_ATTACH_NOT_RUNNING_EXIT);
+    assert.include(result.stderr, "T3 is not running on the remote host.");
+    assert.equal(result.stdout, "");
+    assert.deepEqual(tree(), before);
+  }, 60_000);
 
   it("leaves a live server's install untouched and pairs through its executable", async () => {
     const { home, stateDir } = makeHome();
@@ -282,50 +283,5 @@ describe("attach-only remote launch", () => {
     assert.deepEqual(records(stateDir), before.records);
     assert.deepEqual(NodeFS.readdirSync(stateDir), before.files);
     assert.deepEqual(NodeFS.readdirSync(NodePath.dirname(runtimeDir)), ["1.2.3"]);
-  }, 60_000);
-
-  it("looks again under the lock, so a server started meanwhile is reused, not replaced", async () => {
-    const { home, stateDir, serverScript } = makeHome();
-    // Another attach-only caller holds the lock and is about to finish.
-    const holder = NodeChildProcess.spawn("sleep", ["30"], { stdio: "ignore" });
-    spawned.push(holder.pid!);
-    const lock = NodePath.join(stateDir, "attach.lock");
-    NodeFS.mkdirSync(lock);
-    NodeFS.writeFileSync(NodePath.join(lock, "pid"), `${holder.pid}\n`);
-
-    const port = await freePort();
-    const script = SshTunnel.buildRemoteLaunchScript({
-      nodeScriptPath: serverScript,
-      preserveRunningServer: true,
-    });
-    const waiting = NodeChildProcess.spawn("sh", ["-s", "--", STATE_KEY], {
-      env: { ...process.env, HOME: home },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    spawned.push(waiting.pid!);
-    let stdout = "";
-    waiting.stdout.on("data", (chunk) => (stdout += String(chunk)));
-    waiting.stdin.end(script);
-    const exited = new Promise<number | null>((resolve) => waiting.once("exit", resolve));
-
-    // While it waits, the holder's server comes up and the lock is released.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const server = NodeChildProcess.spawn(
-      process.execPath,
-      [serverScript, "serve", "--port", `${port}`],
-      {
-        stdio: "ignore",
-      },
-    );
-    spawned.push(server.pid!);
-    await waitUntilAnswering(port);
-    recordServer(stateDir, { pid: server.pid!, port, runner: "#!/bin/sh\n# the holder\n" });
-    const before = records(stateDir);
-    NodeFS.rmSync(lock, { recursive: true });
-
-    assert.equal(await exited, 0);
-    assert.equal(JSON.parse(stdout.trim()).remotePort, port);
-    assert.isTrue(isAlive(server.pid!));
-    assert.deepEqual(records(stateDir), before);
   }, 60_000);
 });

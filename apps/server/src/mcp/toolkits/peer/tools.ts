@@ -1,6 +1,6 @@
 import { OrchestratorMcpFailure, ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as PeerEnvironmentService from "../../../peer/PeerEnvironmentService.ts";
@@ -43,7 +43,7 @@ const PeerEnvironmentListTool = Tool.make("t3_peer_environment_list", {
 
 const PeerThreadListTool = Tool.make("t3_peer_thread_list", {
   ...shared,
-  description: `List threads on a peer T3 environment: id, title, project, status, and last activity, most recently active first (at most ${PeerEnvironmentService.PEER_THREAD_LIST_LIMIT}). Connects over SSH, which wakes the peer machine if it is asleep. A cold start can take a few minutes: if the call returns PeerEnvironmentWaking, the connection is still being opened in the background, so call again in about 30 seconds.`,
+  description: `List threads on a peer T3 environment: id, title, project, status, and last activity, most recently active first (at most ${PeerEnvironmentService.PEER_THREAD_LIST_LIMIT}). Connects over SSH, which wakes the peer machine if it is asleep. Waking can take a few minutes: if the call returns PeerEnvironmentWaking, the connection is still being opened in the background, so call again in about 30 seconds. T3 must already be running on the peer; it is never started from here, and PeerEnvironmentUnreachable says so when it is not (the user starts it by opening that environment in the T3 app).`,
   parameters: Schema.Struct({ peerId }),
   success: PeerEnvironmentService.PeerThreadList,
 })

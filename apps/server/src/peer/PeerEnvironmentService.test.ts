@@ -339,6 +339,25 @@ describe("PeerEnvironmentService connection lifetime", () => {
   });
 });
 
+describe("PeerEnvironmentService connect failures", () => {
+  it.effect("returns a failed connect at once, without waiting or connecting again", () => {
+    // What the transport reports when T3 is not running on the peer.
+    const notRunning = new PeerEnvironmentUnreachable({
+      peerId: BOAT,
+      detail: "T3 is not running",
+    });
+    const wire = makeWire({ open: () => Effect.fail(notRunning) });
+    return Effect.gen(function* () {
+      const peers = yield* PeerEnvironmentService.PeerEnvironmentService;
+      // No clock is advanced: the answer does not wait out the call deadline.
+      const error = yield* peers.listThreads("boat").pipe(Effect.flip);
+      assert.strictEqual(error, notRunning);
+      assert.strictEqual(wire.seen.opened, 1);
+      assert.strictEqual(wire.seen.closed, 1);
+    }).pipe(Effect.provide(wire.layer));
+  });
+});
+
 describe("PeerEnvironmentService deadlines", () => {
   it.effect("answers a caller while the peer wakes, and the retry joins the same connect", () => {
     const gate = Deferred.makeUnsafe<void>();

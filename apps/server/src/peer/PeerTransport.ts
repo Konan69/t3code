@@ -30,13 +30,13 @@ import {
   type ThreadId,
   WsRpcGroup,
 } from "@t3tools/contracts";
-import { FORK_CLI_RELEASE_BASE_URL } from "@t3tools/shared/cliRelease";
 import * as NetService from "@t3tools/shared/Net";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import { resolveSshTarget, targetConnectionKey } from "@t3tools/ssh/command";
 import {
   issueRemotePairingToken,
   launchOrReuseRemoteServer,
+  REMOTE_ATTACH_NOT_RUNNING_EXIT,
   type RemoteT3RunnerOptions,
   startSshTunnel,
 } from "@t3tools/ssh/tunnel";
@@ -50,15 +50,14 @@ import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import type * as Scope from "effect/Scope";
-import { HttpClient, HttpClientError } from "effect/unstable/http";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
-import { ChildProcessSpawner } from "effect/unstable/process";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as Scope from "effect/Scope";
+import { HttpClient, HttpClientError } from "effect/http";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
+import { ChildProcessSpawner } from "effect/process";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Socket from "effect/socket/Socket";
 
-import packageJson from "../../package.json" with { type: "json" };
 import {
   PeerCommandRejected,
   PeerEnvironmentUnauthorized,
@@ -100,8 +99,8 @@ export class PeerTransport extends Context.Service<
   PeerTransport,
   {
     /**
-     * Starts or reuses the peer's T3 server and forwards a loopback port to
-     * it. The tunnel is owned by the caller's scope; closing it ends the SSH
+     * Finds the T3 server running on the peer and forwards a loopback port to
+     * it; fails when none is running. The tunnel is owned by the caller's scope; closing it ends the SSH
      * process and leaves the peer's server and its threads running.
      */
     readonly open: (
@@ -143,15 +142,10 @@ const sshAuth = (peer: PeerEnvironmentConfig) => ({
   ...(peer.identityFile === undefined ? {} : { identityFile: peer.identityFile }),
 });
 
-// The runner the desktop app sends for this version, so a server this side
-// has to start is one the desktop app later reuses.
-const runner: RemoteT3RunnerOptions = {
-  archiveVersion: packageJson.version,
-  releaseBaseUrl: FORK_CLI_RELEASE_BASE_URL,
-  // This server is a guest on the peer. It reuses whatever T3 server is alive
-  // there, never stops or restarts one, and starts one only when none runs.
-  preserveRunningServer: true,
-};
+// This server is a guest on the peer: it attaches to the T3 server already
+// running there and never installs, starts, stops, or restarts one. A peer
+// with no server running is reported as unreachable.
+const runner: RemoteT3RunnerOptions = { preserveRunningServer: true };
 
 /** The last line a person would read, bounded so tool output stays small. */
 function summarize(text: string): string {
@@ -162,9 +156,17 @@ function summarize(text: string): string {
   return (line ?? "no detail was reported").slice(0, DETAIL_LIMIT);
 }
 
+const NOT_RUNNING_DETAIL =
+  "T3 is not running on that machine, and this server does not start it. Opening that environment in the T3 app starts it; then call again.";
+
 function sshFailureDetail(cause: unknown): string {
   if (Predicate.isTagged(cause, "SshCommandError")) {
-    const { stderr, message } = cause as unknown as { stderr: string; message: string };
+    const { stderr, message, exitCode } = cause as unknown as {
+      stderr: string;
+      message: string;
+      exitCode: number | null;
+    };
+    if (exitCode === REMOTE_ATTACH_NOT_RUNNING_EXIT) return NOT_RUNNING_DETAIL;
     return summarize(stderr.trim().length > 0 ? stderr : message);
   }
   return summarize(cause instanceof Error ? cause.message : String(cause));
@@ -320,6 +322,8 @@ const make = Effect.gen(function* () {
       wsBaseUrl: link.wsBaseUrl,
       authOptions: sshAuth(peer),
       remoteServerKind: launch.remoteServerKind,
+      // The tunnel lives as long as the caller's scope.
+      scope: yield* Scope.fork(yield* Effect.scope, "sequential"),
     });
     return link;
   });
@@ -481,21 +485,22 @@ const make = Effect.gen(function* () {
     return yield* request(session.peer, DISPATCH_TIMEOUT, Effect.scoped(send), rejected).pipe(
       // A refused upgrade looks like a dead tunnel. Reconnecting cannot cure a
       // protocol refusal, so it is told apart here, by status.
-      Effect.catchTag("PeerEnvironmentUnreachable", (error) =>
-        refusesSocketProtocol(httpClient, session.link).pipe(
-          Effect.flatMap((refused) =>
-            Effect.fail(
-              refused
-                ? new PeerProtocolMismatch({
-                    peerId: session.peer.id,
-                    detail:
-                      "it refused the command socket for this server's orchestration protocol",
-                  })
-                : error,
+      Effect.catchTags({
+        PeerEnvironmentUnreachable: (error) =>
+          refusesSocketProtocol(httpClient, session.link).pipe(
+            Effect.flatMap((refused) =>
+              Effect.fail(
+                refused
+                  ? new PeerProtocolMismatch({
+                      peerId: session.peer.id,
+                      detail:
+                        "it refused the command socket for this server's orchestration protocol",
+                    })
+                  : error,
+              ),
             ),
           ),
-        ),
-      ),
+      }),
     );
   });
 

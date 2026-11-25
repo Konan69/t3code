@@ -65,7 +65,7 @@ const PEER_IDLE_RELEASE = Duration.minutes(10);
  * provider applies (Codex: 60 seconds), so the caller always gets an answer.
  */
 const PEER_CALL_DEADLINE = Duration.seconds(45);
-/** Longest a connect (wake, launch, tunnel, pairing) may run in the background. */
+/** Longest a connect (wake, tunnel, pairing) may run in the background. */
 const PEER_CONNECT_LIMIT = Duration.minutes(4);
 /** `listThreads` returns this many threads, most recently active first. */
 export const PEER_THREAD_LIST_LIMIT = 50;
